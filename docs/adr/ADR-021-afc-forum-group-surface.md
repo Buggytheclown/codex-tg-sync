@@ -32,8 +32,11 @@ a deleted or stale topic is different from a retryable Telegram outage.
   `retry_after` when supplied.
 - `message thread not found`, deleted-topic, and closed-topic failures are typed
   as stale topic failures. HTTP/API 5xx and 429 are retryable.
-- The built-in General topic is prepared manually as permanent Control. AFC does
-  not edit or delete it.
+- After the security/capability probe succeeds, `/afc on` idempotently renames
+  the built-in General topic to permanent `Control` with
+  `editGeneralForumTopic`. A Telegram `not modified` response is success; any
+  other preparation failure aborts activation before session or task-topic
+  creation. AFC never hides or deletes Control.
 
 ## Consequences
 
@@ -47,5 +50,5 @@ a deleted or stale topic is different from a retryable Telegram outage.
 
 - Public groups, multiple AFC groups, or multiple human members.
 - Listing or adopting arbitrary existing forum topics.
-- Editing the built-in General/Control topic.
+- Creating a separate dynamic Control topic or hiding the built-in topic.
 - Treating a successful Bot API send as full Telegram live validation.

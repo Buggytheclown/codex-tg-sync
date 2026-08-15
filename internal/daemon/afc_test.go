@@ -14,6 +14,8 @@ import (
 
 type fakeAFCForum struct {
 	validateErr error
+	prepareErr  error
+	prepares    int
 	nextTopicID int64
 	createErrAt int
 	creates     []string
@@ -48,6 +50,10 @@ type afcWriterSession struct {
 func (s *afcWriterSession) Subscribe() <-chan appserver.Event { return s.events }
 
 func (f *fakeAFCForum) ValidateAFCGroup(context.Context, int64) error { return f.validateErr }
+func (f *fakeAFCForum) PrepareAFCControl(context.Context) error {
+	f.prepares++
+	return f.prepareErr
+}
 func (f *fakeAFCForum) CreateAFCTopic(_ context.Context, title string) (int64, error) {
 	f.creates = append(f.creates, title)
 	if f.onCreate != nil {
@@ -105,6 +111,9 @@ func TestAFCPartialActivationOwnsGroupAndDisablesLegacyObserver(t *testing.T) {
 	if response == nil || !strings.Contains(response.Text, "active: 1") {
 		t.Fatalf("response = %#v", response)
 	}
+	if forum.prepares != 1 {
+		t.Fatalf("Control prepare calls = %d, want 1", forum.prepares)
+	}
 	if len(forum.creates) != 2 || forum.creates[0] != "New" || forum.creates[1] != "Old" {
 		t.Fatalf("creates = %v", forum.creates)
 	}
@@ -124,6 +133,29 @@ func TestAFCPartialActivationOwnsGroupAndDisablesLegacyObserver(t *testing.T) {
 	}
 	if service.legacyWriter.Snapshot().State != "stopped" {
 		t.Fatalf("legacy writer = %#v", service.legacyWriter.Snapshot())
+	}
+}
+
+func TestAFCActivationFailsClosedWhenControlPreparationFails(t *testing.T) {
+	service := newTestService(t)
+	service.cfg.AFCGroupID = -1001
+	service.poll = &stubSession{threadListResult: map[string]any{"data": []any{
+		map[string]any{"id": "thread-1", "title": "One", "updatedAt": float64(10)},
+	}}}
+	service.pollConnected = true
+	forum := &fakeAFCForum{prepareErr: errors.New("cannot rename General")}
+	service.SetAFCForum(forum)
+
+	response, err := service.HandleMessage(context.Background(), -1001, 1, 123456789, "/afc on", 0)
+	if err == nil || !strings.Contains(err.Error(), "prepare AFC Control") {
+		t.Fatalf("response=%#v err=%v, want Control preparation failure", response, err)
+	}
+	if forum.prepares != 1 || len(forum.creates) != 0 {
+		t.Fatalf("forum prepares=%d creates=%v, want fail before topic creation", forum.prepares, forum.creates)
+	}
+	state, stateErr := service.store.GetAFCState(context.Background())
+	if stateErr != nil || state.State != model.AFCStateOff {
+		t.Fatalf("state=%#v err=%v, want off", state, stateErr)
 	}
 }
 

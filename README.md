@@ -228,7 +228,8 @@ Compatibility fallbacks:
 Set `CTR_GO_AFC_GROUP_ID` to one private Telegram forum supergroup and configure
 exactly one `CTR_GO_ALLOWED_USER_IDS` value. The group must contain only that
 user and the bot; the bot must be able to manage topics and delete messages.
-Use `/afc on` in the built-in General/Control topic to create managed topics for
+Use `/afc on` in the built-in General topic. Activation validates the group and
+idempotently renames that built-in topic to `Control` before creating managed topics for
 up to eight recent Codex threads. `/projects` or `/newchat` creates an empty task
 topic; send its first prompt only after the topic is ready. `/afc off` never
 restores the legacy observer automatically. Use `/afc off --force` only when AFC

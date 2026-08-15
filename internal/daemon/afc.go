@@ -26,6 +26,7 @@ const (
 // route AFC traffic into a legacy chat.
 type AFCForum interface {
 	ValidateAFCGroup(ctx context.Context, allowedUserID int64) error
+	PrepareAFCControl(ctx context.Context) error
 	CreateAFCTopic(ctx context.Context, title string) (int64, error)
 	DeleteAFCTopic(ctx context.Context, topicID int64) error
 	SendAFCMessage(ctx context.Context, topicID int64, text string, silent bool) (int64, error)
@@ -221,6 +222,9 @@ func (s *Service) activateAFC(ctx context.Context, userID int64) (*DirectRespons
 	}
 	if err := forum.ValidateAFCGroup(ctx, userID); err != nil {
 		return nil, fmt.Errorf("validate AFC group: %w", err)
+	}
+	if err := forum.PrepareAFCControl(ctx); err != nil {
+		return nil, fmt.Errorf("prepare AFC Control: %w", err)
 	}
 	s.cleanupAFCTopics(ctx, state.SessionID)
 

@@ -30,6 +30,8 @@ func TestClientForumTopicOperations(t *testing.T) {
 		}
 		requests = append(requests, requestRecord{path: r.URL.Path, body: body})
 		switch r.URL.Path {
+		case "/editGeneralForumTopic":
+			_, _ = w.Write([]byte(`{"ok":true,"result":true}`))
 		case "/createForumTopic":
 			_, _ = w.Write([]byte(`{"ok":true,"result":{"message_thread_id":77,"name":"Alpha","icon_color":7322096}}`))
 		case "/editForumTopic", "/deleteForumTopic":
@@ -42,6 +44,9 @@ func TestClientForumTopicOperations(t *testing.T) {
 
 	client := NewClient("token")
 	client.baseURL = server.URL
+	if err := client.EditGeneralForumTopic(context.Background(), -10042, "Control"); err != nil {
+		t.Fatal(err)
+	}
 	topic, err := client.CreateForumTopic(context.Background(), -10042, "Alpha")
 	if err != nil {
 		t.Fatal(err)
@@ -56,17 +61,20 @@ func TestClientForumTopicOperations(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if len(requests) != 3 {
+	if len(requests) != 4 {
 		t.Fatalf("requests = %#v", requests)
 	}
-	if requests[0].path != "/createForumTopic" || requests[0].body["chat_id"] != float64(-10042) || requests[0].body["name"] != "Alpha" {
-		t.Fatalf("create request = %#v", requests[0])
+	if requests[0].path != "/editGeneralForumTopic" || requests[0].body["chat_id"] != float64(-10042) || requests[0].body["name"] != "Control" {
+		t.Fatalf("general edit request = %#v", requests[0])
 	}
-	if requests[1].path != "/editForumTopic" || requests[1].body["message_thread_id"] != float64(77) || requests[1].body["name"] != "Beta" {
-		t.Fatalf("edit request = %#v", requests[1])
+	if requests[1].path != "/createForumTopic" || requests[1].body["chat_id"] != float64(-10042) || requests[1].body["name"] != "Alpha" {
+		t.Fatalf("create request = %#v", requests[1])
 	}
-	if requests[2].path != "/deleteForumTopic" || requests[2].body["message_thread_id"] != float64(77) {
-		t.Fatalf("delete request = %#v", requests[2])
+	if requests[2].path != "/editForumTopic" || requests[2].body["message_thread_id"] != float64(77) || requests[2].body["name"] != "Beta" {
+		t.Fatalf("edit request = %#v", requests[2])
+	}
+	if requests[3].path != "/deleteForumTopic" || requests[3].body["message_thread_id"] != float64(77) {
+		t.Fatalf("delete request = %#v", requests[3])
 	}
 }
 
@@ -131,6 +139,10 @@ func TestTelegramAPIErrorClassifiesTopicAndRetryFailures(t *testing.T) {
 	var apiErr *APIError
 	if !errors.As(err, &apiErr) || apiErr.Method != "sendMessage" || apiErr.Code != 400 {
 		t.Fatalf("APIError = %#v", apiErr)
+	}
+	err = decodeAPIResponse("editGeneralForumTopic", []byte(`{"ok":false,"error_code":400,"description":"Bad Request: TOPIC_NOT_MODIFIED"}`), nil)
+	if !IsTopicNotModified(err) {
+		t.Fatalf("IsTopicNotModified(%v) = false", err)
 	}
 
 	err = decodeAPIResponse("sendMessage", []byte(`{"ok":false,"error_code":429,"description":"Too Many Requests","parameters":{"retry_after":7}}`), nil)

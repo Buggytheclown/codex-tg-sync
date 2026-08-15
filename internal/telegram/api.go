@@ -229,6 +229,11 @@ type createForumTopicRequest struct {
 	Name   string `json:"name"`
 }
 
+type editGeneralForumTopicRequest struct {
+	ChatID int64  `json:"chat_id"`
+	Name   string `json:"name"`
+}
+
 type editForumTopicRequest struct {
 	ChatID          int64  `json:"chat_id"`
 	MessageThreadID int64  `json:"message_thread_id"`
@@ -242,6 +247,7 @@ type forumTopicRequest struct {
 
 type ForumAPI interface {
 	ProbeForumGroup(ctx context.Context, chatID, botID, userID int64) (ForumGroupProbe, error)
+	EditGeneralForumTopic(ctx context.Context, chatID int64, name string) error
 	CreateForumTopic(ctx context.Context, chatID int64, name string) (*ForumTopic, error)
 	EditForumTopic(ctx context.Context, chatID, topicID int64, name string) error
 	DeleteForumTopic(ctx context.Context, chatID, topicID int64) error
@@ -320,6 +326,14 @@ func (c *Client) CreateForumTopic(ctx context.Context, chatID int64, name string
 		return nil, err
 	}
 	return &topic, nil
+}
+
+func (c *Client) EditGeneralForumTopic(ctx context.Context, chatID int64, name string) error {
+	name = strings.TrimSpace(name)
+	if chatID == 0 || name == "" {
+		return errors.New("forum chat id and general topic name are required")
+	}
+	return c.callJSON(ctx, "editGeneralForumTopic", editGeneralForumTopicRequest{ChatID: chatID, Name: name}, nil)
 }
 
 func (c *Client) EditForumTopic(ctx context.Context, chatID, topicID int64, name string) error {
@@ -640,6 +654,16 @@ func IsTopicNotFound(err error) bool {
 	return strings.Contains(description, "message thread not found") ||
 		strings.Contains(description, "topic_closed") ||
 		strings.Contains(description, "topic was deleted")
+}
+
+func IsTopicNotModified(err error) bool {
+	var apiErr *APIError
+	if !errors.As(err, &apiErr) {
+		return false
+	}
+	description := strings.ToLower(apiErr.Description)
+	return strings.Contains(description, "topic_not_modified") ||
+		strings.Contains(description, "not modified")
 }
 
 func IsRetryable(err error) bool {

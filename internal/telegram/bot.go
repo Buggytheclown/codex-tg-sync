@@ -65,6 +65,14 @@ func (b *Bot) ValidateAFCGroup(ctx context.Context, allowedUserID int64) error {
 	return probe.Validate(b.cfg.AFCGroupID, b.me.ID, allowedUserID)
 }
 
+func (b *Bot) PrepareAFCControl(ctx context.Context) error {
+	err := b.client.EditGeneralForumTopic(ctx, b.cfg.AFCGroupID, "Control")
+	if err == nil || IsTopicNotModified(err) {
+		return nil
+	}
+	return errors.New(sanitizeTelegramLogError(err))
+}
+
 func (b *Bot) CreateAFCTopic(ctx context.Context, title string) (int64, error) {
 	topic, err := b.client.CreateForumTopic(ctx, b.cfg.AFCGroupID, title)
 	if err != nil {
