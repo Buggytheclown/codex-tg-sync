@@ -2,10 +2,44 @@ package storage
 
 import (
 	"context"
+	"path/filepath"
 	"testing"
 
 	"github.com/mideco-tech/codex-tg/internal/model"
 )
+
+func TestAFCStatusTurnMigrationAdoptsExistingRenderedTurn(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "legacy.sqlite")
+	store, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	if err := store.UpsertAFCTopic(ctx, model.AFCTopic{SessionID: "session-1", ChatID: -1001, TopicID: 11, ThreadID: "thread-1", Title: "One", TelegramState: model.AFCTopicConnected, StatusMessageID: 777}); err != nil {
+		_ = store.Close()
+		t.Fatal(err)
+	}
+	if err := store.UpsertSnapshot(ctx, "thread-1", model.ThreadSnapshotState{LastSeenTurnID: "turn-existing"}); err != nil {
+		_ = store.Close()
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	store, err = Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	topics, err := store.ListAFCTopics(context.Background(), "session-1")
+	if err != nil || len(topics) != 1 {
+		t.Fatalf("topics=%#v err=%v", topics, err)
+	}
+	if topics[0].StatusMessageID != 777 || topics[0].StatusTurnID != "turn-existing" {
+		t.Fatalf("migrated topic=%#v", topics[0])
+	}
+}
 
 func TestAFCActivationIsIsolatedAndDisablesObserverOnlyOnSuccess(t *testing.T) {
 	t.Parallel()

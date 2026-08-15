@@ -235,6 +235,86 @@ func TestAFCPassiveSyncSendsSilentStatusAndNotifyingFinal(t *testing.T) {
 	}
 }
 
+func TestAFCPresentationCreatesFreshStatusForEachObservedTurn(t *testing.T) {
+	service := activeAFCService(t)
+	ctx := context.Background()
+	poll := &stubSession{threadReads: map[string]map[string]any{
+		"thread-1": afcRunningPayloadWithCommentary("thread-1", "turn-1", "first progress"),
+	}}
+	service.mu.Lock()
+	service.poll, service.pollConnected = poll, true
+	service.mu.Unlock()
+	forum := &fakeAFCForum{}
+	service.SetAFCForum(forum)
+
+	service.syncAFC(ctx)
+	if len(forum.sends) != 1 || forum.sends[0].topicID != 11 || !forum.sends[0].silent {
+		t.Fatalf("first turn sends=%#v, want one silent status in topic 11", forum.sends)
+	}
+	firstStatusID := forum.sends[0].messageID
+	firstTopic, err := service.store.GetActiveAFCTopic(ctx, -1001, 11)
+	if err != nil || firstTopic == nil || firstTopic.StatusTurnID != "turn-1" || firstTopic.StatusMessageID != firstStatusID {
+		t.Fatalf("first turn delivery=%#v err=%v", firstTopic, err)
+	}
+
+	poll.threadReads["thread-1"] = afcRunningPayloadWithCommentary("thread-1", "turn-1", "updated progress")
+	service.syncAFC(ctx)
+	if len(forum.sends) != 1 {
+		t.Fatalf("same turn created another status: %#v", forum.sends)
+	}
+	if len(forum.edits) != 1 || forum.edits[0].messageID != firstStatusID || !strings.Contains(forum.edits[0].text, "updated progress") {
+		t.Fatalf("same turn edits=%#v, want existing status %d", forum.edits, firstStatusID)
+	}
+
+	poll.threadReads["thread-1"] = afcRunningPayloadWithCommentary("thread-1", "turn-2", "second turn progress")
+	service.syncAFC(ctx)
+	if len(forum.sends) != 2 {
+		t.Fatalf("new turn sends=%#v, want a fresh status message", forum.sends)
+	}
+	if forum.sends[1].messageID == firstStatusID || !strings.Contains(forum.sends[1].text, "second turn progress") {
+		t.Fatalf("new turn status=%#v, want new message after previous turn", forum.sends[1])
+	}
+	secondTopic, err := service.store.GetActiveAFCTopic(ctx, -1001, 11)
+	if err != nil || secondTopic == nil || secondTopic.StatusTurnID != "turn-2" || secondTopic.StatusMessageID != forum.sends[1].messageID {
+		t.Fatalf("second turn delivery=%#v err=%v", secondTopic, err)
+	}
+}
+
+func TestAFCPresentationIgnoresStalePollTurnWhileAFCWriterIsActive(t *testing.T) {
+	service := activeAFCService(t)
+	ctx := context.Background()
+	writer := &afcWriterSession{stubSession: &stubSession{threadReads: map[string]map[string]any{
+		"thread-1": afcRunningPayloadWithCommentary("thread-1", "started-turn", "live progress"),
+	}}, events: make(chan appserver.Event, 2)}
+	service.liveFactory = func() Session { return writer }
+	forum := &fakeAFCForum{}
+	service.SetAFCForum(forum)
+	if _, err := service.HandleMessageWithID(ctx, -1001, 11, 501, 123456789, "one", 0); err != nil {
+		t.Fatal(err)
+	}
+	service.handleAFCWriterEvent(ctx, writer, appserver.Event{Method: "item/updated", Params: map[string]any{
+		"threadId": "thread-1", "turnId": "started-turn",
+	}}, service.afcWriter.Snapshot().Generation)
+	if len(forum.sends) != 1 || !strings.Contains(forum.sends[0].text, "live progress") {
+		t.Fatalf("live sends=%#v", forum.sends)
+	}
+
+	service.mu.Lock()
+	service.poll = &stubSession{threadReads: map[string]map[string]any{
+		"thread-1": afcRunningPayloadWithCommentary("thread-1", "older-turn", "stale progress"),
+	}}
+	service.pollConnected = true
+	service.mu.Unlock()
+	service.syncAFC(ctx)
+	if len(forum.sends) != 1 || len(forum.edits) != 0 {
+		t.Fatalf("stale poll mutated active presentation: sends=%#v edits=%#v", forum.sends, forum.edits)
+	}
+	topic, err := service.store.GetActiveAFCTopic(ctx, -1001, 11)
+	if err != nil || topic == nil || topic.StatusTurnID != "started-turn" {
+		t.Fatalf("topic=%#v err=%v", topic, err)
+	}
+}
+
 func TestAFCOffMarksOffBeforeCleanupAndDoesNotRestoreLegacy(t *testing.T) {
 	service := newTestService(t)
 	service.cfg.AFCGroupID = -1001
@@ -866,6 +946,12 @@ func TestAFCProjectCallbackFromOldSessionFailsBeforeThreadStart(t *testing.T) {
 
 func afcRunningPayload(threadID, turnID string) map[string]any {
 	return map[string]any{"thread": map[string]any{"id": threadID, "status": "inProgress", "turns": []any{map[string]any{"id": turnID, "status": "inProgress", "items": []any{}}}}}
+}
+
+func afcRunningPayloadWithCommentary(threadID, turnID, commentary string) map[string]any {
+	return map[string]any{"thread": map[string]any{"id": threadID, "status": "inProgress", "turns": []any{map[string]any{
+		"id": turnID, "status": "inProgress", "items": []any{map[string]any{"id": turnID + "-commentary", "type": "agentMessage", "phase": "commentary", "text": commentary}},
+	}}}}
 }
 
 func afcInterruptedPayload(threadID, turnID string) map[string]any {

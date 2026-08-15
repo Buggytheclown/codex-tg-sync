@@ -84,6 +84,7 @@ type AFCTopic struct {
 	Title            string
 	TelegramState    string
 	StatusMessageID  int64
+	StatusTurnID     string
 	LastRenderFP     string
 	LastFinalFP      string
 	ActiveTurnID     string

@@ -88,14 +88,15 @@ func (s *Store) UpsertAFCTopic(ctx context.Context, topic model.AFCTopic) error 
 		topic.TelegramState = model.AFCTopicConnected
 	}
 	_, err := s.db.ExecContext(ctx, `INSERT INTO afc_topics(session_id, chat_id, topic_id, thread_id, rank, title,
-		telegram_state, status_message_id, last_render_fp, last_final_fp, active_turn_id, active_turn_state,
+		telegram_state, status_message_id, status_turn_id, last_render_fp, last_final_fp, active_turn_id, active_turn_state,
 		writer_generation, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(session_id, topic_id) DO UPDATE SET thread_id=excluded.thread_id, rank=excluded.rank,
 		title=excluded.title, telegram_state=excluded.telegram_state, status_message_id=excluded.status_message_id,
-		last_render_fp=excluded.last_render_fp, last_final_fp=excluded.last_final_fp, updated_at=excluded.updated_at`,
+		status_turn_id=excluded.status_turn_id, last_render_fp=excluded.last_render_fp,
+		last_final_fp=excluded.last_final_fp, updated_at=excluded.updated_at`,
 		topic.SessionID, topic.ChatID, topic.TopicID, topic.ThreadID, topic.Rank, topic.Title,
-		topic.TelegramState, topic.StatusMessageID, nullable(topic.LastRenderFP), nullable(topic.LastFinalFP),
+		topic.TelegramState, topic.StatusMessageID, nullable(topic.StatusTurnID), nullable(topic.LastRenderFP), nullable(topic.LastFinalFP),
 		nullable(topic.ActiveTurnID), nullable(topic.ActiveTurnState), topic.WriterGeneration, now, now)
 	return err
 }
@@ -132,7 +133,7 @@ func (s *Store) FinishAFCActivation(ctx context.Context, sessionID, summaryJSON 
 
 func (s *Store) ListAFCTopics(ctx context.Context, sessionID string) ([]model.AFCTopic, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT session_id, chat_id, topic_id, thread_id, rank, title, telegram_state,
-		status_message_id, coalesce(last_render_fp,''), coalesce(last_final_fp,''), coalesce(active_turn_id,''),
+		status_message_id, coalesce(status_turn_id,''), coalesce(last_render_fp,''), coalesce(last_final_fp,''), coalesce(active_turn_id,''),
 		coalesce(active_turn_state,''), writer_generation, created_at, updated_at
 		FROM afc_topics WHERE session_id=? ORDER BY rank, thread_id`, sessionID)
 	if err != nil {
@@ -143,7 +144,7 @@ func (s *Store) ListAFCTopics(ctx context.Context, sessionID string) ([]model.AF
 	for rows.Next() {
 		var topic model.AFCTopic
 		if err := rows.Scan(&topic.SessionID, &topic.ChatID, &topic.TopicID, &topic.ThreadID, &topic.Rank,
-			&topic.Title, &topic.TelegramState, &topic.StatusMessageID, &topic.LastRenderFP, &topic.LastFinalFP,
+			&topic.Title, &topic.TelegramState, &topic.StatusMessageID, &topic.StatusTurnID, &topic.LastRenderFP, &topic.LastFinalFP,
 			&topic.ActiveTurnID, &topic.ActiveTurnState, &topic.WriterGeneration, &topic.CreatedAt, &topic.UpdatedAt); err != nil {
 			return nil, err
 		}
@@ -372,9 +373,9 @@ func (s *Store) MarkAFCDraining(ctx context.Context, sessionID string) error {
 	return nil
 }
 
-func (s *Store) UpdateAFCTopicDelivery(ctx context.Context, sessionID string, topicID, statusMessageID int64, renderFP, finalFP string) error {
-	_, err := s.db.ExecContext(ctx, `UPDATE afc_topics SET status_message_id=?, last_render_fp=?, last_final_fp=?, updated_at=? WHERE session_id=? AND topic_id=?`,
-		statusMessageID, nullable(renderFP), nullable(finalFP), string(model.NowString()), sessionID, topicID)
+func (s *Store) UpdateAFCTopicDelivery(ctx context.Context, sessionID string, topicID, statusMessageID int64, statusTurnID, renderFP, finalFP string) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE afc_topics SET status_message_id=?, status_turn_id=?, last_render_fp=?, last_final_fp=?, updated_at=? WHERE session_id=? AND topic_id=?`,
+		statusMessageID, nullable(statusTurnID), nullable(renderFP), nullable(finalFP), string(model.NowString()), sessionID, topicID)
 	return err
 }
 

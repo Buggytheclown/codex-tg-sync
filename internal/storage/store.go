@@ -194,6 +194,7 @@ func (s *Store) initialize(ctx context.Context) error {
 		title TEXT NOT NULL,
 		telegram_state TEXT NOT NULL,
 		status_message_id INTEGER NOT NULL DEFAULT 0,
+		status_turn_id TEXT,
 		last_render_fp TEXT,
 		last_final_fp TEXT,
 		active_turn_id TEXT,
@@ -310,6 +311,17 @@ func (s *Store) initialize(ctx context.Context) error {
 		return err
 	}
 	if err := s.ensureColumn(ctx, "afc_topics", "writer_generation", `ALTER TABLE afc_topics ADD COLUMN writer_generation INTEGER NOT NULL DEFAULT 0`); err != nil {
+		return err
+	}
+	if err := s.ensureColumn(ctx, "afc_topics", "status_turn_id", `ALTER TABLE afc_topics ADD COLUMN status_turn_id TEXT`); err != nil {
+		return err
+	}
+	if _, err := s.db.ExecContext(ctx, `UPDATE afc_topics SET status_turn_id=(
+		SELECT last_seen_turn_id FROM thread_snapshots WHERE thread_snapshots.thread_id=afc_topics.thread_id
+	) WHERE status_message_id<>0 AND coalesce(status_turn_id,'')='' AND EXISTS (
+		SELECT 1 FROM thread_snapshots WHERE thread_snapshots.thread_id=afc_topics.thread_id
+		AND coalesce(thread_snapshots.last_seen_turn_id,'')<>''
+	)`); err != nil {
 		return err
 	}
 	return nil

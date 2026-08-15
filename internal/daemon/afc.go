@@ -471,9 +471,14 @@ func (s *Service) handleAFCWriterEvent(ctx context.Context, process Session, eve
 }
 
 func (s *Service) processAFCSnapshotLocked(ctx context.Context, state model.AFCState, forum AFCForum, topic model.AFCTopic, current appserver.ThreadReadSnapshot, operation string) {
+	activeTurnID := strings.TrimSpace(topic.ActiveTurnID)
+	currentTurnID := strings.TrimSpace(current.LatestTurnID)
+	if topic.ActiveTurnState == model.AFCTurnActive && activeTurnID != "" && currentTurnID != "" && currentTurnID != activeTurnID {
+		return
+	}
 	if topic.ActiveTurnState == model.AFCTurnActive &&
-		strings.TrimSpace(topic.ActiveTurnID) != "" &&
-		current.LatestTurnID == topic.ActiveTurnID {
+		activeTurnID != "" &&
+		currentTurnID == activeTurnID {
 		previous, _ := s.store.GetSnapshot(ctx, topic.ThreadID)
 		if s.applyTelegramOriginTerminalGate(ctx, operation, &current, previous) {
 			return
@@ -515,8 +520,11 @@ func (s *Service) persistAndDeliverAFCSnapshotLocked(ctx context.Context, forum 
 	statusText := renderAFCStatus(current)
 	renderFP := afcFingerprint(statusText)
 	statusID := topic.StatusMessageID
+	statusTurnID := strings.TrimSpace(topic.StatusTurnID)
+	currentTurnID := strings.TrimSpace(current.LatestTurnID)
+	newObservedTurn := statusTurnID != "" && currentTurnID != "" && statusTurnID != currentTurnID
 	var deliveryErr error
-	if statusID == 0 {
+	if statusID == 0 || newObservedTurn {
 		statusID, deliveryErr = forum.SendAFCMessage(ctx, topic.TopicID, statusText, true)
 	} else if renderFP != topic.LastRenderFP {
 		deliveryErr = forum.EditAFCMessage(ctx, topic.TopicID, statusID, statusText)
@@ -524,13 +532,16 @@ func (s *Service) persistAndDeliverAFCSnapshotLocked(ctx context.Context, forum 
 	if deliveryErr != nil {
 		return
 	}
+	if currentTurnID != "" {
+		statusTurnID = currentTurnID
+	}
 	finalFP := topic.LastFinalFP
 	if strings.TrimSpace(current.LatestFinalFP) != "" && current.LatestFinalFP != topic.LastFinalFP {
 		if _, deliveryErr = forum.SendAFCMessage(ctx, topic.TopicID, "[Final]\n"+strings.TrimSpace(current.LatestFinalText), false); deliveryErr == nil {
 			finalFP = current.LatestFinalFP
 		}
 	}
-	_ = s.store.UpdateAFCTopicDelivery(ctx, topic.SessionID, topic.TopicID, statusID, renderFP, finalFP)
+	_ = s.store.UpdateAFCTopicDelivery(ctx, topic.SessionID, topic.TopicID, statusID, statusTurnID, renderFP, finalFP)
 }
 
 func (s *Service) cleanupAFCTopics(ctx context.Context, sessionID string) {

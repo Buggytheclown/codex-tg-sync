@@ -480,6 +480,8 @@ Primary tests:
 - `internal/daemon/afc_test.go::TestAFCZeroTopicActivationLeavesObserverEnabled`
 - `internal/daemon/afc_test.go::TestAFCUnknownTopicAndCallbacksFailClosed`
 - `internal/daemon/afc_test.go::TestAFCPassiveSyncSendsSilentStatusAndNotifyingFinal`
+- `internal/daemon/afc_test.go::TestAFCPresentationCreatesFreshStatusForEachObservedTurn`
+- `internal/daemon/afc_test.go::TestAFCPresentationIgnoresStalePollTurnWhileAFCWriterIsActive`
 - `internal/daemon/afc_test.go::TestAFCOffMarksOffBeforeCleanupAndDoesNotRestoreLegacy`
 - `internal/telegram/api_test.go` forum security and typed API failures
 

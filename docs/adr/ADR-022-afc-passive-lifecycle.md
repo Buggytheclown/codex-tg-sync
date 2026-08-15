@@ -23,8 +23,15 @@ created only some topics.
   the session active and atomically disable the legacy global observer. Zero
   successes leave AFC off and do not change the observer.
 - Passive sync uses only the poll session and `thread/read`: it edits one silent
-  status message and sends each new Final as a notifying message. It never
-  resumes a thread, starts a turn, or creates a writer.
+  status message for the currently observed turn and sends each new Final as a
+  notifying message. A different latest turn creates a fresh status message at
+  the bottom of the topic; later snapshots of that turn edit the fresh message.
+  This mirrors the legacy per-run presentation lifecycle without creating a
+  legacy binding, panel, observer target, or writer. Passive sync never resumes
+  a thread, starts a turn, or creates a writer.
+- While an AFC writer lease is active, a poll snapshot for a different turn is
+  stale presentation evidence and cannot replace or append after the active
+  turn's status message.
 - `/afc off` commits logical `off` before best-effort topic deletion. Failed
   deletes remain cleanup-only and unroutable. It does not restore the legacy
   observer and does not start, stop, or replace the legacy writer.
