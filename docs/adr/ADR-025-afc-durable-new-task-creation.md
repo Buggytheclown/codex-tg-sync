@@ -6,9 +6,10 @@
 ## Context
 
 AFC must create new Codex tasks from a phone without retaining a first prompt
-inside callback state or exposing a half-created Telegram topic as routable.
-Thread creation cannot be rolled back safely when a later Telegram operation
-fails.
+inside callback state. App Server `thread/start` does not create the rollout
+required by a later `thread/resume`; the first `turn/start` must therefore run
+on the same writer process as `thread/start`. Thread creation cannot be rolled
+back safely when a later Telegram operation fails.
 
 ## Decision
 
@@ -18,21 +19,28 @@ fails.
 - Project callbacks persist only current session, Control topic, project, and
   CWD metadata. They are consumed before `thread/start`, so duplicate callback
   delivery never creates a second thread.
-- Creation reserves the shared AFC writer without a thread claim, performs
-  `thread/start`, claims the returned durable thread id, and stores the thread.
-  It then creates one Telegram topic and stores the AFC topic binding.
-- The binding is routable only after `thread → topic → afc_topics` succeeds.
-  The creation callback never calls `turn/start` and stores no prompt.
-- The first prompt is a new Telegram message inside the ready managed topic and
-  follows normal receipt and writer ownership rules.
-- If topic creation fails after thread creation, the Codex thread remains and
-  no AFC binding is written. There is no rollback or automatic topic retry.
-- Timeout/EOF during `thread/start` is ownership unknown and the consumed
-  callback is never replayed. A definitive rejection aborts the reservation.
+- Creation first stores one Telegram draft topic with selected project and cwd
+  metadata. The callback never calls `thread/start` and stores no prompt.
+- The first prompt is a new Telegram message inside the ready draft. Claiming
+  that message reserves the shared AFC writer, performs `thread/start`, claims
+  the returned durable thread id, materializes the normal AFC binding, and
+  performs `turn/start` on the same writer process.
+- Timeout/EOF during `thread/start` is ownership unknown and the claimed source
+  message is never replayed. A definitive rejection returns the draft to ready
+  state for a later message.
+- A definitive first `turn/start` failure returns the Telegram topic to draft
+  state and retains the empty Codex thread. An ambiguous result remains
+  ownership-unknown and is never replayed.
+- Pre-migration empty bindings recover only from the precise `no rollout found`
+  resume failure and only when no turn was ever rendered.
+- The first prompt supplies a short initial name for the Telegram topic and,
+  best-effort, the Codex thread.
 
 ## Consequences
 
-- New tasks cannot accept input before their durable topic binding exists.
+- Draft topics accept exactly one first message before their durable Codex
+  binding exists.
+- AFC does not hold the shared writer while waiting for that first message.
 - Telegram partial failure never deletes a successfully created Codex thread.
 - New tasks can join the current AFC session beyond its original activation
   snapshot only through an explicit user action.

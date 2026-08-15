@@ -557,10 +557,11 @@ Primary tests:
 
 Contract notes:
 
-- AFC project callbacks carry no first prompt and are consumed before `thread/start`.
-- Creation order is durable Codex thread, Telegram topic, then AFC binding.
-- First `turn/start` occurs only from a later source Telegram message in the ready topic.
-- Topic failure retains the Codex thread and writes no binding or automatic retry.
+- AFC project callbacks carry no first prompt and create only a durable Telegram draft.
+- The first draft message performs `thread/start` and first `turn/start` on one writer process before exposing a normal AFC binding.
+- A definitive first-turn failure returns the topic to draft state and retains the empty Codex thread.
+- Existing empty bindings recover only from precise `no rollout found` evidence and no rendered turn.
+- The first prompt supplies the initial Telegram topic and Codex thread name.
 - Off-session callbacks fail before App Server mutation.
 
 ## Baseline Commands
