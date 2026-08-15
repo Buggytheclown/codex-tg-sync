@@ -2,6 +2,7 @@ package appserver
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -10,6 +11,30 @@ import (
 	"testing"
 	"time"
 )
+
+type overlapDetectingWriteCloser struct {
+	mu      sync.Mutex
+	active  int
+	overlap bool
+	lines   [][]byte
+}
+
+func (w *overlapDetectingWriteCloser) Write(data []byte) (int, error) {
+	w.mu.Lock()
+	w.active++
+	if w.active > 1 {
+		w.overlap = true
+	}
+	w.mu.Unlock()
+	time.Sleep(time.Millisecond)
+	w.mu.Lock()
+	w.lines = append(w.lines, append([]byte(nil), data...))
+	w.active--
+	w.mu.Unlock()
+	return len(data), nil
+}
+
+func (w *overlapDetectingWriteCloser) Close() error { return nil }
 
 func TestRPCStringSkipsNilLikeValues(t *testing.T) {
 	t.Parallel()
@@ -262,6 +287,49 @@ sleep 5
 	}
 	if _, requestErr := client.Request(context.Background(), "thread/list", nil); requestErr == nil || !strings.Contains(requestErr.Error(), "not running") {
 		t.Fatalf("Request after failed Start error = %v, want not running", requestErr)
+	}
+}
+
+func TestClientSerializesConcurrentJSONRPCWrites(t *testing.T) {
+	writer := &overlapDetectingWriteCloser{}
+	client := NewClient("codex", "stdio", t.TempDir(), 5*time.Millisecond)
+	client.mu.Lock()
+	client.started = true
+	client.stdin = writer
+	client.mu.Unlock()
+	t.Cleanup(func() { _ = client.Close() })
+
+	var wg sync.WaitGroup
+	for index := range 10 {
+		wg.Add(3)
+		go func() {
+			defer wg.Done()
+			_ = client.Notify(context.Background(), "event/test", map[string]any{"index": index})
+		}()
+		go func() {
+			defer wg.Done()
+			_ = client.RespondServerRequest(context.Background(), "request-"+string(rune('a'+index)), map[string]any{"ok": true})
+		}()
+		go func() {
+			defer wg.Done()
+			_, _ = client.Request(context.Background(), "request/test", map[string]any{"index": index})
+		}()
+	}
+	wg.Wait()
+
+	writer.mu.Lock()
+	defer writer.mu.Unlock()
+	if writer.overlap {
+		t.Fatal("concurrent JSON-RPC writes overlapped")
+	}
+	if got, want := len(writer.lines), 30; got != want {
+		t.Fatalf("written lines = %d, want %d", got, want)
+	}
+	for _, line := range writer.lines {
+		var payload map[string]any
+		if err := json.Unmarshal(line, &payload); err != nil {
+			t.Fatalf("invalid JSON-RPC line %q: %v", line, err)
+		}
 	}
 }
 

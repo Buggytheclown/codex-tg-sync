@@ -6,6 +6,30 @@ or Plan Mode.
 
 When behavior changes, update the relevant ADR first, then update or add the tests named here. The tests are part of the architecture: they describe the contract that must survive App Server drift and daemon restarts.
 
+## AFC And Writer Ownership
+
+ADR: `docs/adr/ADR-020-afc-writer-ownership.md`.
+
+Primary tests:
+
+- `internal/appserver/client_test.go::TestClientSerializesConcurrentJSONRPCWrites`
+- `internal/appserver/writer_manager_test.go::TestThreadClaimRegistryRejectsCrossWriterOwnership`
+- `internal/appserver/writer_manager_test.go::TestWriterManagerConcurrentReservationsShareOneStart`
+- `internal/appserver/writer_manager_test.go::TestWriterManagerKeepsClaimsUntilLastTerminalClosesProcess`
+- `internal/appserver/writer_manager_test.go::TestWriterManagerUnknownDispatchBlocksCloseAndReplay`
+- `internal/appserver/writer_manager_test.go::TestWriterManagerStartFailureReleasesGenerationClaims`
+- `internal/appserver/writer_manager_test.go::TestWriterManagerCloseFailureKeepsClaimsAndFailsClosed`
+
+Contract notes:
+
+- A process-generation thread claim is reserved before a mutating App Server
+  call and is released only after the owning process closes successfully.
+- `unknown` dispatch is fail-closed and is never replayed automatically.
+- Different writers may own different threads concurrently, but never the same
+  thread.
+- `/afc off` must not restore the observer or start/resume an eager legacy
+  lifecycle; explicit later legacy work may start its writer lazily.
+
 ## Control Plane Architecture
 
 ADR: `docs/adr/ADR-019-codex-control-plane.md`; feature brief is

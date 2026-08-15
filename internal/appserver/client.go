@@ -39,6 +39,7 @@ type Client struct {
 	requestTimeout time.Duration
 
 	startMu        sync.Mutex
+	writeMu        sync.Mutex
 	mu             sync.Mutex
 	cmd            *exec.Cmd
 	stdin          io.WriteCloser
@@ -157,7 +158,9 @@ func (c *Client) closeRunning() error {
 	c.mu.Unlock()
 
 	if stdin != nil {
+		c.writeMu.Lock()
 		_ = stdin.Close()
+		c.writeMu.Unlock()
 	}
 	for _, ch := range pending {
 		select {
@@ -206,7 +209,7 @@ func (c *Client) Request(ctx context.Context, method string, params map[string]a
 	if err != nil {
 		return nil, err
 	}
-	if _, err := io.WriteString(stdin, string(payload)+"\n"); err != nil {
+	if err := c.writeJSONRPC(stdin, payload); err != nil {
 		c.broadcast(Event{Channel: "transport_error", Params: map[string]any{"stream": "stdin", "method": method, "error": err.Error(), "stderr_tail": c.StderrTail()}})
 		return nil, err
 	}
@@ -257,7 +260,7 @@ func (c *Client) Notify(ctx context.Context, method string, params map[string]an
 	if err != nil {
 		return err
 	}
-	if _, err := io.WriteString(stdin, string(payload)+"\n"); err != nil {
+	if err := c.writeJSONRPC(stdin, payload); err != nil {
 		c.broadcast(Event{Channel: "transport_error", Params: map[string]any{"stream": "stdin", "method": method, "error": err.Error(), "stderr_tail": c.StderrTail()}})
 		return err
 	}
@@ -281,11 +284,18 @@ func (c *Client) RespondServerRequest(ctx context.Context, requestID string, res
 	if err != nil {
 		return err
 	}
-	if _, err := io.WriteString(stdin, string(payload)+"\n"); err != nil {
+	if err := c.writeJSONRPC(stdin, payload); err != nil {
 		c.broadcast(Event{Channel: "transport_error", Params: map[string]any{"stream": "stdin", "method": "serverRequest/respond", "error": err.Error(), "stderr_tail": c.StderrTail()}})
 		return err
 	}
 	return nil
+}
+
+func (c *Client) writeJSONRPC(stdin io.Writer, payload []byte) error {
+	c.writeMu.Lock()
+	defer c.writeMu.Unlock()
+	_, err := stdin.Write(append(payload, '\n'))
+	return err
 }
 
 func (c *Client) ThreadList(ctx context.Context, limit int, cursor string) (map[string]any, error) {
