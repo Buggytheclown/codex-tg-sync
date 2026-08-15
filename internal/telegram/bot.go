@@ -100,6 +100,17 @@ func (b *Bot) SendAFCMessage(ctx context.Context, topicID int64, text string, si
 	return message.MessageID, nil
 }
 
+func (b *Bot) SendAFCActionMessage(ctx context.Context, topicID int64, text string, buttons [][]model.ButtonSpec) (int64, error) {
+	message, err := b.client.SendMessage(ctx, b.cfg.AFCGroupID, topicID, text, toInlineKeyboard(buttons), model.SendOptions{})
+	if err != nil {
+		return 0, err
+	}
+	if message == nil {
+		return 0, errors.New("telegram sendMessage returned no message")
+	}
+	return message.MessageID, nil
+}
+
 func (b *Bot) EditAFCMessage(ctx context.Context, topicID, messageID int64, text string) error {
 	_, err := b.client.EditMessageText(ctx, b.cfg.AFCGroupID, messageID, text, nil)
 	return err

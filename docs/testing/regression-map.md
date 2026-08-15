@@ -517,6 +517,31 @@ Contract notes:
 - Session/thread/turn/generation guards prevent stale events from crossing topics.
 - The process remains open until the last terminal lease and restart creates no writer.
 
+## AFC Guarded Controls And Draining Off
+
+ADR: `docs/adr/ADR-024-afc-guarded-controls-and-draining.md`
+
+Primary tests:
+
+- `internal/daemon/afc_test.go::TestAFCApprovalCallbackIsGuardedByTopicTurnAndGeneration`
+- `internal/daemon/afc_test.go::TestAFCDesktopOriginApprovalIsNotActionable`
+- `internal/daemon/afc_test.go::TestAFCStructuredUserInputCallbackReturnsGuardedAnswers`
+- `internal/daemon/afc_test.go::TestAFCStopInterruptsOnlyCurrentTopicTurn`
+- `internal/daemon/afc_test.go::TestAFCSafeOffRefusesActiveTurnsWithoutCleanup`
+- `internal/daemon/afc_test.go::TestAFCForceOffInterruptsAllAndWaitsForTerminalBeforeCleanup`
+- `internal/daemon/afc_test.go::TestAFCForceOffTimeoutStaysDrainingAndDoesNotCleanup`
+- `internal/daemon/afc_test.go::TestAFCRestartUnknownOwnershipBlocksSafeAndForceCleanup`
+- `internal/daemon/afc_test.go::TestAFCOffMarksOffBeforeCleanupAndDoesNotRestoreLegacy`
+
+Contract notes:
+
+- AFC callbacks require current session/topic/thread/turn/generation/message coordinates.
+- Desktop-origin requests do not create actionable AFC callbacks.
+- Stop is topic-local and does not target passive ownership.
+- Safe off never cleans up unfinished topics; force off cleans up only after every confirmed terminal.
+- Force timeout remains draining, rejects new work, and does not kill the writer.
+- Off never restores observer or legacy lifecycle.
+
 ## Baseline Commands
 
 Run before commit or publish:

@@ -359,6 +359,19 @@ func (s *Store) MarkAFCOff(ctx context.Context, sessionID string) ([]model.AFCTo
 	return s.ListAFCTopics(ctx, sessionID)
 }
 
+func (s *Store) MarkAFCDraining(ctx context.Context, sessionID string) error {
+	result, err := s.db.ExecContext(ctx, `UPDATE afc_state SET state=? WHERE id=1 AND session_id=? AND state IN (?,?)`,
+		model.AFCStateDraining, sessionID, model.AFCStateActive, model.AFCStateDraining)
+	if err != nil {
+		return err
+	}
+	changed, _ := result.RowsAffected()
+	if changed != 1 {
+		return errors.New("AFC session cannot enter draining")
+	}
+	return nil
+}
+
 func (s *Store) UpdateAFCTopicDelivery(ctx context.Context, sessionID string, topicID, statusMessageID int64, renderFP, finalFP string) error {
 	_, err := s.db.ExecContext(ctx, `UPDATE afc_topics SET status_message_id=?, last_render_fp=?, last_final_fp=?, updated_at=? WHERE session_id=? AND topic_id=?`,
 		statusMessageID, nullable(renderFP), nullable(finalFP), string(model.NowString()), sessionID, topicID)

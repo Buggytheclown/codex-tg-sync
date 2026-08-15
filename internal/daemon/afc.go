@@ -29,6 +29,7 @@ type AFCForum interface {
 	CreateAFCTopic(ctx context.Context, title string) (int64, error)
 	DeleteAFCTopic(ctx context.Context, topicID int64) error
 	SendAFCMessage(ctx context.Context, topicID int64, text string, silent bool) (int64, error)
+	SendAFCActionMessage(ctx context.Context, topicID int64, text string, buttons [][]model.ButtonSpec) (int64, error)
 	EditAFCMessage(ctx context.Context, topicID, messageID int64, text string) error
 }
 
@@ -81,13 +82,15 @@ func (s *Service) handleAFCMessage(ctx context.Context, topicID, messageID, user
 			if err != nil {
 				return nil, err
 			}
-			if state.State == model.AFCStateActive {
+			if state.State == model.AFCStateActive || state.State == model.AFCStateDraining {
 				return s.deactivateAFC(ctx)
 			}
 			return s.activateAFC(ctx, userID)
 		case len(fields) == 2 && fields[0] == "/afc" && fields[1] == "on":
 			return s.activateAFC(ctx, userID)
-		case len(fields) >= 2 && fields[0] == "/afc" && fields[1] == "off":
+		case len(fields) == 3 && fields[0] == "/afc" && fields[1] == "off" && fields[2] == "--force":
+			return s.forceDeactivateAFC(ctx)
+		case len(fields) == 2 && fields[0] == "/afc" && fields[1] == "off":
 			return s.deactivateAFC(ctx)
 		case len(fields) == 1 && fields[0] == "/status":
 			return s.afcStatus(ctx)
@@ -104,6 +107,9 @@ func (s *Service) handleAFCMessage(ctx context.Context, topicID, messageID, user
 	}
 	if text == "" {
 		return &DirectResponse{Text: "AFC topic requires a non-empty plain-text prompt."}, nil
+	}
+	if strings.EqualFold(text, "/stop") || strings.HasPrefix(strings.ToLower(text), "/stop@") {
+		return s.stopAFCTurn(ctx, topicID)
 	}
 	if strings.HasPrefix(text, "/") {
 		return &DirectResponse{Text: "AFC topic accepts a plain-text prompt. Topic commands arrive with the control rollout."}, nil
@@ -198,7 +204,7 @@ func (s *Service) activateAFC(ctx context.Context, userID int64) (*DirectRespons
 	if err != nil {
 		return nil, err
 	}
-	if state.State == model.AFCStateActive {
+	if state.State == model.AFCStateActive || state.State == model.AFCStateDraining {
 		return &DirectResponse{Text: "AFC is already active. The activation snapshot is immutable; use /status."}, nil
 	}
 	if err := forum.ValidateAFCGroup(ctx, userID); err != nil {
@@ -262,6 +268,9 @@ func (s *Service) activateAFC(ctx context.Context, userID int64) (*DirectRespons
 	if err := s.store.FinishAFCActivation(ctx, sessionID, string(summaryJSON), summary.Created > 0); err != nil {
 		return nil, err
 	}
+	if summary.Created > 0 {
+		_ = s.afcWriter.AcceptNewWork()
+	}
 	return &DirectResponse{Text: renderAFCActivationSummary(summary)}, nil
 }
 
@@ -276,10 +285,11 @@ func (s *Service) deactivateAFC(ctx context.Context) (*DirectResponse, error) {
 		return &DirectResponse{Text: "AFC is already off. Legacy lifecycle remains unchanged."}, nil
 	}
 	writer := s.afcWriter.Snapshot()
-	if writer.Starting+writer.Active+writer.Unknown > 0 {
-		return &DirectResponse{Text: "AFC has unfinished turns. Off is blocked until safe/force draining controls are enabled."}, nil
+	topics, _ := s.store.ListAFCTopics(ctx, state.SessionID)
+	if writer.Starting+writer.Active+writer.Unknown > 0 || hasUnfinishedAFCTopics(topics) {
+		return &DirectResponse{Text: "AFC off refused; unfinished topics: " + strings.Join(unfinishedAFCTopicTitles(topics), ", ") + ". Use /afc off --force to drain."}, nil
 	}
-	topics, err := s.store.MarkAFCOff(ctx, state.SessionID)
+	topics, err = s.store.MarkAFCOff(ctx, state.SessionID)
 	if err != nil {
 		return nil, err
 	}
@@ -319,7 +329,7 @@ func (s *Service) syncAFC(ctx context.Context) {
 	s.afcMu.Lock()
 	defer s.afcMu.Unlock()
 	state, err := s.store.GetAFCState(ctx)
-	if err != nil || state.State != model.AFCStateActive {
+	if err != nil || (state.State != model.AFCStateActive && state.State != model.AFCStateDraining) {
 		return
 	}
 	forum := s.getAFCForum()
@@ -407,7 +417,7 @@ func (s *Service) handleAFCWriterEvent(ctx context.Context, process Session, eve
 		return
 	}
 	state, err := s.store.GetAFCState(ctx)
-	if err != nil || state.State != model.AFCStateActive {
+	if err != nil || (state.State != model.AFCStateActive && state.State != model.AFCStateDraining) {
 		return
 	}
 	topic, err := s.store.GetActiveAFCTopicByThread(ctx, state.SessionID, threadID)
@@ -415,6 +425,16 @@ func (s *Service) handleAFCWriterEvent(ctx context.Context, process Session, eve
 		return
 	}
 	if eventTurnID := afcEventTurnID(event); eventTurnID != "" && topic.ActiveTurnID != "" && eventTurnID != topic.ActiveTurnID {
+		return
+	}
+	if approval, ok := appserver.PendingApprovalFromServerRequest(event); ok {
+		s.handleAFCPendingRequestLocked(ctx, *topic, *approval)
+		return
+	}
+	if strings.EqualFold(event.Method, "serverRequest/resolved") {
+		if requestID := payloadMapString(event.Params, "requestId"); requestID != "" {
+			_ = s.store.ExpireAFCCallbackRoutesByRequest(ctx, requestID)
+		}
 		return
 	}
 	payload, err := process.ThreadRead(ctx, threadID, true)
@@ -440,6 +460,7 @@ func (s *Service) completeAFCTurnLocked(ctx context.Context, state model.AFCStat
 	if err := s.store.MarkAFCTerminal(ctx, state.SessionID, topic.ThreadID, current.LatestTurnID, topic.WriterGeneration); err != nil {
 		return
 	}
+	_ = s.store.ExpireAFCCallbackRoutes(ctx, topic.ThreadID, current.LatestTurnID)
 	delete(s.afcLeases, topic.ThreadID)
 	if err := s.afcWriter.MarkTerminal(lease); err != nil {
 		return

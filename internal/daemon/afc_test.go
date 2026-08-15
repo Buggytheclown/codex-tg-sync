@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/mideco-tech/codex-tg/internal/appserver"
 	"github.com/mideco-tech/codex-tg/internal/model"
@@ -19,6 +20,7 @@ type fakeAFCForum struct {
 	deletes     []int64
 	sends       []fakeAFCSend
 	edits       []fakeAFCEdit
+	actions     []fakeAFCAction
 	onDelete    func()
 }
 
@@ -30,6 +32,11 @@ type fakeAFCSend struct {
 type fakeAFCEdit struct {
 	topicID, messageID int64
 	text               string
+}
+type fakeAFCAction struct {
+	topicID, messageID int64
+	text               string
+	buttons            [][]model.ButtonSpec
 }
 
 type afcWriterSession struct {
@@ -63,6 +70,11 @@ func (f *fakeAFCForum) SendAFCMessage(_ context.Context, topicID int64, text str
 func (f *fakeAFCForum) EditAFCMessage(_ context.Context, topicID, messageID int64, text string) error {
 	f.edits = append(f.edits, fakeAFCEdit{topicID: topicID, messageID: messageID, text: text})
 	return nil
+}
+func (f *fakeAFCForum) SendAFCActionMessage(_ context.Context, topicID int64, text string, buttons [][]model.ButtonSpec) (int64, error) {
+	id := int64(200 + len(f.actions))
+	f.actions = append(f.actions, fakeAFCAction{topicID: topicID, messageID: id, text: text, buttons: buttons})
+	return id, nil
 }
 
 func TestAFCPartialActivationOwnsGroupAndDisablesLegacyObserver(t *testing.T) {
@@ -385,6 +397,225 @@ func TestAFCPollTerminalEvidenceClosesWriterWhenEventWasMissed(t *testing.T) {
 	if writer.closeCalls != 1 {
 		t.Fatalf("writer close calls=%d", writer.closeCalls)
 	}
+}
+
+func TestAFCApprovalCallbackIsGuardedByTopicTurnAndGeneration(t *testing.T) {
+	service := activeAFCService(t)
+	writer := &afcWriterSession{stubSession: &stubSession{}, events: make(chan appserver.Event, 4)}
+	service.liveFactory = func() Session { return writer }
+	forum := &fakeAFCForum{}
+	service.SetAFCForum(forum)
+	ctx := context.Background()
+	if _, err := service.HandleMessageWithID(ctx, -1001, 11, 501, 123456789, "needs approval", 0); err != nil {
+		t.Fatal(err)
+	}
+	generation := service.afcWriter.Snapshot().Generation
+	event := appserver.Event{Channel: "server_request", Method: "item/commandExecution/requestApproval", ID: "request-1", Params: map[string]any{
+		"threadId": "thread-1", "turnId": "started-turn", "itemId": "item-1", "question": "Run it?",
+	}}
+	service.handleAFCWriterEvent(ctx, writer, event, generation)
+	if len(forum.actions) != 1 || forum.actions[0].topicID != 11 || len(forum.actions[0].buttons) != 2 {
+		t.Fatalf("actions=%#v", forum.actions)
+	}
+	token := forum.actions[0].buttons[0][0].CallbackData
+	stale, err := service.HandleCallback(ctx, -1001, 12, forum.actions[0].messageID, 123456789, token)
+	if err != nil || stale == nil || !strings.Contains(stale.CallbackText, "stale") {
+		t.Fatalf("cross-topic=%#v err=%v", stale, err)
+	}
+	if len(writer.respondRequestCalls) != 0 {
+		t.Fatal("cross-topic callback reached App Server")
+	}
+	response, err := service.HandleCallback(ctx, -1001, 11, forum.actions[0].messageID, 123456789, token)
+	if err != nil || response == nil || !strings.Contains(response.CallbackText, "sent") {
+		t.Fatalf("response=%#v err=%v", response, err)
+	}
+	if len(writer.respondRequestCalls) != 1 || writer.respondRequestCalls[0].requestID != "request-1" || writer.respondRequestCalls[0].result["decision"] != "accept" {
+		t.Fatalf("responses=%#v", writer.respondRequestCalls)
+	}
+	response, err = service.HandleCallback(ctx, -1001, 11, forum.actions[0].messageID, 123456789, token)
+	if err != nil || response == nil || !strings.Contains(response.CallbackText, "stale") {
+		t.Fatalf("duplicate callback=%#v err=%v", response, err)
+	}
+}
+
+func TestAFCDesktopOriginApprovalIsNotActionable(t *testing.T) {
+	service := activeAFCService(t)
+	forum := &fakeAFCForum{}
+	service.SetAFCForum(forum)
+	process := &afcWriterSession{stubSession: &stubSession{}, events: make(chan appserver.Event, 1)}
+	event := appserver.Event{Channel: "server_request", Method: "item/requestApproval", ID: "desktop-request", Params: map[string]any{"threadId": "thread-1", "turnId": "desktop-turn"}}
+	service.handleAFCWriterEvent(context.Background(), process, event, 99)
+	if len(forum.actions) != 0 {
+		t.Fatalf("desktop approval became actionable: %#v", forum.actions)
+	}
+}
+
+func TestAFCStructuredUserInputCallbackReturnsGuardedAnswers(t *testing.T) {
+	service := activeAFCService(t)
+	writer := &afcWriterSession{stubSession: &stubSession{}, events: make(chan appserver.Event, 4)}
+	service.liveFactory = func() Session { return writer }
+	forum := &fakeAFCForum{}
+	service.SetAFCForum(forum)
+	ctx := context.Background()
+	if _, err := service.HandleMessageWithID(ctx, -1001, 11, 501, 123456789, "ask", 0); err != nil {
+		t.Fatal(err)
+	}
+	event := appserver.Event{Channel: "server_request", Method: "item/tool/requestUserInput", ID: "input-1", Params: map[string]any{
+		"threadId": "thread-1", "turnId": "started-turn", "questions": []any{map[string]any{"id": "target", "question": "Where?", "options": []any{map[string]any{"label": "staging"}, map[string]any{"label": "production"}}}},
+	}}
+	service.handleAFCWriterEvent(ctx, writer, event, service.afcWriter.Snapshot().Generation)
+	if len(forum.actions) != 1 || len(forum.actions[0].buttons) != 2 {
+		t.Fatalf("actions=%#v", forum.actions)
+	}
+	token := forum.actions[0].buttons[0][0].CallbackData
+	response, err := service.HandleCallback(ctx, -1001, 11, forum.actions[0].messageID, 123456789, token)
+	if err != nil || response == nil || !strings.Contains(response.CallbackText, "sent") {
+		t.Fatalf("response=%#v err=%v", response, err)
+	}
+	if len(writer.respondRequestCalls) != 1 {
+		t.Fatalf("responses=%#v", writer.respondRequestCalls)
+	}
+	answers, _ := writer.respondRequestCalls[0].result["answers"].(map[string]any)
+	target, _ := answers["target"].(map[string]any)
+	values, _ := target["answers"].([]any)
+	if len(values) != 1 || values[0] != "staging" {
+		t.Fatalf("answer payload=%#v", writer.respondRequestCalls[0].result)
+	}
+}
+
+func TestAFCStopInterruptsOnlyCurrentTopicTurn(t *testing.T) {
+	service := activeAFCService(t)
+	writer := &stubSession{}
+	service.liveFactory = func() Session { return writer }
+	ctx := context.Background()
+	if _, err := service.HandleMessageWithID(ctx, -1001, 11, 501, 123456789, "one", 0); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.HandleMessageWithID(ctx, -1001, 12, 601, 123456789, "two", 0); err != nil {
+		t.Fatal(err)
+	}
+	response, err := service.HandleMessageWithID(ctx, -1001, 11, 700, 123456789, "/stop", 0)
+	if err != nil || response == nil || !strings.Contains(response.Text, "Stop requested") {
+		t.Fatalf("response=%#v err=%v", response, err)
+	}
+	if len(writer.turnInterruptCalls) != 1 || writer.turnInterruptCalls[0].threadID != "thread-1" {
+		t.Fatalf("interrupts=%#v", writer.turnInterruptCalls)
+	}
+}
+
+func TestAFCSafeOffRefusesActiveTurnsWithoutCleanup(t *testing.T) {
+	service := activeAFCService(t)
+	writer := &stubSession{}
+	service.liveFactory = func() Session { return writer }
+	forum := &fakeAFCForum{}
+	service.SetAFCForum(forum)
+	ctx := context.Background()
+	if _, err := service.HandleMessageWithID(ctx, -1001, 11, 501, 123456789, "one", 0); err != nil {
+		t.Fatal(err)
+	}
+	response, err := service.HandleMessageWithID(ctx, -1001, 1, 700, 123456789, "/afc off", 0)
+	if err != nil || response == nil || !strings.Contains(response.Text, "refused") {
+		t.Fatalf("response=%#v err=%v", response, err)
+	}
+	state, _ := service.store.GetAFCState(ctx)
+	if state.State != model.AFCStateActive || len(forum.deletes) != 0 {
+		t.Fatalf("state=%#v deletes=%v", state, forum.deletes)
+	}
+}
+
+func TestAFCForceOffInterruptsAllAndWaitsForTerminalBeforeCleanup(t *testing.T) {
+	service := activeAFCService(t)
+	service.cfg.RequestTimeout = 200 * time.Millisecond
+	writer := &stubSession{}
+	service.liveFactory = func() Session { return writer }
+	forum := &fakeAFCForum{}
+	service.SetAFCForum(forum)
+	ctx := context.Background()
+	if _, err := service.HandleMessageWithID(ctx, -1001, 11, 501, 123456789, "one", 0); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.HandleMessageWithID(ctx, -1001, 12, 601, 123456789, "two", 0); err != nil {
+		t.Fatal(err)
+	}
+	poll := &stubSession{threadReads: map[string]map[string]any{
+		"thread-1": afcCompletedPayload("thread-1", "started-turn", "one done"), "thread-2": afcCompletedPayload("thread-2", "started-turn", "two done"),
+	}}
+	service.mu.Lock()
+	service.poll, service.pollConnected = poll, true
+	service.mu.Unlock()
+	response, err := service.HandleMessageWithID(ctx, -1001, 1, 700, 123456789, "/afc off --force", 0)
+	if err != nil || response == nil || !strings.Contains(response.Text, "AFC off") {
+		t.Fatalf("response=%#v err=%v", response, err)
+	}
+	if len(writer.turnInterruptCalls) != 2 {
+		t.Fatalf("interrupts=%#v", writer.turnInterruptCalls)
+	}
+	state, _ := service.store.GetAFCState(ctx)
+	if state.State != model.AFCStateOff || len(forum.deletes) != 2 {
+		t.Fatalf("state=%#v deletes=%v", state, forum.deletes)
+	}
+	observer, _ := service.store.GetState(ctx, "observer.global_enabled")
+	if observer != "false" || service.legacyWriter.Snapshot().State != appserver.WriterStopped {
+		t.Fatalf("observer=%q legacy=%#v", observer, service.legacyWriter.Snapshot())
+	}
+}
+
+func TestAFCForceOffTimeoutStaysDrainingAndDoesNotCleanup(t *testing.T) {
+	service := activeAFCService(t)
+	service.cfg.RequestTimeout = 30 * time.Millisecond
+	writer := &stubSession{}
+	service.liveFactory = func() Session { return writer }
+	forum := &fakeAFCForum{}
+	service.SetAFCForum(forum)
+	ctx := context.Background()
+	if _, err := service.HandleMessageWithID(ctx, -1001, 11, 501, 123456789, "one", 0); err != nil {
+		t.Fatal(err)
+	}
+	poll := &stubSession{threadReads: map[string]map[string]any{"thread-1": afcRunningPayload("thread-1", "started-turn")}}
+	service.mu.Lock()
+	service.poll, service.pollConnected = poll, true
+	service.mu.Unlock()
+	response, err := service.HandleMessageWithID(ctx, -1001, 1, 700, 123456789, "/afc off --force", 0)
+	if err != nil || response == nil || !strings.Contains(response.Text, "remains draining") {
+		t.Fatalf("response=%#v err=%v", response, err)
+	}
+	state, _ := service.store.GetAFCState(ctx)
+	if state.State != model.AFCStateDraining || len(forum.deletes) != 0 || service.afcWriter.Snapshot().Accepting {
+		t.Fatalf("state=%#v deletes=%v writer=%#v", state, forum.deletes, service.afcWriter.Snapshot())
+	}
+}
+
+func TestAFCRestartUnknownOwnershipBlocksSafeAndForceCleanup(t *testing.T) {
+	service := activeAFCService(t)
+	service.cfg.RequestTimeout = 25 * time.Millisecond
+	forum := &fakeAFCForum{}
+	service.SetAFCForum(forum)
+	ctx := context.Background()
+	receipt, _, err := service.store.AcceptAFCMessage(ctx, -1001, 11, 501)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := service.store.MarkAFCStarting(ctx, receipt, 7); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.store.RecoverAFCWriterState(ctx); err != nil {
+		t.Fatal(err)
+	}
+	safe, err := service.HandleMessageWithID(ctx, -1001, 1, 700, 123456789, "/afc off", 0)
+	if err != nil || safe == nil || !strings.Contains(safe.Text, "refused") {
+		t.Fatalf("safe=%#v err=%v", safe, err)
+	}
+	forced, err := service.HandleMessageWithID(ctx, -1001, 1, 701, 123456789, "/afc off --force", 0)
+	if err != nil || forced == nil || !strings.Contains(forced.Text, "remains draining") {
+		t.Fatalf("forced=%#v err=%v", forced, err)
+	}
+	if len(forum.deletes) != 0 {
+		t.Fatalf("unknown ownership was cleaned up: %v", forum.deletes)
+	}
+}
+
+func afcRunningPayload(threadID, turnID string) map[string]any {
+	return map[string]any{"thread": map[string]any{"id": threadID, "status": "inProgress", "turns": []any{map[string]any{"id": turnID, "status": "inProgress", "items": []any{}}}}}
 }
 
 func afcCompletedPayload(threadID, turnID, finalText string) map[string]any {

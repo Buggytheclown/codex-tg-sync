@@ -12,6 +12,7 @@ const (
 	AFCStateOff        = "off"
 	AFCStateActivating = "activating"
 	AFCStateActive     = "active"
+	AFCStateDraining   = "draining"
 
 	AFCSecurityValid   = "valid"
 	AFCSecurityUnknown = "unknown"

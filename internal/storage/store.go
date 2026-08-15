@@ -665,6 +665,18 @@ func (s *Store) ExpireCallbackRoute(ctx context.Context, token string) error {
 	return err
 }
 
+func (s *Store) ExpireAFCCallbackRoutes(ctx context.Context, threadID, turnID string) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE callback_routes SET status=? WHERE action LIKE 'afc_%' AND thread_id=? AND turn_id=?`,
+		model.CallbackStatusExpired, threadID, turnID)
+	return err
+}
+
+func (s *Store) ExpireAFCCallbackRoutesByRequest(ctx context.Context, requestID string) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE callback_routes SET status=? WHERE action LIKE 'afc_%' AND request_id=?`,
+		model.CallbackStatusExpired, requestID)
+	return err
+}
+
 func (s *Store) SavePendingApproval(ctx context.Context, approval model.PendingApproval) error {
 	_, err := s.db.ExecContext(ctx, `
 	INSERT INTO pending_approvals(request_id, thread_id, turn_id, item_id, prompt_kind, question, status, telegram_message_id, payload_json, updated_at)

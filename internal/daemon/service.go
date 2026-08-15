@@ -601,7 +601,7 @@ func (s *Service) HandleCallback(ctx context.Context, chatID, topicID, messageID
 		return nil, nil
 	}
 	if s.isAFCGroup(chatID) {
-		return &DirectResponse{CallbackText: "AFC topic controls changed; send a text command in Control."}, nil
+		return s.handleAFCCallback(ctx, topicID, messageID, token)
 	}
 	route, err := s.store.GetCallbackRoute(ctx, token)
 	if err != nil {
