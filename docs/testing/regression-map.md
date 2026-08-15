@@ -37,6 +37,27 @@ Contract notes:
 - `/afc off` must not restore the observer or start/resume an eager legacy
   lifecycle; explicit later legacy work may start its writer lazily.
 
+## AFC Forum Group Transport
+
+ADR: `docs/adr/ADR-021-afc-forum-group-surface.md`.
+
+Primary tests:
+
+- `internal/telegram/api_test.go::TestClientForumTopicOperations`
+- `internal/telegram/api_test.go::TestClientProbeForumGroupAndValidateSecurity`
+- `internal/telegram/api_test.go::TestTelegramAPIErrorClassifiesTopicAndRetryFailures`
+- `internal/telegram/api_test.go::TestClientPlainHTTPFailureRemainsTypedAndRetryable`
+
+Contract notes:
+
+- AFC uses one exact private forum supergroup containing only the allowed user
+  and bot.
+- The bot must be creator or an administrator with manage-topic and
+  delete-message rights.
+- Stale topic errors and retryable Telegram failures are distinct typed cases.
+- General/Control is a manual permanent prerequisite and is never deleted by
+  AFC cleanup.
+
 ## Control Plane Architecture
 
 ADR: `docs/adr/ADR-019-codex-control-plane.md`; feature brief is

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"mime/multipart"
@@ -37,10 +38,15 @@ func NewClient(token string) *Client {
 }
 
 type apiResponse[T any] struct {
-	OK          bool   `json:"ok"`
-	Result      T      `json:"result"`
-	Description string `json:"description"`
-	ErrorCode   int    `json:"error_code"`
+	OK          bool               `json:"ok"`
+	Result      T                  `json:"result"`
+	Description string             `json:"description"`
+	ErrorCode   int                `json:"error_code"`
+	Parameters  apiErrorParameters `json:"parameters,omitempty"`
+}
+
+type apiErrorParameters struct {
+	RetryAfter int `json:"retry_after,omitempty"`
 }
 
 type User struct {
@@ -50,8 +56,75 @@ type User struct {
 }
 
 type Chat struct {
-	ID   int64  `json:"id"`
-	Type string `json:"type"`
+	ID       int64  `json:"id"`
+	Type     string `json:"type"`
+	Title    string `json:"title,omitempty"`
+	Username string `json:"username,omitempty"`
+	IsForum  bool   `json:"is_forum,omitempty"`
+}
+
+type ChatMember struct {
+	Status            string `json:"status"`
+	User              User   `json:"user"`
+	CanManageTopics   bool   `json:"can_manage_topics,omitempty"`
+	CanDeleteMessages bool   `json:"can_delete_messages,omitempty"`
+}
+
+type ForumTopic struct {
+	MessageThreadID   int64  `json:"message_thread_id"`
+	Name              string `json:"name"`
+	IconColor         int    `json:"icon_color,omitempty"`
+	IconCustomEmojiID string `json:"icon_custom_emoji_id,omitempty"`
+}
+
+type ForumGroupProbe struct {
+	Chat        Chat
+	BotMember   ChatMember
+	UserMember  ChatMember
+	MemberCount int
+}
+
+var (
+	ErrForumSecurity   = errors.New("forum group security contract failed")
+	ErrForumCapability = errors.New("forum group capability contract failed")
+)
+
+func (p ForumGroupProbe) Validate(expectedChatID, expectedBotID, expectedUserID int64) error {
+	if p.Chat.ID != expectedChatID {
+		return fmt.Errorf("%w: getChat returned %d for configured chat %d", ErrForumSecurity, p.Chat.ID, expectedChatID)
+	}
+	if p.Chat.Type != "supergroup" || !p.Chat.IsForum {
+		return fmt.Errorf("%w: configured chat must be a forum supergroup", ErrForumCapability)
+	}
+	if strings.TrimSpace(p.Chat.Username) != "" {
+		return fmt.Errorf("%w: configured forum group must be private", ErrForumSecurity)
+	}
+	if p.BotMember.User.ID != expectedBotID || !p.BotMember.User.IsBot {
+		return fmt.Errorf("%w: bot membership identity mismatch", ErrForumSecurity)
+	}
+	botStatus := strings.ToLower(strings.TrimSpace(p.BotMember.Status))
+	if botStatus != "creator" && botStatus != "administrator" {
+		return fmt.Errorf("%w: bot must be creator or administrator", ErrForumCapability)
+	}
+	if botStatus != "creator" && (!p.BotMember.CanManageTopics || !p.BotMember.CanDeleteMessages) {
+		return fmt.Errorf("%w: bot requires manage-topics and delete-messages rights", ErrForumCapability)
+	}
+	if p.UserMember.User.ID != expectedUserID || p.UserMember.User.IsBot || !activeChatMemberStatus(p.UserMember.Status) {
+		return fmt.Errorf("%w: allowed user membership mismatch", ErrForumSecurity)
+	}
+	if p.MemberCount != 2 {
+		return fmt.Errorf("%w: expected exactly user + bot, got %d members", ErrForumSecurity, p.MemberCount)
+	}
+	return nil
+}
+
+func activeChatMemberStatus(status string) bool {
+	switch strings.ToLower(strings.TrimSpace(status)) {
+	case "creator", "administrator", "member":
+		return true
+	default:
+		return false
+	}
 }
 
 type Message struct {
@@ -142,6 +215,43 @@ type answerCallbackQueryRequest struct {
 	ShowAlert       bool   `json:"show_alert,omitempty"`
 }
 
+type chatRequest struct {
+	ChatID int64 `json:"chat_id"`
+}
+
+type chatMemberRequest struct {
+	ChatID int64 `json:"chat_id"`
+	UserID int64 `json:"user_id"`
+}
+
+type createForumTopicRequest struct {
+	ChatID int64  `json:"chat_id"`
+	Name   string `json:"name"`
+}
+
+type editForumTopicRequest struct {
+	ChatID          int64  `json:"chat_id"`
+	MessageThreadID int64  `json:"message_thread_id"`
+	Name            string `json:"name"`
+}
+
+type forumTopicRequest struct {
+	ChatID          int64 `json:"chat_id"`
+	MessageThreadID int64 `json:"message_thread_id"`
+}
+
+type ForumAPI interface {
+	ProbeForumGroup(ctx context.Context, chatID, botID, userID int64) (ForumGroupProbe, error)
+	CreateForumTopic(ctx context.Context, chatID int64, name string) (*ForumTopic, error)
+	EditForumTopic(ctx context.Context, chatID, topicID int64, name string) error
+	DeleteForumTopic(ctx context.Context, chatID, topicID int64) error
+	SendMessage(ctx context.Context, chatID, topicID int64, text string, markup *InlineKeyboardMarkup, options model.SendOptions) (*Message, error)
+	EditMessageText(ctx context.Context, chatID, messageID int64, text string, markup *InlineKeyboardMarkup) (*Message, error)
+	DeleteMessage(ctx context.Context, chatID, messageID int64) error
+}
+
+var _ ForumAPI = (*Client)(nil)
+
 type DocumentFile struct {
 	Name        string
 	ContentType string
@@ -154,6 +264,77 @@ func (c *Client) GetMe(ctx context.Context) (*User, error) {
 		return nil, err
 	}
 	return &user, nil
+}
+
+func (c *Client) GetChat(ctx context.Context, chatID int64) (*Chat, error) {
+	var chat Chat
+	if err := c.callJSON(ctx, "getChat", chatRequest{ChatID: chatID}, &chat); err != nil {
+		return nil, err
+	}
+	return &chat, nil
+}
+
+func (c *Client) GetChatMember(ctx context.Context, chatID, userID int64) (*ChatMember, error) {
+	var member ChatMember
+	if err := c.callJSON(ctx, "getChatMember", chatMemberRequest{ChatID: chatID, UserID: userID}, &member); err != nil {
+		return nil, err
+	}
+	return &member, nil
+}
+
+func (c *Client) GetChatMemberCount(ctx context.Context, chatID int64) (int, error) {
+	var count int
+	if err := c.callJSON(ctx, "getChatMemberCount", chatRequest{ChatID: chatID}, &count); err != nil {
+		return 0, err
+	}
+	return count, nil
+}
+
+func (c *Client) ProbeForumGroup(ctx context.Context, chatID, botID, userID int64) (ForumGroupProbe, error) {
+	chat, err := c.GetChat(ctx, chatID)
+	if err != nil {
+		return ForumGroupProbe{}, err
+	}
+	botMember, err := c.GetChatMember(ctx, chatID, botID)
+	if err != nil {
+		return ForumGroupProbe{}, err
+	}
+	userMember, err := c.GetChatMember(ctx, chatID, userID)
+	if err != nil {
+		return ForumGroupProbe{}, err
+	}
+	count, err := c.GetChatMemberCount(ctx, chatID)
+	if err != nil {
+		return ForumGroupProbe{}, err
+	}
+	return ForumGroupProbe{Chat: *chat, BotMember: *botMember, UserMember: *userMember, MemberCount: count}, nil
+}
+
+func (c *Client) CreateForumTopic(ctx context.Context, chatID int64, name string) (*ForumTopic, error) {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return nil, errors.New("forum topic name is required")
+	}
+	var topic ForumTopic
+	if err := c.callJSON(ctx, "createForumTopic", createForumTopicRequest{ChatID: chatID, Name: name}, &topic); err != nil {
+		return nil, err
+	}
+	return &topic, nil
+}
+
+func (c *Client) EditForumTopic(ctx context.Context, chatID, topicID int64, name string) error {
+	name = strings.TrimSpace(name)
+	if topicID == 0 || name == "" {
+		return errors.New("forum topic id and name are required")
+	}
+	return c.callJSON(ctx, "editForumTopic", editForumTopicRequest{ChatID: chatID, MessageThreadID: topicID, Name: name}, nil)
+}
+
+func (c *Client) DeleteForumTopic(ctx context.Context, chatID, topicID int64) error {
+	if topicID == 0 {
+		return errors.New("forum topic id is required")
+	}
+	return c.callJSON(ctx, "deleteForumTopic", forumTopicRequest{ChatID: chatID, MessageThreadID: topicID}, nil)
 }
 
 func (c *Client) SetMyCommands(ctx context.Context, commands []BotCommand) error {
@@ -336,7 +517,7 @@ func (c *Client) callMultipart(ctx context.Context, method string, fields map[st
 		return err
 	}
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		return fmt.Errorf("telegram %s http %d: %s", method, response.StatusCode, strings.TrimSpace(string(data)))
+		return apiHTTPError(method, response.StatusCode, data)
 	}
 	return decodeAPIResponse(method, data, out)
 }
@@ -369,7 +550,7 @@ func (c *Client) callJSON(ctx context.Context, method string, payload any, out a
 		return err
 	}
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		return fmt.Errorf("telegram %s http %d: %s", method, response.StatusCode, strings.TrimSpace(string(data)))
+		return apiHTTPError(method, response.StatusCode, data)
 	}
 	return decodeAPIResponse(method, data, out)
 }
@@ -381,7 +562,7 @@ func decodeAPIResponse(method string, data []byte, out any) error {
 			return err
 		}
 		if !envelope.OK {
-			return apiError(method, envelope.ErrorCode, envelope.Description)
+			return apiError(method, envelope.ErrorCode, envelope.Description, envelope.Parameters.RetryAfter)
 		}
 		return nil
 	}
@@ -390,7 +571,7 @@ func decodeAPIResponse(method string, data []byte, out any) error {
 		return err
 	}
 	if !envelope.OK {
-		return apiError(method, envelope.ErrorCode, envelope.Description)
+		return apiError(method, envelope.ErrorCode, envelope.Description, envelope.Parameters.RetryAfter)
 	}
 	if len(envelope.Result) == 0 || string(envelope.Result) == "null" {
 		return nil
@@ -427,13 +608,60 @@ func strconvFormatInt(value int64) string {
 	return fmt.Sprintf("%d", value)
 }
 
-func apiError(method string, code int, description string) error {
-	description = strings.TrimSpace(description)
+type APIError struct {
+	Method      string
+	Code        int
+	HTTPStatus  int
+	Description string
+	RetryAfter  int
+}
+
+func (e *APIError) Error() string {
+	description := strings.TrimSpace(e.Description)
 	if description == "" {
 		description = "unknown telegram api error"
 	}
+	code := e.Code
 	if code == 0 {
-		return fmt.Errorf("telegram %s: %s", method, description)
+		code = e.HTTPStatus
 	}
-	return fmt.Errorf("telegram %s: %d %s", method, code, description)
+	if code == 0 {
+		return fmt.Sprintf("telegram %s: %s", e.Method, description)
+	}
+	return fmt.Sprintf("telegram %s: %d %s", e.Method, code, description)
+}
+
+func IsTopicNotFound(err error) bool {
+	var apiErr *APIError
+	if !errors.As(err, &apiErr) {
+		return false
+	}
+	description := strings.ToLower(apiErr.Description)
+	return strings.Contains(description, "message thread not found") ||
+		strings.Contains(description, "topic_closed") ||
+		strings.Contains(description, "topic was deleted")
+}
+
+func IsRetryable(err error) bool {
+	var apiErr *APIError
+	if !errors.As(err, &apiErr) {
+		return false
+	}
+	return apiErr.Code == http.StatusTooManyRequests || apiErr.HTTPStatus == http.StatusTooManyRequests || apiErr.Code >= 500 || apiErr.HTTPStatus >= 500
+}
+
+func apiHTTPError(method string, status int, data []byte) error {
+	if err := decodeAPIResponse(method, data, nil); err != nil {
+		var apiErr *APIError
+		if errors.As(err, &apiErr) {
+			apiErr.HTTPStatus = status
+			return err
+		}
+	}
+	return &APIError{Method: method, HTTPStatus: status, Description: strings.TrimSpace(string(data))}
+}
+
+func apiError(method string, code int, description string, retryAfter int) error {
+	description = strings.TrimSpace(description)
+	return &APIError{Method: method, Code: code, Description: description, RetryAfter: retryAfter}
 }

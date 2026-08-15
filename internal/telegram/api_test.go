@@ -3,6 +3,7 @@ package telegram
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"mime"
 	"mime/multipart"
@@ -13,6 +14,153 @@ import (
 
 	"github.com/mideco-tech/codex-tg/internal/model"
 )
+
+func TestClientForumTopicOperations(t *testing.T) {
+	t.Parallel()
+
+	type requestRecord struct {
+		path string
+		body map[string]any
+	}
+	var requests []requestRecord
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatalf("Decode(%s): %v", r.URL.Path, err)
+		}
+		requests = append(requests, requestRecord{path: r.URL.Path, body: body})
+		switch r.URL.Path {
+		case "/createForumTopic":
+			_, _ = w.Write([]byte(`{"ok":true,"result":{"message_thread_id":77,"name":"Alpha","icon_color":7322096}}`))
+		case "/editForumTopic", "/deleteForumTopic":
+			_, _ = w.Write([]byte(`{"ok":true,"result":true}`))
+		default:
+			t.Fatalf("unexpected path %q", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	client := NewClient("token")
+	client.baseURL = server.URL
+	topic, err := client.CreateForumTopic(context.Background(), -10042, "Alpha")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if topic == nil || topic.MessageThreadID != 77 || topic.Name != "Alpha" {
+		t.Fatalf("topic = %#v", topic)
+	}
+	if err := client.EditForumTopic(context.Background(), -10042, 77, "Beta"); err != nil {
+		t.Fatal(err)
+	}
+	if err := client.DeleteForumTopic(context.Background(), -10042, 77); err != nil {
+		t.Fatal(err)
+	}
+
+	if len(requests) != 3 {
+		t.Fatalf("requests = %#v", requests)
+	}
+	if requests[0].path != "/createForumTopic" || requests[0].body["chat_id"] != float64(-10042) || requests[0].body["name"] != "Alpha" {
+		t.Fatalf("create request = %#v", requests[0])
+	}
+	if requests[1].path != "/editForumTopic" || requests[1].body["message_thread_id"] != float64(77) || requests[1].body["name"] != "Beta" {
+		t.Fatalf("edit request = %#v", requests[1])
+	}
+	if requests[2].path != "/deleteForumTopic" || requests[2].body["message_thread_id"] != float64(77) {
+		t.Fatalf("delete request = %#v", requests[2])
+	}
+}
+
+func TestClientProbeForumGroupAndValidateSecurity(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		switch r.URL.Path {
+		case "/getChat":
+			_, _ = w.Write([]byte(`{"ok":true,"result":{"id":-10042,"type":"supergroup","title":"AFC","is_forum":true}}`))
+		case "/getChatMember":
+			if body["user_id"] == float64(100) {
+				_, _ = w.Write([]byte(`{"ok":true,"result":{"status":"administrator","user":{"id":100,"is_bot":true},"can_manage_topics":true,"can_delete_messages":true}}`))
+				return
+			}
+			_, _ = w.Write([]byte(`{"ok":true,"result":{"status":"creator","user":{"id":200,"is_bot":false}}}`))
+		case "/getChatMemberCount":
+			_, _ = w.Write([]byte(`{"ok":true,"result":2}`))
+		default:
+			t.Fatalf("unexpected path %q", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	client := NewClient("token")
+	client.baseURL = server.URL
+	probe, err := client.ProbeForumGroup(context.Background(), -10042, 100, 200)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := probe.Validate(-10042, 100, 200); err != nil {
+		t.Fatalf("Validate failed: %v", err)
+	}
+
+	probe.MemberCount = 3
+	if err := probe.Validate(-10042, 100, 200); !errors.Is(err, ErrForumSecurity) {
+		t.Fatalf("extra-member validation error = %v, want ErrForumSecurity", err)
+	}
+	probe.MemberCount = 2
+	probe.BotMember.CanManageTopics = false
+	if err := probe.Validate(-10042, 100, 200); !errors.Is(err, ErrForumCapability) {
+		t.Fatalf("missing-right validation error = %v, want ErrForumCapability", err)
+	}
+	probe.BotMember.CanManageTopics = true
+	probe.Chat.Username = "public_afc"
+	if err := probe.Validate(-10042, 100, 200); !errors.Is(err, ErrForumSecurity) {
+		t.Fatalf("public-group validation error = %v, want ErrForumSecurity", err)
+	}
+}
+
+func TestTelegramAPIErrorClassifiesTopicAndRetryFailures(t *testing.T) {
+	t.Parallel()
+
+	err := decodeAPIResponse("sendMessage", []byte(`{"ok":false,"error_code":400,"description":"Bad Request: message thread not found"}`), nil)
+	if !IsTopicNotFound(err) {
+		t.Fatalf("IsTopicNotFound(%v) = false", err)
+	}
+	var apiErr *APIError
+	if !errors.As(err, &apiErr) || apiErr.Method != "sendMessage" || apiErr.Code != 400 {
+		t.Fatalf("APIError = %#v", apiErr)
+	}
+
+	err = decodeAPIResponse("sendMessage", []byte(`{"ok":false,"error_code":429,"description":"Too Many Requests","parameters":{"retry_after":7}}`), nil)
+	if !IsRetryable(err) {
+		t.Fatalf("IsRetryable(%v) = false", err)
+	}
+	if !errors.As(err, &apiErr) || apiErr.RetryAfter != 7 {
+		t.Fatalf("retry APIError = %#v", apiErr)
+	}
+}
+
+func TestClientPlainHTTPFailureRemainsTypedAndRetryable(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusServiceUnavailable)
+		_, _ = w.Write([]byte("upstream unavailable"))
+	}))
+	defer server.Close()
+	client := NewClient("token")
+	client.baseURL = server.URL
+	_, err := client.SendMessage(context.Background(), -10042, 77, "hello", nil, model.SendOptions{})
+	var apiErr *APIError
+	if !errors.As(err, &apiErr) || apiErr.HTTPStatus != http.StatusServiceUnavailable || apiErr.Method != "sendMessage" {
+		t.Fatalf("error = %#v", err)
+	}
+	if !IsRetryable(err) {
+		t.Fatalf("IsRetryable(%v) = false", err)
+	}
+}
 
 func TestClientEditMessageTextSendsExpectedJSON(t *testing.T) {
 	t.Parallel()
