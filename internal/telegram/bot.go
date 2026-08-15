@@ -41,12 +41,68 @@ func NewBot(cfg config.Config, service *daemon.Service, logger *log.Logger) (*Bo
 	if logger == nil {
 		logger = log.Default()
 	}
-	return &Bot{
+	bot := &Bot{
 		cfg:     cfg,
 		client:  NewClient(cfg.TelegramBotToken),
 		service: service,
 		logger:  logger,
-	}, nil
+	}
+	service.SetAFCForum(bot)
+	return bot, nil
+}
+
+func (b *Bot) ValidateAFCGroup(ctx context.Context, allowedUserID int64) error {
+	if b.cfg.AFCGroupID == 0 {
+		return errors.New("CTR_GO_AFC_GROUP_ID is not configured")
+	}
+	if b.me == nil || b.me.ID == 0 {
+		return errors.New("telegram bot identity is unavailable")
+	}
+	probe, err := b.client.ProbeForumGroup(ctx, b.cfg.AFCGroupID, b.me.ID, allowedUserID)
+	if err != nil {
+		return err
+	}
+	return probe.Validate(b.cfg.AFCGroupID, b.me.ID, allowedUserID)
+}
+
+func (b *Bot) CreateAFCTopic(ctx context.Context, title string) (int64, error) {
+	topic, err := b.client.CreateForumTopic(ctx, b.cfg.AFCGroupID, title)
+	if err != nil {
+		safeErr := errors.New(sanitizeTelegramLogError(err))
+		var apiErr *APIError
+		if errors.As(err, &apiErr) {
+			return 0, daemon.NewAFCForumFailure(daemon.AFCForumFailureDefinitive, safeErr)
+		}
+		return 0, daemon.NewAFCForumFailure(daemon.AFCForumFailureUnknown, safeErr)
+	}
+	if topic == nil {
+		return 0, errors.New("telegram createForumTopic returned no topic")
+	}
+	return topic.MessageThreadID, nil
+}
+
+func (b *Bot) DeleteAFCTopic(ctx context.Context, topicID int64) error {
+	err := b.client.DeleteForumTopic(ctx, b.cfg.AFCGroupID, topicID)
+	if IsTopicNotFound(err) {
+		return nil
+	}
+	return err
+}
+
+func (b *Bot) SendAFCMessage(ctx context.Context, topicID int64, text string, silent bool) (int64, error) {
+	message, err := b.client.SendMessage(ctx, b.cfg.AFCGroupID, topicID, text, nil, model.SendOptions{Silent: silent})
+	if err != nil {
+		return 0, err
+	}
+	if message == nil {
+		return 0, errors.New("telegram sendMessage returned no message")
+	}
+	return message.MessageID, nil
+}
+
+func (b *Bot) EditAFCMessage(ctx context.Context, topicID, messageID int64, text string) error {
+	_, err := b.client.EditMessageText(ctx, b.cfg.AFCGroupID, messageID, text, nil)
+	return err
 }
 
 func (b *Bot) Start(ctx context.Context) error {

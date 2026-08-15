@@ -80,6 +80,8 @@ type Service struct {
 	cancel         context.CancelFunc
 	wg             sync.WaitGroup
 	panelMu        sync.Mutex
+	afcMu          sync.Mutex
+	afcForum       AFCForum
 	sender         Sender
 	logger         *log.Logger
 	diagnosticMu   sync.Mutex
@@ -189,6 +191,12 @@ func (s *Service) SetSender(sender Sender) {
 	s.sender = sender
 }
 
+func (s *Service) SetAFCForum(forum AFCForum) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.afcForum = forum
+}
+
 func (s *Service) Start(ctx context.Context) error {
 	s.mu.Lock()
 	if s.started {
@@ -211,6 +219,7 @@ func (s *Service) Start(ctx context.Context) error {
 	_ = s.store.SetState(runCtx, "daemon.ready", "true")
 	_ = s.store.SetState(runCtx, "daemon.started_at", s.startedAt.Format(time.RFC3339Nano))
 	_ = s.store.SetState(runCtx, "daemon.last_error", "")
+	_ = s.store.RecoverAFCState(runCtx)
 	s.cleanupTempArtifacts(runCtx)
 
 	s.spawn(runCtx, s.ensureSessions)
@@ -549,6 +558,9 @@ func (s *Service) HandleMessage(ctx context.Context, chatID, topicID, userID int
 	if !s.IsAllowed(userID, chatID) {
 		return nil, nil
 	}
+	if s.isAFCGroup(chatID) {
+		return s.handleAFCMessage(ctx, topicID, userID, text)
+	}
 	text = strings.TrimSpace(text)
 	if text == "" {
 		return &DirectResponse{Text: "Plain text messages only right now. Send text, or use /context for routing help."}, nil
@@ -562,6 +574,9 @@ func (s *Service) HandleMessage(ctx context.Context, chatID, topicID, userID int
 func (s *Service) HandleCallback(ctx context.Context, chatID, topicID, messageID, userID int64, token string) (*DirectResponse, error) {
 	if !s.IsAllowed(userID, chatID) {
 		return nil, nil
+	}
+	if s.isAFCGroup(chatID) {
+		return &DirectResponse{CallbackText: "AFC topic controls changed; send a text command in Control."}, nil
 	}
 	route, err := s.store.GetCallbackRoute(ctx, token)
 	if err != nil {
@@ -692,6 +707,9 @@ func (s *Service) RequestRepair(ctx context.Context, reason string) error {
 }
 
 func (s *Service) IsAllowed(userID, chatID int64) bool {
+	if s.isAFCGroup(chatID) {
+		return len(s.cfg.AllowedUserIDs) == 1 && s.cfg.AllowedUserIDs[0] == userID
+	}
 	if len(s.cfg.AllowedUserIDs) > 0 && !containsInt64(s.cfg.AllowedUserIDs, userID) {
 		return false
 	}
@@ -1154,6 +1172,7 @@ func (s *Service) pollLoop(ctx context.Context) {
 	for {
 		s.refreshObserverIndex(ctx)
 		s.pollTracked(ctx)
+		s.syncAFC(ctx)
 		select {
 		case <-ctx.Done():
 			return

@@ -21,10 +21,21 @@ func TestFromEnvReadsCodexChatsRoot(t *testing.T) {
 	}
 }
 
+func TestFromEnvReadsAFCGroupID(t *testing.T) {
+	t.Setenv("CTR_GO_CONFIG", filepath.Join(t.TempDir(), "missing.env"))
+	t.Setenv("CTR_GO_AFC_GROUP_ID", "-1001234567890")
+
+	cfg := FromEnv()
+
+	if cfg.AFCGroupID != -1001234567890 {
+		t.Fatalf("AFCGroupID = %d, want -1001234567890", cfg.AFCGroupID)
+	}
+}
+
 func TestMarshalJSONIncludesPublicRuntimeConfig(t *testing.T) {
 	t.Parallel()
 
-	data, err := json.Marshal(Config{NotifyNewRun: true, ControlAPIListen: "127.0.0.1:8765"})
+	data, err := json.Marshal(Config{NotifyNewRun: true, ControlAPIListen: "127.0.0.1:8765", AFCGroupID: -100123})
 	if err != nil {
 		t.Fatalf("json.Marshal failed: %v", err)
 	}
@@ -37,6 +48,9 @@ func TestMarshalJSONIncludesPublicRuntimeConfig(t *testing.T) {
 	}
 	if got["control_api_listen"] != "127.0.0.1:8765" {
 		t.Fatalf("control_api_listen = %#v, want listen address", got["control_api_listen"])
+	}
+	if got["afc_group_id"] != float64(-100123) {
+		t.Fatalf("afc_group_id = %#v, want -100123", got["afc_group_id"])
 	}
 }
 

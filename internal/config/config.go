@@ -52,6 +52,7 @@ type Config struct {
 	TelegramBotToken            string
 	AllowedUserIDs              []int64
 	AllowedChatIDs              []int64
+	AFCGroupID                  int64
 	DefaultCWD                  string
 	CodexChatsRoot              string
 	PanelMode                   string
@@ -137,6 +138,7 @@ func fromSource(source envSource) Config {
 		TelegramBotToken:            source.first("CTR_GO_TELEGRAM_BOT_TOKEN", "CTR_TELEGRAM_BOT_TOKEN"),
 		AllowedUserIDs:              parseInt64List(source.first("CTR_GO_ALLOWED_USER_IDS", "CTR_ALLOWED_USER_IDS")),
 		AllowedChatIDs:              parseInt64List(source.first("CTR_GO_ALLOWED_CHAT_IDS", "CTR_ALLOWED_CHAT_IDS")),
+		AFCGroupID:                  parseInt64(source.get("CTR_GO_AFC_GROUP_ID")),
 		DefaultCWD:                  source.string("CTR_GO_DEFAULT_CWD", cwd),
 		CodexChatsRoot:              source.path("CTR_GO_CODEX_CHATS_ROOT", DefaultCodexChatsRoot()),
 		PanelMode:                   normalizePanelMode(source.string("CTR_GO_PANEL_MODE", "per_run")),
@@ -165,6 +167,7 @@ func (c Config) MarshalJSON() ([]byte, error) {
 		HasTelegramToken            bool    `json:"telegram_configured"`
 		AllowedUserIDs              []int64 `json:"allowed_user_ids"`
 		AllowedChatIDs              []int64 `json:"allowed_chat_ids"`
+		AFCGroupID                  int64   `json:"afc_group_id,omitempty"`
 		DefaultCWD                  string  `json:"default_cwd"`
 		CodexChatsRoot              string  `json:"codex_chats_root"`
 		PanelMode                   string  `json:"panel_mode"`
@@ -187,6 +190,7 @@ func (c Config) MarshalJSON() ([]byte, error) {
 		HasTelegramToken:            c.TelegramBotToken != "",
 		AllowedUserIDs:              c.AllowedUserIDs,
 		AllowedChatIDs:              c.AllowedChatIDs,
+		AFCGroupID:                  c.AFCGroupID,
 		DefaultCWD:                  c.DefaultCWD,
 		CodexChatsRoot:              c.CodexChatsRoot,
 		PanelMode:                   normalizePanelMode(c.PanelMode),
@@ -396,6 +400,11 @@ func parseInt64List(raw string) []int64 {
 		out = append(out, value)
 	}
 	return out
+}
+
+func parseInt64(raw string) int64 {
+	value, _ := strconv.ParseInt(strings.TrimSpace(raw), 10, 64)
+	return value
 }
 
 func normalizePanelMode(value string) string {

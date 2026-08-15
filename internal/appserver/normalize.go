@@ -100,7 +100,7 @@ func ThreadFromPayload(payload map[string]any) model.Thread {
 		LastPreview:    preview,
 		ActiveTurnID:   activeTurnID,
 		PreferredModel: preferredModel,
-		Archived:       false,
+		Archived:       boolValue(threadPayload["archived"]),
 		Raw:            raw,
 	}
 }

@@ -173,6 +173,35 @@ func (s *Store) initialize(ctx context.Context) error {
 		updated_at TEXT NOT NULL
 	);
 
+	CREATE TABLE IF NOT EXISTS afc_state (
+		id INTEGER PRIMARY KEY CHECK (id = 1),
+		session_id TEXT NOT NULL,
+		chat_id INTEGER NOT NULL,
+		state TEXT NOT NULL,
+		security_state TEXT NOT NULL,
+		snapshot_at TEXT,
+		activation_summary_json TEXT NOT NULL DEFAULT '',
+		created_at TEXT NOT NULL,
+		ended_at TEXT
+	);
+
+	CREATE TABLE IF NOT EXISTS afc_topics (
+		session_id TEXT NOT NULL,
+		chat_id INTEGER NOT NULL,
+		topic_id INTEGER NOT NULL,
+		thread_id TEXT NOT NULL,
+		rank INTEGER NOT NULL DEFAULT 0,
+		title TEXT NOT NULL,
+		telegram_state TEXT NOT NULL,
+		status_message_id INTEGER NOT NULL DEFAULT 0,
+		last_render_fp TEXT,
+		last_final_fp TEXT,
+		created_at TEXT NOT NULL,
+		updated_at TEXT NOT NULL,
+		PRIMARY KEY(session_id, topic_id),
+		UNIQUE(session_id, thread_id)
+	);
+
 	CREATE TABLE IF NOT EXISTS thread_panels (
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
 		chat_id INTEGER NOT NULL,
@@ -223,6 +252,7 @@ func (s *Store) initialize(ctx context.Context) error {
 	CREATE INDEX IF NOT EXISTS idx_pending_approvals_status_updated_at ON pending_approvals(status, updated_at DESC);
 	CREATE INDEX IF NOT EXISTS idx_thread_panels_thread_current ON thread_panels(chat_id, topic_id, thread_id, is_current, updated_at DESC);
 	CREATE INDEX IF NOT EXISTS idx_chat_steer_expires_at ON chat_steer_state(expires_at);
+	CREATE INDEX IF NOT EXISTS idx_afc_topics_session_state ON afc_topics(session_id, telegram_state, rank);
 	`
 	if _, err := s.db.ExecContext(ctx, schema); err != nil {
 		return err

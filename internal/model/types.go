@@ -9,6 +9,16 @@ import (
 )
 
 const (
+	AFCStateOff        = "off"
+	AFCStateActivating = "activating"
+	AFCStateActive     = "active"
+
+	AFCSecurityValid   = "valid"
+	AFCSecurityUnknown = "unknown"
+
+	AFCTopicConnected = "connected"
+	AFCTopicCleanup   = "cleanup"
+
 	BindingModeBound    = "bound"
 	BindingModeObserver = "observer"
 
@@ -42,6 +52,32 @@ const (
 	DeliveryModeEditMessage  = "edit_message"
 	DeliveryModeSendDocument = "send_document"
 )
+
+type AFCState struct {
+	SessionID             string
+	ChatID                int64
+	State                 string
+	SecurityState         string
+	SnapshotAt            TimeString
+	ActivationSummaryJSON string
+	CreatedAt             TimeString
+	EndedAt               TimeString
+}
+
+type AFCTopic struct {
+	SessionID       string
+	ChatID          int64
+	TopicID         int64
+	ThreadID        string
+	Rank            int
+	Title           string
+	TelegramState   string
+	StatusMessageID int64
+	LastRenderFP    string
+	LastFinalFP     string
+	CreatedAt       TimeString
+	UpdatedAt       TimeString
+}
 
 type TimeString string
 

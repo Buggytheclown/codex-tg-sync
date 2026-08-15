@@ -464,6 +464,33 @@ Slice gate:
 
 - Each v0.2.0 live-event slice must add or update tests first, pass targeted checks, run the relevant live Telegram E2E case, and only then be committed.
 
+## AFC Passive Group Lifecycle
+
+ADRs: `docs/adr/ADR-020-afc-writer-ownership.md`,
+`docs/adr/ADR-021-afc-forum-group-surface.md`, and
+`docs/adr/ADR-022-afc-passive-lifecycle.md`
+
+Primary tests:
+
+- `internal/config/config_test.go::TestFromEnvReadsAFCGroupID`
+- `internal/storage/store_afc_test.go::TestAFCActivationIsIsolatedAndDisablesObserverOnlyOnSuccess`
+- `internal/storage/store_afc_test.go::TestAFCOffIsLogicalBeforeCleanupAndDoesNotRestoreObserver`
+- `internal/storage/store_afc_test.go::TestRecoverAFCStateMakesInterruptedActivationCleanupOnly`
+- `internal/daemon/afc_test.go::TestAFCPartialActivationOwnsGroupAndDisablesLegacyObserver`
+- `internal/daemon/afc_test.go::TestAFCZeroTopicActivationLeavesObserverEnabled`
+- `internal/daemon/afc_test.go::TestAFCUnknownTopicAndCallbacksFailClosed`
+- `internal/daemon/afc_test.go::TestAFCPassiveSyncSendsSilentStatusAndNotifyingFinal`
+- `internal/daemon/afc_test.go::TestAFCOffMarksOffBeforeCleanupAndDoesNotRestoreLegacy`
+- `internal/telegram/api_test.go` forum security and typed API failures
+
+Contract notes:
+
+- The exact AFC group is an isolated surface and cannot fall through to legacy handlers.
+- Passive AFC performs `thread/list` and `thread/read` only; no writer ownership or App Server mutation is allowed.
+- Partial activation is active when at least one topic was persisted; only that transition disables the global observer.
+- Logical off precedes cleanup, and off never restores the legacy observer or writer lifecycle.
+- Active restart recovery remains passive; interrupted activation becomes cleanup-only.
+
 ## Baseline Commands
 
 Run before commit or publish:
