@@ -962,6 +962,26 @@ func (s *Service) applyLiveToolSnapshot(ctx context.Context, threadID string, li
 	} else {
 		current.Thread = mergeThreadMetadata(current.Thread, *thread)
 	}
+	if !mergeLiveToolSnapshot(&current, liveTool) {
+		return false
+	}
+
+	_ = s.store.UpsertThread(ctx, current.Thread)
+	next := appserver.CompactSnapshot(state, current, time.Now().UTC())
+	if current.LatestTurnStatus == "inProgress" || current.WaitingOnApproval || current.WaitingOnReply {
+		next.NextPollAfter = model.TimeString(time.Now().UTC().Add(s.cfg.ObserverPollInterval).Format(time.RFC3339Nano))
+	}
+	if err := s.store.UpsertSnapshot(ctx, threadID, next); err != nil {
+		return false
+	}
+	s.logObserverSyncResult("live_tool", current)
+	return true
+}
+
+func mergeLiveToolSnapshot(current *appserver.ThreadReadSnapshot, liveTool appserver.ThreadReadSnapshot) bool {
+	if current == nil || strings.TrimSpace(liveTool.LatestToolFP) == "" {
+		return false
+	}
 	turnID := strings.TrimSpace(liveTool.LatestTurnID)
 	if turnID == "" {
 		turnID = strings.TrimSpace(current.LatestTurnID)
@@ -977,11 +997,11 @@ func (s *Service) applyLiveToolSnapshot(ctx context.Context, threadID string, li
 	if current.LatestTurnID == turnID && isTerminalStatus(current.LatestTurnStatus) && strings.TrimSpace(current.LatestFinalFP) != "" {
 		return false
 	}
-	if current.LatestTurnID == turnID && liveToolIsOlderThanCurrentSameTurn(current, liveTool) {
+	if current.LatestTurnID == turnID && liveToolIsOlderThanCurrentSameTurn(*current, liveTool) {
 		return false
 	}
 	if current.LatestTurnID == turnID &&
-		sameToolSnapshot(current, liveTool) &&
+		sameToolSnapshot(*current, liveTool) &&
 		terminalToolStatus(current.LatestToolStatus) &&
 		!terminalToolStatus(liveTool.LatestToolStatus) {
 		return false
@@ -1000,16 +1020,6 @@ func (s *Service) applyLiveToolSnapshot(ctx context.Context, threadID string, li
 	current.LatestProgressText = liveTool.LatestProgressText
 	current.LatestProgressFP = liveTool.LatestProgressFP
 	current.DetailItems = upsertLiveToolDetails(current.DetailItems, liveTool.DetailItems)
-
-	_ = s.store.UpsertThread(ctx, current.Thread)
-	next := appserver.CompactSnapshot(state, current, time.Now().UTC())
-	if current.LatestTurnStatus == "inProgress" || current.WaitingOnApproval || current.WaitingOnReply {
-		next.NextPollAfter = model.TimeString(time.Now().UTC().Add(s.cfg.ObserverPollInterval).Format(time.RFC3339Nano))
-	}
-	if err := s.store.UpsertSnapshot(ctx, threadID, next); err != nil {
-		return false
-	}
-	s.logObserverSyncResult("live_tool", current)
 	return true
 }
 
@@ -2210,9 +2220,15 @@ func (s *Service) startTelegramOriginHotPoll(ctx context.Context, threadID, turn
 }
 
 func (s *Service) telegramOriginHotPollLoop(ctx context.Context, threadID, turnID string) {
-	timer := time.NewTimer(telegramOriginHotPollMax)
+	boundedTurnHotPollLoop(ctx, telegramOriginHotPollMax, telegramOriginHotPollTick, func() bool {
+		return s.telegramOriginHotPollOnce(ctx, threadID, turnID)
+	})
+}
+
+func boundedTurnHotPollLoop(ctx context.Context, maxDuration, tick time.Duration, pollOnce func() bool) {
+	timer := time.NewTimer(maxDuration)
 	defer timer.Stop()
-	ticker := time.NewTicker(telegramOriginHotPollTick)
+	ticker := time.NewTicker(tick)
 	defer ticker.Stop()
 	for {
 		select {
@@ -2221,7 +2237,7 @@ func (s *Service) telegramOriginHotPollLoop(ctx context.Context, threadID, turnI
 		case <-timer.C:
 			return
 		case <-ticker.C:
-			if !s.telegramOriginHotPollOnce(ctx, threadID, turnID) {
+			if !pollOnce() {
 				return
 			}
 		}

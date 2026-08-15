@@ -221,6 +221,7 @@ func (s *Service) dispatchAFCMessage(ctx context.Context, topic model.AFCTopic, 
 	if thread != nil {
 		s.ensureStartedTurnSnapshot(ctx, thread, turnID)
 	}
+	s.startAFCTelegramOriginHotPoll(ctx, topic.ThreadID, turnID)
 	return &DirectResponse{Text: fmt.Sprintf("AFC turn started: %s", turnID), ThreadID: topic.ThreadID, TurnID: turnID}, nil
 }
 
@@ -423,6 +424,61 @@ func (s *Service) syncAFC(ctx context.Context) {
 	}
 }
 
+func (s *Service) startAFCTelegramOriginHotPoll(ctx context.Context, threadID, turnID string) {
+	threadID = strings.TrimSpace(threadID)
+	turnID = strings.TrimSpace(turnID)
+	if threadID == "" || turnID == "" {
+		return
+	}
+	s.mu.RLock()
+	started := s.started
+	s.mu.RUnlock()
+	if !started {
+		return
+	}
+	s.spawn(ctx, func(ctx context.Context) {
+		boundedTurnHotPollLoop(ctx, telegramOriginHotPollMax, telegramOriginHotPollTick, func() bool {
+			return s.afcTelegramOriginHotPollOnce(ctx, threadID, turnID)
+		})
+	})
+}
+
+func (s *Service) afcTelegramOriginHotPollOnce(ctx context.Context, threadID, turnID string) bool {
+	threadID = strings.TrimSpace(threadID)
+	turnID = strings.TrimSpace(turnID)
+	if threadID == "" || turnID == "" {
+		return false
+	}
+	s.afcMu.Lock()
+	defer s.afcMu.Unlock()
+	state, err := s.store.GetAFCState(ctx)
+	if err != nil || (state.State != model.AFCStateActive && state.State != model.AFCStateDraining) {
+		return false
+	}
+	topic, err := s.store.GetActiveAFCTopicByThread(ctx, state.SessionID, threadID)
+	if err != nil || topic == nil || topic.ActiveTurnState != model.AFCTurnActive || strings.TrimSpace(topic.ActiveTurnID) != turnID {
+		return false
+	}
+	s.mu.RLock()
+	poll, connected := s.poll, s.pollConnected
+	s.mu.RUnlock()
+	if !connected || poll == nil {
+		return true
+	}
+	payload, readErr := poll.ThreadRead(ctx, threadID, true)
+	if readErr != nil || payload == nil {
+		return true
+	}
+	current := appserver.SnapshotFromThreadRead(payload)
+	if currentTurnID := strings.TrimSpace(current.LatestTurnID); currentTurnID != "" && currentTurnID != turnID {
+		return true
+	}
+	forum := s.getAFCForum()
+	s.processAFCSnapshotLocked(ctx, state, forum, *topic, current, "afc_hot_poll")
+	updated, err := s.store.GetActiveAFCTopicByThread(ctx, state.SessionID, threadID)
+	return err == nil && updated != nil && updated.ActiveTurnState == model.AFCTurnActive && strings.TrimSpace(updated.ActiveTurnID) == turnID
+}
+
 func (s *Service) installAFCWriterLocked(lease appserver.WriterLease[Session]) {
 	if s.afcEventProcess == lease.Process && s.afcEventGeneration == lease.Generation {
 		return
@@ -500,11 +556,15 @@ func (s *Service) handleAFCWriterEvent(ctx context.Context, process Session, eve
 		}
 		return
 	}
+	liveTool, hasLiveTool := appserver.ToolSnapshotFromLiveNotification(event, model.Thread{ID: threadID})
 	payload, err := process.ThreadRead(ctx, threadID, true)
 	if err != nil || payload == nil {
 		return
 	}
 	current := appserver.SnapshotFromThreadRead(payload)
+	if hasLiveTool {
+		_ = mergeLiveToolSnapshot(&current, liveTool)
+	}
 	forum := s.getAFCForum()
 	s.processAFCSnapshotLocked(ctx, state, forum, *topic, current, "afc_event")
 }
@@ -522,6 +582,7 @@ func (s *Service) processAFCSnapshotLocked(ctx context.Context, state model.AFCS
 		if s.applyTelegramOriginTerminalGate(ctx, operation, &current, previous) {
 			return
 		}
+		s.preserveTelegramOriginLiveCurrentTool(ctx, &current, previous)
 	}
 	if forum != nil {
 		s.persistAndDeliverAFCSnapshotLocked(ctx, forum, topic, current)
@@ -553,7 +614,10 @@ func (s *Service) completeAFCTurnLocked(ctx context.Context, state model.AFCStat
 
 func (s *Service) persistAndDeliverAFCSnapshotLocked(ctx context.Context, forum AFCForum, topic model.AFCTopic, current appserver.ThreadReadSnapshot) {
 	previous, _ := s.store.GetSnapshot(ctx, topic.ThreadID)
-	compact := appserver.CompactSnapshot(previous, current, time.Now().UTC())
+	observedAt := s.now().UTC()
+	compact := appserver.CompactSnapshot(previous, current, observedAt)
+	observed := current
+	_ = json.Unmarshal(compact.CompactJSON, &observed)
 	_ = s.store.UpsertThread(ctx, current.Thread)
 	_ = s.store.UpsertSnapshot(ctx, topic.ThreadID, compact)
 	desiredTitle := strings.TrimSpace(current.Thread.Title)
@@ -563,7 +627,7 @@ func (s *Service) persistAndDeliverAFCSnapshotLocked(ctx context.Context, forum 
 			_ = s.store.UpdateAFCTopicTitle(ctx, topic.SessionID, topic.TopicID, desiredTitle)
 		}
 	}
-	statusText := renderAFCStatus(current)
+	statusText := renderAFCStatusAt(observed, observedAt)
 	renderFP := afcFingerprint(statusText)
 	statusID := topic.StatusMessageID
 	statusTurnID := strings.TrimSpace(topic.StatusTurnID)
@@ -647,7 +711,7 @@ func afcCodexStatus(thread model.Thread) string {
 	}
 }
 
-func renderAFCStatus(snapshot appserver.ThreadReadSnapshot) string {
+func renderAFCStatusAt(snapshot appserver.ThreadReadSnapshot, now time.Time) string {
 	status := strings.TrimSpace(snapshot.LatestTurnStatus)
 	if snapshot.WaitingOnApproval || snapshot.WaitingOnReply {
 		status = "waiting"
@@ -668,6 +732,9 @@ func renderAFCStatus(snapshot appserver.ThreadReadSnapshot) string {
 	text := "[Status]\n" + status
 	if detail != "" {
 		text += "\n" + detail
+	}
+	if line := runTimingFooter(&snapshot, now); line != "" {
+		text += "\n\n" + line
 	}
 	return text
 }

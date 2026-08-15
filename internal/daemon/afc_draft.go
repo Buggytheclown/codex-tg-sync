@@ -120,6 +120,7 @@ func (s *Service) startClaimedAFCDraftLocked(ctx context.Context, draft model.AF
 	}
 	_ = s.markTelegramOriginTurnFromTelegram(ctx, thread.ID, turnID, draft.ChatID, draft.TopicID)
 	s.ensureStartedTurnSnapshot(ctx, &thread, turnID)
+	s.startAFCTelegramOriginHotPoll(ctx, thread.ID, turnID)
 	return &DirectResponse{Text: fmt.Sprintf("AFC turn started: %s", turnID), ThreadID: thread.ID, TurnID: turnID}, nil
 }
 

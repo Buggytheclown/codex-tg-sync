@@ -347,6 +347,143 @@ func TestAFCPresentationIgnoresStalePollTurnWhileAFCWriterIsActive(t *testing.T)
 	}
 }
 
+func TestAFCStatusUsesLegacyRunTimingFooter(t *testing.T) {
+	t.Parallel()
+
+	startedAt := time.Date(2026, time.August, 15, 12, 0, 0, 0, time.UTC)
+	active := appserver.ThreadReadSnapshot{
+		Thread:              model.Thread{Status: "inProgress"},
+		LatestTurnID:        "turn-1",
+		LatestTurnStatus:    "inProgress",
+		LatestTurnStartedAt: startedAt.Format(time.RFC3339Nano),
+	}
+	if got := renderAFCStatusAt(active, startedAt.Add(8*time.Second)); !strings.Contains(got, "Run active for: 8s") {
+		t.Fatalf("active status = %q, want legacy elapsed footer", got)
+	}
+
+	active.LatestTurnStatus = "completed"
+	active.LatestTurnUpdatedAt = startedAt.Add(2 * time.Minute).Format(time.RFC3339Nano)
+	if got := renderAFCStatusAt(active, startedAt.Add(5*time.Minute)); !strings.Contains(got, "Run duration: 2m") {
+		t.Fatalf("terminal status = %q, want legacy duration footer", got)
+	}
+}
+
+func TestAFCPassiveSyncTicksElapsedFromStableTurnStart(t *testing.T) {
+	service := activeAFCService(t)
+	ctx := context.Background()
+	now := time.Date(2026, time.August, 15, 12, 0, 0, 0, time.UTC)
+	service.now = func() time.Time { return now }
+	service.mu.Lock()
+	service.poll = &stubSession{threadReads: map[string]map[string]any{
+		"thread-1": afcRunningPayload("thread-1", "turn-1"),
+	}}
+	service.pollConnected = true
+	service.mu.Unlock()
+	forum := &fakeAFCForum{}
+	service.SetAFCForum(forum)
+
+	service.syncAFC(ctx)
+	if len(forum.sends) != 1 || !strings.Contains(forum.sends[0].text, "Run active for: 0s") {
+		t.Fatalf("initial status=%#v, want observed start footer", forum.sends)
+	}
+
+	now = now.Add(5 * time.Second)
+	service.syncAFC(ctx)
+	if len(forum.edits) != 1 || !strings.Contains(forum.edits[0].text, "Run active for: 5s") {
+		t.Fatalf("elapsed edits=%#v, want elapsed-only edit from stable start", forum.edits)
+	}
+}
+
+func TestAFCTelegramOriginHotPollRefreshesAndStopsAtTerminal(t *testing.T) {
+	service := activeAFCService(t)
+	ctx := context.Background()
+	writer := &stubSession{}
+	service.liveFactory = func() Session { return writer }
+	forum := &fakeAFCForum{}
+	service.SetAFCForum(forum)
+	if _, err := service.HandleMessageWithID(ctx, -1001, 11, 501, 123456789, "one", 0); err != nil {
+		t.Fatal(err)
+	}
+	poll := &stubSession{threadReads: map[string]map[string]any{
+		"thread-1": afcRunningPayloadWithCommentary("thread-1", "started-turn", "hot progress"),
+	}}
+	service.mu.Lock()
+	service.poll, service.pollConnected = poll, true
+	service.mu.Unlock()
+
+	if keepGoing := service.afcTelegramOriginHotPollOnce(ctx, "thread-1", "started-turn"); !keepGoing {
+		t.Fatal("hot poll stopped before terminal state")
+	}
+	if len(forum.sends) != 1 || !strings.Contains(forum.sends[0].text, "hot progress") {
+		t.Fatalf("running hot-poll delivery=%#v", forum.sends)
+	}
+
+	poll.threadReads["thread-1"] = afcInterruptedPayload("thread-1", "started-turn")
+	if keepGoing := service.afcTelegramOriginHotPollOnce(ctx, "thread-1", "started-turn"); !keepGoing {
+		t.Fatal("hot poll stopped on transient interrupted evidence")
+	}
+	if snapshot := service.afcWriter.Snapshot(); snapshot.State != appserver.WriterRunning || snapshot.Active != 1 {
+		t.Fatalf("transient interrupted hot poll released writer: %#v", snapshot)
+	}
+
+	poll.threadReads["thread-1"] = afcCompletedPayload("thread-1", "started-turn", "done")
+	if keepGoing := service.afcTelegramOriginHotPollOnce(ctx, "thread-1", "started-turn"); keepGoing {
+		t.Fatal("hot poll continued after terminal state")
+	}
+	if snapshot := service.afcWriter.Snapshot(); snapshot.State != appserver.WriterStopped || snapshot.Active != 0 {
+		t.Fatalf("terminal hot poll did not release writer: %#v", snapshot)
+	}
+}
+
+func TestAFCLiveToolOverlaySurvivesLaggingThreadRead(t *testing.T) {
+	service := activeAFCService(t)
+	ctx := context.Background()
+	fixedNow := time.Date(2026, time.August, 15, 12, 0, 0, 0, time.UTC)
+	service.now = func() time.Time { return fixedNow }
+	reads := map[string]map[string]any{
+		"thread-1": afcRunningPayload("thread-1", "started-turn"),
+	}
+	writer := &afcWriterSession{stubSession: &stubSession{threadReads: reads}, events: make(chan appserver.Event, 2)}
+	service.liveFactory = func() Session { return writer }
+	forum := &fakeAFCForum{}
+	service.SetAFCForum(forum)
+	if _, err := service.HandleMessageWithID(ctx, -1001, 11, 501, 123456789, "one", 0); err != nil {
+		t.Fatal(err)
+	}
+
+	service.handleAFCWriterEvent(ctx, writer, appserver.Event{
+		Channel: "notification",
+		Method:  "item/started",
+		Params: map[string]any{
+			"threadId": "thread-1",
+			"turnId":   "started-turn",
+			"item": map[string]any{
+				"id":      "cmd-slow",
+				"type":    "commandExecution",
+				"command": "sleep 20",
+				"status":  "running",
+			},
+		},
+	}, service.afcWriter.Snapshot().Generation)
+	if len(forum.sends) != 1 || !strings.Contains(forum.sends[0].text, "sleep 20") {
+		t.Fatalf("live tool was not rendered over lagging read: %#v", forum.sends)
+	}
+
+	service.mu.Lock()
+	service.poll, service.pollConnected = &stubSession{threadReads: reads}, true
+	service.mu.Unlock()
+	service.syncAFC(ctx)
+	var rendered string
+	if len(forum.edits) > 0 {
+		rendered = forum.edits[len(forum.edits)-1].text
+	} else {
+		rendered = forum.sends[len(forum.sends)-1].text
+	}
+	if !strings.Contains(rendered, "sleep 20") {
+		t.Fatalf("lagging poll erased live tool: %q", rendered)
+	}
+}
+
 func TestAFCOffMarksOffBeforeCleanupAndDoesNotRestoreLegacy(t *testing.T) {
 	service := newTestService(t)
 	service.cfg.AFCGroupID = -1001
