@@ -29,6 +29,15 @@ created only some topics.
   This mirrors the legacy per-run presentation lifecycle without creating a
   legacy binding, panel, observer target, or writer. Passive sync never resumes
   a thread, starts a turn, or creates a writer.
+- AFC reuses the legacy observed-turn timing and bounded active-turn refresh
+  lifecycle without reusing legacy delivery state. Status renders from the
+  compacted snapshot, includes the shared `Run active for` / `Run duration`
+  footer, and may edit solely because elapsed time advanced.
+- Telegram-origin AFC turns get the same bounded three-second hot-poll cadence
+  as legacy turns. Normalized live tool evidence uses the same overlay and
+  preservation rules so a lagging `thread/read` cannot immediately erase a
+  fresher same-turn tool update. Desktop-origin turns remain on passive AFC
+  polling and never acquire writer ownership.
 - While an AFC writer lease is active, a poll snapshot for a different turn is
   stale presentation evidence and cannot replace or append after the active
   turn's status message.
@@ -45,3 +54,5 @@ created only some topics.
 - Telegram cleanup failures cannot reopen AFC routing.
 - Interactive AFC commands can be added later behind writer ownership without
   changing the passive lifecycle or legacy isolation contracts.
+- Presentation behavior can stay aligned with legacy mode while AFC retains
+  separate Telegram ids, callbacks, routing, and ownership.

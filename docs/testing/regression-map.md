@@ -482,6 +482,10 @@ Primary tests:
 - `internal/daemon/afc_test.go::TestAFCPassiveSyncSendsSilentStatusAndNotifyingFinal`
 - `internal/daemon/afc_test.go::TestAFCPresentationCreatesFreshStatusForEachObservedTurn`
 - `internal/daemon/afc_test.go::TestAFCPresentationIgnoresStalePollTurnWhileAFCWriterIsActive`
+- `internal/daemon/afc_test.go::TestAFCStatusUsesLegacyRunTimingFooter`
+- `internal/daemon/afc_test.go::TestAFCPassiveSyncTicksElapsedFromStableTurnStart`
+- `internal/daemon/afc_test.go::TestAFCTelegramOriginHotPollRefreshesAndStopsAtTerminal`
+- `internal/daemon/afc_test.go::TestAFCLiveToolOverlaySurvivesLaggingThreadRead`
 - `internal/daemon/afc_test.go::TestAFCOffMarksOffBeforeCleanupAndDoesNotRestoreLegacy`
 - `internal/telegram/api_test.go` forum security and typed API failures
 
@@ -492,6 +496,10 @@ Contract notes:
 - Partial activation is active when at least one topic was persisted; only that transition disables the global observer.
 - Logical off precedes cleanup, and off never restores the legacy observer or writer lifecycle.
 - Active restart recovery remains passive; interrupted activation becomes cleanup-only.
+- AFC status uses the legacy observed turn timing and duration formatting;
+  elapsed-only changes edit the existing active-turn status message.
+- Telegram-origin AFC turns use the legacy bounded hot-poll cadence and live
+  tool overlay/preservation behavior without creating legacy panels or bindings.
 
 ## AFC Concurrent Managed Turns
 
