@@ -28,6 +28,7 @@ type AFCForum interface {
 	ValidateAFCGroup(ctx context.Context, allowedUserID int64) error
 	PrepareAFCControl(ctx context.Context) error
 	CreateAFCTopic(ctx context.Context, title string) (int64, error)
+	RenameAFCTopic(ctx context.Context, topicID int64, title string) error
 	DeleteAFCTopic(ctx context.Context, topicID int64) error
 	SendAFCMessage(ctx context.Context, topicID int64, text string, silent bool) (int64, error)
 	SendAFCActionMessage(ctx context.Context, topicID int64, text string, buttons [][]model.ButtonSpec) (int64, error)
@@ -108,7 +109,7 @@ func (s *Service) handleAFCMessage(ctx context.Context, topicID, messageID, user
 		case len(fields) == 1 && (fields[0] == "/projects" || fields[0] == "/newchat"):
 			return s.afcProjectsMenu(ctx, topicID)
 		default:
-			return &DirectResponse{Text: "AFC Control accepts /afc on, /afc off, and /status. Legacy commands are disabled in this group."}, nil
+			return &DirectResponse{Text: "AFC Control accepts /afc on, /afc off, /status, /projects, and /newchat. Legacy commands are disabled in this group."}, nil
 		}
 	}
 	topic, err := s.store.GetActiveAFCTopic(ctx, s.cfg.AFCGroupID, topicID)
@@ -116,6 +117,13 @@ func (s *Service) handleAFCMessage(ctx context.Context, topicID, messageID, user
 		return nil, err
 	}
 	if topic == nil {
+		draft, draftErr := s.store.GetActiveAFCTopicDraft(ctx, s.cfg.AFCGroupID, topicID)
+		if draftErr != nil {
+			return nil, draftErr
+		}
+		if draft != nil {
+			return s.handleAFCDraftMessage(ctx, *draft, messageID, text)
+		}
 		return &DirectResponse{Text: "AFC topic is stale or unknown. Use /status in Control."}, nil
 	}
 	if text == "" {
@@ -167,6 +175,21 @@ func (s *Service) dispatchAFCMessage(ctx context.Context, topic model.AFCTopic, 
 	}
 	if _, err := lease.Process.ThreadResume(ctx, topic.ThreadID, cwd); err != nil {
 		delete(s.afcLeases, topic.ThreadID)
+		if isAFCNoRolloutError(err) {
+			_ = s.afcWriter.Abort(lease)
+			draft := model.AFCTopicDraft{SessionID: topic.SessionID, ChatID: topic.ChatID, TopicID: topic.TopicID,
+				Rank: topic.Rank, Title: topic.Title, CWD: cwd}
+			if thread != nil {
+				draft.ProjectName, draft.DirectoryName = thread.ProjectName, thread.DirectoryName
+			}
+			if convertErr := s.store.ConvertEmptyAFCTopicToDraft(ctx, topic, draft, receipt, lease.Generation); convertErr == nil {
+				draft.State, draft.SourceMessageID = model.AFCDraftStarting, messageID
+				receipt.ThreadID = ""
+				return s.startClaimedAFCDraftLocked(ctx, draft, receipt, text)
+			}
+			_ = s.store.MarkAFCDispatchFailure(ctx, receipt, model.AFCReceiptRejected, model.AFCTurnTerminal, lease.Generation)
+			return &DirectResponse{Text: "AFC found an empty pre-migration thread but could not convert it safely. The prompt was not sent."}, nil
+		}
 		_ = s.afcWriter.Abort(lease)
 		_ = s.store.MarkAFCDispatchFailure(ctx, receipt, model.AFCReceiptRejected, model.AFCTurnTerminal, lease.Generation)
 		return &DirectResponse{Text: fmt.Sprintf("AFC could not resume the thread; the prompt was not sent: %v", err)}, nil
@@ -199,6 +222,10 @@ func (s *Service) dispatchAFCMessage(ctx context.Context, topic model.AFCTopic, 
 		s.ensureStartedTurnSnapshot(ctx, thread, turnID)
 	}
 	return &DirectResponse{Text: fmt.Sprintf("AFC turn started: %s", turnID), ThreadID: topic.ThreadID, TurnID: turnID}, nil
+}
+
+func isAFCNoRolloutError(err error) bool {
+	return err != nil && strings.Contains(strings.ToLower(err.Error()), "no rollout found for thread id")
 }
 
 func (s *Service) activateAFC(ctx context.Context, userID int64) (*DirectResponse, error) {
@@ -310,9 +337,17 @@ func (s *Service) deactivateAFC(ctx context.Context) (*DirectResponse, error) {
 		return &DirectResponse{Text: "AFC is already off. Legacy lifecycle remains unchanged."}, nil
 	}
 	writer := s.afcWriter.Snapshot()
-	topics, _ := s.store.ListAFCTopics(ctx, state.SessionID)
-	if writer.Starting+writer.Active+writer.Unknown > 0 || hasUnfinishedAFCTopics(topics) {
-		return &DirectResponse{Text: "AFC off refused; unfinished topics: " + strings.Join(unfinishedAFCTopicTitles(topics), ", ") + ". Use /afc off --force to drain."}, nil
+	topics, err := s.store.ListAFCTopics(ctx, state.SessionID)
+	if err != nil {
+		return nil, err
+	}
+	drafts, err := s.store.ListAFCTopicDrafts(ctx, state.SessionID)
+	if err != nil {
+		return nil, err
+	}
+	if writer.Starting+writer.Active+writer.Unknown > 0 || hasUnfinishedAFCTopics(topics) || hasUnfinishedAFCDrafts(drafts) {
+		titles := unfinishedAFCWorkTitles(topics, drafts)
+		return &DirectResponse{Text: "AFC off refused; unfinished topics: " + strings.Join(titles, ", ") + ". Use /afc off --force to drain."}, nil
 	}
 	topics, err = s.store.MarkAFCOff(ctx, state.SessionID)
 	if err != nil {
@@ -346,8 +381,12 @@ func (s *Service) afcStatus(ctx context.Context) (*DirectResponse, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &DirectResponse{Text: fmt.Sprintf("AFC state: %s\nSession: %s\nConnected topics: %d\nActivation summary: %s",
-		state.State, state.SessionID, countConnectedAFCTopics(topics), strings.TrimSpace(state.ActivationSummaryJSON))}, nil
+	drafts, err := s.store.ListAFCTopicDrafts(ctx, state.SessionID)
+	if err != nil {
+		return nil, err
+	}
+	return &DirectResponse{Text: fmt.Sprintf("AFC state: %s\nSession: %s\nConnected topics: %d\nReady drafts: %d\nNew task commands: /projects, /newchat\nActivation summary: %s",
+		state.State, state.SessionID, countConnectedAFCTopics(topics), countReadyAFCDrafts(drafts), strings.TrimSpace(state.ActivationSummaryJSON))}, nil
 }
 
 func (s *Service) syncAFC(ctx context.Context) {
@@ -517,6 +556,13 @@ func (s *Service) persistAndDeliverAFCSnapshotLocked(ctx context.Context, forum 
 	compact := appserver.CompactSnapshot(previous, current, time.Now().UTC())
 	_ = s.store.UpsertThread(ctx, current.Thread)
 	_ = s.store.UpsertSnapshot(ctx, topic.ThreadID, compact)
+	desiredTitle := strings.TrimSpace(current.Thread.Title)
+	if desiredTitle != "" && desiredTitle != current.Thread.ID {
+		desiredTitle = afcTopicTitle(current.Thread)
+		if desiredTitle != topic.Title && forum.RenameAFCTopic(ctx, topic.TopicID, desiredTitle) == nil {
+			_ = s.store.UpdateAFCTopicTitle(ctx, topic.SessionID, topic.TopicID, desiredTitle)
+		}
+	}
 	statusText := renderAFCStatus(current)
 	renderFP := afcFingerprint(statusText)
 	statusID := topic.StatusMessageID
@@ -552,7 +598,7 @@ func (s *Service) cleanupAFCTopics(ctx context.Context, sessionID string) {
 	if forum == nil {
 		return
 	}
-	topics, _ := s.store.ListAFCTopics(ctx, sessionID)
+	topics, _ := s.store.ListAFCCleanupTargets(ctx, sessionID)
 	for _, topic := range topics {
 		if topic.TelegramState == model.AFCTopicCleanup && forum.DeleteAFCTopic(ctx, topic.TopicID) == nil {
 			_ = s.store.DeleteAFCTopic(ctx, sessionID, topic.TopicID)
@@ -634,6 +680,16 @@ func countConnectedAFCTopics(topics []model.AFCTopic) int {
 	n := 0
 	for _, topic := range topics {
 		if topic.TelegramState == model.AFCTopicConnected {
+			n++
+		}
+	}
+	return n
+}
+
+func countReadyAFCDrafts(drafts []model.AFCTopicDraft) int {
+	n := 0
+	for _, draft := range drafts {
+		if draft.State == model.AFCDraftReady {
 			n++
 		}
 	}

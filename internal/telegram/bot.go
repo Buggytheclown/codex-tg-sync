@@ -89,6 +89,14 @@ func (b *Bot) CreateAFCTopic(ctx context.Context, title string) (int64, error) {
 	return topic.MessageThreadID, nil
 }
 
+func (b *Bot) RenameAFCTopic(ctx context.Context, topicID int64, title string) error {
+	err := b.client.EditForumTopic(ctx, b.cfg.AFCGroupID, topicID, title)
+	if err == nil || IsTopicNotModified(err) {
+		return nil
+	}
+	return errors.New(sanitizeTelegramLogError(err))
+}
+
 func (b *Bot) DeleteAFCTopic(ctx context.Context, topicID int64) error {
 	err := b.client.DeleteForumTopic(ctx, b.cfg.AFCGroupID, topicID)
 	if IsTopicNotFound(err) {

@@ -230,8 +230,10 @@ exactly one `CTR_GO_ALLOWED_USER_IDS` value. The group must contain only that
 user and the bot; the bot must be able to manage topics and delete messages.
 Use `/afc on` in the built-in General topic. Activation validates the group and
 idempotently renames that built-in topic to `Control` before creating managed topics for
-up to eight recent Codex threads. `/projects` or `/newchat` creates an empty task
-topic; send its first prompt only after the topic is ready. `/afc off` never
+up to eight recent Codex threads. Control advertises `/projects` and `/newchat`;
+either command creates a Telegram draft topic without holding an App Server
+writer. Send its first prompt only after the topic is ready: AFC creates the
+Codex thread and first turn together, then renames the topic from that prompt. `/afc off` never
 restores the legacy observer automatically. Use `/afc off --force` only when AFC
 turns must be interrupted and drained.
 

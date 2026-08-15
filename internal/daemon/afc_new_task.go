@@ -56,56 +56,22 @@ func (s *Service) createAFCNewTaskLocked(ctx context.Context, state model.AFCSta
 	if cwd == "" {
 		return &DirectResponse{CallbackText: "Project cwd is unavailable."}, nil
 	}
-	lease, err := s.afcWriter.ReserveProcess(ctx, "new-task:"+randomToken())
-	if err != nil {
-		return &DirectResponse{Text: fmt.Sprintf("AFC could not reserve the shared writer: %v", err), CallbackText: "Create failed."}, nil
-	}
-	s.installAFCWriterLocked(lease)
-	threadPayload, startErr := lease.Process.ThreadStart(ctx, cwd)
-	if startErr != nil {
-		if afcDispatchAmbiguous(startErr, "") {
-			_ = s.afcWriter.MarkUnknown(lease)
-			return &DirectResponse{Text: "Codex thread creation outcome is unknown. The project button was consumed and will not retry automatically.", CallbackText: "Creation unknown."}, nil
-		}
-		_ = s.afcWriter.Abort(lease)
-		return &DirectResponse{Text: fmt.Sprintf("Codex rejected thread creation: %v", startErr), CallbackText: "Create failed."}, nil
-	}
-	thread := threadFromStartPayload(threadPayload, pendingNewThreadState{ProjectName: projectName, DirectoryName: directoryName, CWD: cwd})
-	if strings.TrimSpace(thread.ID) == "" {
-		_ = s.afcWriter.MarkUnknown(lease)
-		return &DirectResponse{Text: "Codex returned no thread id; creation outcome is unknown.", CallbackText: "Creation unknown."}, nil
-	}
-	lease, err = s.afcWriter.ClaimThread(lease, thread.ID)
-	if err != nil {
-		_ = s.afcWriter.MarkUnknown(lease)
-		return &DirectResponse{Text: fmt.Sprintf("Created Codex thread %s, but ownership could not be confirmed: %v", thread.ID, err), CallbackText: "Partial creation."}, nil
-	}
-	if err := s.store.UpsertThread(ctx, thread); err != nil {
-		_ = s.afcWriter.MarkUnknown(lease)
-		return nil, err
-	}
 	forum := s.getAFCForum()
 	if forum == nil {
-		_ = s.afcWriter.MarkTerminal(lease)
-		return &DirectResponse{Text: fmt.Sprintf("Created Codex thread %s, but Telegram transport is unavailable.", thread.ID), CallbackText: "Partial creation."}, nil
+		return &DirectResponse{Text: "Telegram transport is unavailable; no AFC draft was created.", CallbackText: "Create failed."}, nil
 	}
-	title := afcTopicTitle(thread)
+	title := "New task"
 	topicID, topicErr := forum.CreateAFCTopic(ctx, title)
 	if topicErr != nil {
-		_ = s.afcWriter.MarkTerminal(lease)
-		return &DirectResponse{Text: fmt.Sprintf("Created Codex thread %s, but Telegram topic creation failed: %v", thread.ID, topicErr), CallbackText: "Partial creation."}, nil
+		return &DirectResponse{Text: fmt.Sprintf("Telegram topic creation failed: %v", topicErr), CallbackText: "Create failed."}, nil
 	}
 	topics, _ := s.store.ListAFCTopics(ctx, state.SessionID)
-	row := model.AFCTopic{SessionID: state.SessionID, ChatID: state.ChatID, TopicID: topicID, ThreadID: thread.ID, Rank: len(topics) + 1,
-		Title: title, TelegramState: model.AFCTopicConnected}
-	if err := s.store.UpsertAFCTopic(ctx, row); err != nil {
+	drafts, _ := s.store.ListAFCTopicDrafts(ctx, state.SessionID)
+	draft := model.AFCTopicDraft{SessionID: state.SessionID, ChatID: state.ChatID, TopicID: topicID,
+		Rank: len(topics) + len(drafts) + 1, Title: title, CWD: cwd, ProjectName: projectName, DirectoryName: directoryName}
+	if err := s.store.CreateAFCTopicDraft(ctx, draft); err != nil {
 		_ = forum.DeleteAFCTopic(ctx, topicID)
-		_ = s.afcWriter.MarkTerminal(lease)
 		return nil, err
 	}
-	closeErr := s.afcWriter.MarkTerminal(lease)
-	if closeErr != nil {
-		return &DirectResponse{Text: fmt.Sprintf("Created AFC topic %d for thread %s, but shared writer handback is unresolved: %v", topicID, thread.ID, closeErr), CallbackText: "Created with warning."}, nil
-	}
-	return &DirectResponse{Text: fmt.Sprintf("AFC task ready in topic %d. Open it and send the first prompt as a new message.", topicID), CallbackText: "AFC task created.", ThreadID: thread.ID}, nil
+	return &DirectResponse{Text: fmt.Sprintf("AFC task ready in topic %d. Open it and send the first prompt as a new message.", topicID), CallbackText: "AFC task created."}, nil
 }

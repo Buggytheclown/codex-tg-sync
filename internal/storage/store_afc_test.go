@@ -91,8 +91,11 @@ func TestAFCOffIsLogicalBeforeCleanupAndDoesNotRestoreObserver(t *testing.T) {
 	if err := store.FinishAFCActivation(ctx, "session-1", `{}`, true); err != nil {
 		t.Fatal(err)
 	}
+	if err := store.CreateAFCTopicDraft(ctx, model.AFCTopicDraft{SessionID: "session-1", ChatID: -1001, TopicID: 12, Rank: 2, Title: "New task", CWD: "/tmp/project"}); err != nil {
+		t.Fatal(err)
+	}
 	topics, err := store.MarkAFCOff(ctx, "session-1")
-	if err != nil || len(topics) != 1 || topics[0].TelegramState != model.AFCTopicCleanup {
+	if err != nil || len(topics) != 2 || topics[0].TelegramState != model.AFCTopicCleanup || topics[1].TopicID != 12 || topics[1].TelegramState != model.AFCTopicCleanup {
 		t.Fatalf("topics = %#v, err = %v", topics, err)
 	}
 	state, err := store.GetAFCState(ctx)
@@ -102,6 +105,71 @@ func TestAFCOffIsLogicalBeforeCleanupAndDoesNotRestoreObserver(t *testing.T) {
 	enabled, _ := store.GetState(ctx, "observer.global_enabled")
 	if enabled != "false" {
 		t.Fatalf("observer.global_enabled = %q, want false", enabled)
+	}
+}
+
+func TestAFCTopicDraftMaterializesExactlyOnce(t *testing.T) {
+	t.Parallel()
+	store := openTestStore(t)
+	ctx := context.Background()
+	if err := store.BeginAFCActivation(ctx, "session-1", -1001); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.FinishAFCActivation(ctx, "session-1", `{}`, true); err != nil {
+		t.Fatal(err)
+	}
+	draft := model.AFCTopicDraft{SessionID: "session-1", ChatID: -1001, TopicID: 21, Rank: 1, Title: "New task",
+		CWD: "/tmp/project", ProjectName: "Project", DirectoryName: "project"}
+	if err := store.CreateAFCTopicDraft(ctx, draft); err != nil {
+		t.Fatal(err)
+	}
+	claimed, receipt, created, err := store.ClaimAFCTopicDraftMessage(ctx, -1001, 21, 901)
+	if err != nil || !created || claimed.State != model.AFCDraftStarting || receipt.State != model.AFCReceiptAccepted || receipt.ThreadID != "" {
+		t.Fatalf("claimed=%#v receipt=%#v created=%v err=%v", claimed, receipt, created, err)
+	}
+	_, duplicate, created, err := store.ClaimAFCTopicDraftMessage(ctx, -1001, 21, 901)
+	if err != nil || created || duplicate.State != model.AFCReceiptAccepted {
+		t.Fatalf("duplicate=%#v created=%v err=%v", duplicate, created, err)
+	}
+	if err := store.MaterializeAFCTopicDraft(ctx, claimed, receipt, "thread-new", "First prompt", 7); err != nil {
+		t.Fatal(err)
+	}
+	drafts, err := store.ListAFCTopicDrafts(ctx, "session-1")
+	if err != nil || len(drafts) != 0 {
+		t.Fatalf("drafts=%#v err=%v", drafts, err)
+	}
+	topic, err := store.GetActiveAFCTopic(ctx, -1001, 21)
+	if err != nil || topic == nil || topic.ThreadID != "thread-new" || topic.ActiveTurnState != model.AFCTurnStarting || topic.WriterGeneration != 7 {
+		t.Fatalf("topic=%#v err=%v", topic, err)
+	}
+	storedReceipt, err := store.GetAFCReceipt(ctx, 21, 901)
+	if err != nil || storedReceipt == nil || storedReceipt.ThreadID != "thread-new" {
+		t.Fatalf("receipt=%#v err=%v", storedReceipt, err)
+	}
+}
+
+func TestRecoverAFCWriterMarksStartingDraftUnknown(t *testing.T) {
+	t.Parallel()
+	store := openTestStore(t)
+	ctx := context.Background()
+	if err := store.BeginAFCActivation(ctx, "session-1", -1001); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.FinishAFCActivation(ctx, "session-1", `{}`, true); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.CreateAFCTopicDraft(ctx, model.AFCTopicDraft{SessionID: "session-1", ChatID: -1001, TopicID: 21, Title: "New task", CWD: "/tmp/project"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, _, err := store.ClaimAFCTopicDraftMessage(ctx, -1001, 21, 901); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.RecoverAFCWriterState(ctx); err != nil {
+		t.Fatal(err)
+	}
+	drafts, err := store.ListAFCTopicDrafts(ctx, "session-1")
+	if err != nil || len(drafts) != 1 || drafts[0].State != model.AFCDraftUnknown {
+		t.Fatalf("drafts=%#v err=%v", drafts, err)
 	}
 }
 

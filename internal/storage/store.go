@@ -206,6 +206,22 @@ func (s *Store) initialize(ctx context.Context) error {
 		UNIQUE(session_id, thread_id)
 	);
 
+	CREATE TABLE IF NOT EXISTS afc_topic_drafts (
+		session_id TEXT NOT NULL,
+		chat_id INTEGER NOT NULL,
+		topic_id INTEGER NOT NULL,
+		rank INTEGER NOT NULL DEFAULT 0,
+		title TEXT NOT NULL,
+		cwd TEXT NOT NULL,
+		project_name TEXT,
+		directory_name TEXT,
+		state TEXT NOT NULL,
+		source_message_id INTEGER NOT NULL DEFAULT 0,
+		created_at TEXT NOT NULL,
+		updated_at TEXT NOT NULL,
+		PRIMARY KEY(session_id, topic_id)
+	);
+
 	CREATE TABLE IF NOT EXISTS afc_message_receipts (
 		chat_id INTEGER NOT NULL,
 		topic_id INTEGER NOT NULL,
@@ -269,6 +285,7 @@ func (s *Store) initialize(ctx context.Context) error {
 	CREATE INDEX IF NOT EXISTS idx_thread_panels_thread_current ON thread_panels(chat_id, topic_id, thread_id, is_current, updated_at DESC);
 	CREATE INDEX IF NOT EXISTS idx_chat_steer_expires_at ON chat_steer_state(expires_at);
 	CREATE INDEX IF NOT EXISTS idx_afc_topics_session_state ON afc_topics(session_id, telegram_state, rank);
+	CREATE INDEX IF NOT EXISTS idx_afc_topic_drafts_session_state ON afc_topic_drafts(session_id, state, rank);
 	CREATE INDEX IF NOT EXISTS idx_afc_receipts_session_thread ON afc_message_receipts(session_id, thread_id, updated_at);
 	`
 	if _, err := s.db.ExecContext(ctx, schema); err != nil {

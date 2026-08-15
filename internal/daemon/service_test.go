@@ -4927,6 +4927,7 @@ type stubSession struct {
 	turnSteerErr           error
 	turnSteerErrs          []error
 	threadStartCalls       []string
+	threadSetNameCalls     []threadSetNameCall
 	threadResumeCalls      []threadResumeCall
 	turnSteerCalls         []turnCall
 	turnStartCalls         []turnCall
@@ -4938,6 +4939,11 @@ type stubSession struct {
 type threadResumeCall struct {
 	threadID string
 	cwd      string
+}
+
+type threadSetNameCall struct {
+	threadID string
+	name     string
 }
 
 type turnCall struct {
@@ -4996,6 +5002,10 @@ func (s *stubSession) ThreadStart(ctx context.Context, cwd string) (map[string]a
 		return nil, s.threadStartErr
 	}
 	return s.threadStartResult, nil
+}
+func (s *stubSession) ThreadSetName(ctx context.Context, threadID, name string) (map[string]any, error) {
+	s.threadSetNameCalls = append(s.threadSetNameCalls, threadSetNameCall{threadID: threadID, name: name})
+	return map[string]any{}, nil
 }
 func (s *stubSession) TurnStart(ctx context.Context, threadID, message, cwd string, options appserver.TurnStartOptions) (map[string]any, error) {
 	if s.turnStartErr != nil {

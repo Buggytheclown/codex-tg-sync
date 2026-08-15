@@ -87,11 +87,16 @@ func (s *Service) forceDeactivateAFC(ctx context.Context) (*DirectResponse, erro
 		s.syncAFC(ctx)
 		writer := s.afcWriter.Snapshot()
 		current, _ := s.store.ListAFCTopics(ctx, state.SessionID)
-		if writer.Starting+writer.Active+writer.Unknown == 0 && !hasUnfinishedAFCTopics(current) {
+		drafts, draftErr := s.store.ListAFCTopicDrafts(ctx, state.SessionID)
+		if draftErr != nil {
+			return nil, draftErr
+		}
+		if writer.Starting+writer.Active+writer.Unknown == 0 && !hasUnfinishedAFCTopics(current) && !hasUnfinishedAFCDrafts(drafts) {
 			return s.deactivateAFC(ctx)
 		}
 		if time.Now().After(deadline) {
-			return &DirectResponse{Text: "AFC remains draining; terminal confirmation timed out for: " + strings.Join(unfinishedAFCTopicTitles(current), ", ")}, nil
+			titles := unfinishedAFCWorkTitles(current, drafts)
+			return &DirectResponse{Text: "AFC remains draining; terminal confirmation timed out for: " + strings.Join(titles, ", ")}, nil
 		}
 		select {
 		case <-ctx.Done():
@@ -99,6 +104,38 @@ func (s *Service) forceDeactivateAFC(ctx context.Context) (*DirectResponse, erro
 		case <-time.After(20 * time.Millisecond):
 		}
 	}
+}
+
+func hasUnfinishedAFCDrafts(drafts []model.AFCTopicDraft) bool {
+	for _, draft := range drafts {
+		if draft.State == model.AFCDraftStarting || draft.State == model.AFCDraftUnknown {
+			return true
+		}
+	}
+	return false
+}
+
+func unfinishedAFCDraftTitles(drafts []model.AFCTopicDraft) []string {
+	var titles []string
+	for _, draft := range drafts {
+		if draft.State != model.AFCDraftStarting && draft.State != model.AFCDraftUnknown {
+			continue
+		}
+		title := strings.TrimSpace(draft.Title)
+		if title == "" {
+			title = fmt.Sprintf("topic %d", draft.TopicID)
+		}
+		titles = append(titles, title)
+	}
+	return titles
+}
+
+func unfinishedAFCWorkTitles(topics []model.AFCTopic, drafts []model.AFCTopicDraft) []string {
+	titles := append(unfinishedAFCTopicTitles(topics), unfinishedAFCDraftTitles(drafts)...)
+	if len(titles) == 0 {
+		return []string{"ownership unknown"}
+	}
+	return titles
 }
 
 func hasUnfinishedAFCTopics(topics []model.AFCTopic) bool {
@@ -120,9 +157,6 @@ func unfinishedAFCTopicTitles(topics []model.AFCTopic) []string {
 			}
 			titles = append(titles, title)
 		}
-	}
-	if len(titles) == 0 {
-		return []string{"ownership unknown"}
 	}
 	return titles
 }

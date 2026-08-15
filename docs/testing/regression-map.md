@@ -551,7 +551,19 @@ ADR: `docs/adr/ADR-025-afc-durable-new-task-creation.md`
 Primary tests:
 
 - `internal/daemon/afc_test.go::TestAFCProjectPickerCreatesThreadThenTopicThenDurableBinding`
-- `internal/daemon/afc_test.go::TestAFCNewTaskKeepsCreatedThreadWhenTopicCreationFails`
+- `internal/daemon/afc_test.go::TestAFCNewTaskDoesNotCreateThreadWhenTopicCreationFails`
+- `internal/daemon/afc_test.go::TestAFCExistingEmptyTopicRecoversNoRolloutOnNextPrompt`
+- `internal/daemon/afc_test.go::TestAFCExistingEmptyTopicDoesNotRecoverUnrelatedResumeError`
+- `internal/daemon/afc_test.go::TestAFCDraftDefinitiveThreadStartFailureCanRetryWithNewMessage`
+- `internal/daemon/afc_test.go::TestAFCDraftDefinitiveFirstTurnFailureReturnsTopicToDraft`
+- `internal/daemon/afc_test.go::TestAFCOffCleansReadyDraftTopic`
+- `internal/daemon/afc_test.go::TestAFCSafeOffRefusesStartingDraft`
+- `internal/daemon/afc_test.go::TestAFCDraftRejectsSecondMessageFromCurrentDurableState`
+- `internal/daemon/afc_test.go::TestAFCControlHelpListsNewTaskCommands`
+- `internal/daemon/afc_test.go::TestAFCPromptTopicTitleKeepsUnicodeAndBoundsLength`
+- `internal/daemon/afc_test.go::TestAFCPassiveSyncReconcilesCodexThreadTitleToTopic`
+- `internal/storage/store_afc_test.go::TestAFCTopicDraftMaterializesExactlyOnce`
+- `internal/storage/store_afc_test.go::TestRecoverAFCWriterMarksStartingDraftUnknown`
 - `internal/daemon/afc_test.go::TestAFCProjectsFailClosedWhileOff`
 - `internal/daemon/afc_test.go::TestAFCProjectCallbackFromOldSessionFailsBeforeThreadStart`
 

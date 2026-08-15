@@ -20,6 +20,11 @@ const (
 	AFCTopicConnected = "connected"
 	AFCTopicCleanup   = "cleanup"
 
+	AFCDraftReady    = "ready"
+	AFCDraftStarting = "starting"
+	AFCDraftUnknown  = "unknown"
+	AFCDraftCleanup  = "cleanup"
+
 	AFCTurnStarting = "starting"
 	AFCTurnActive   = "active"
 	AFCTurnTerminal = "terminal"
@@ -92,6 +97,21 @@ type AFCTopic struct {
 	WriterGeneration uint64
 	CreatedAt        TimeString
 	UpdatedAt        TimeString
+}
+
+type AFCTopicDraft struct {
+	SessionID       string
+	ChatID          int64
+	TopicID         int64
+	Rank            int
+	Title           string
+	CWD             string
+	ProjectName     string
+	DirectoryName   string
+	State           string
+	SourceMessageID int64
+	CreatedAt       TimeString
+	UpdatedAt       TimeString
 }
 
 type AFCMessageReceipt struct {
