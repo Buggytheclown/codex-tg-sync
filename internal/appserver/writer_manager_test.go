@@ -200,6 +200,42 @@ func TestWriterManagerStartFailureReleasesGenerationClaims(t *testing.T) {
 	}
 }
 
+func TestWriterManagerClaimsThreadAfterUnclaimedProcessReservation(t *testing.T) {
+	registry := NewThreadClaimRegistry()
+	process := &fakeWriterProcess{}
+	manager := NewWriterManager("legacy", registry, func() (*fakeWriterProcess, error) {
+		return process, nil
+	})
+
+	lease, err := manager.ReserveProcess(context.Background(), "new-thread-operation")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if lease.ThreadID != "" {
+		t.Fatalf("unclaimed lease thread = %q, want empty", lease.ThreadID)
+	}
+	if _, ok := registry.Lookup("new-thread-operation"); ok {
+		t.Fatal("process reservation leaked into thread claim registry")
+	}
+
+	lease, err = manager.ClaimThread(lease, "created-thread")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if lease.ThreadID != "created-thread" {
+		t.Fatalf("claimed lease thread = %q, want created-thread", lease.ThreadID)
+	}
+	if claim, ok := registry.Lookup("created-thread"); !ok || claim.Writer != "legacy" || claim.Generation != lease.Generation {
+		t.Fatalf("created-thread claim = %#v, %t", claim, ok)
+	}
+	if err := manager.MarkActive(lease); err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.MarkTerminal(lease); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestWriterManagerCloseFailureKeepsClaimsAndFailsClosed(t *testing.T) {
 	registry := NewThreadClaimRegistry()
 	process := &fakeWriterProcess{closeErr: errors.New("close failed")}

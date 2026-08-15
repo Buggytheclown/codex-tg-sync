@@ -3421,10 +3421,10 @@ func TestLiveEventLoopExitRecordsRepairReason(t *testing.T) {
 	requireLogContains(t, got, `"event":"repair_requested"`)
 }
 
-func TestEnsureSessionsSuppressesDuplicateConcurrentStarts(t *testing.T) {
+func TestEnsureSessionsStartsOnlyPollSession(t *testing.T) {
 	service := newTestService(t)
 	service.cfg.RequestTimeout = 2 * time.Second
-	live := newStartCountingSession()
+	live := &stubSession{}
 	poll := newStartCountingSession()
 	service.live = live
 	service.poll = poll
@@ -3442,9 +3442,6 @@ func TestEnsureSessionsSuppressesDuplicateConcurrentStarts(t *testing.T) {
 			service.reconcileSessions(ctx)
 		}(i)
 	}
-
-	live.waitStarted(t, "live")
-	live.release()
 	poll.waitStarted(t, "poll")
 	poll.release()
 
@@ -3458,11 +3455,119 @@ func TestEnsureSessionsSuppressesDuplicateConcurrentStarts(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("concurrent ensure/reconcile did not finish")
 	}
-	if got := live.StartCalls(); got != 1 {
-		t.Fatalf("live Start calls = %d, want 1", got)
+	if got := live.startCalls; got != 0 {
+		t.Fatalf("legacy writer Start calls = %d, want 0", got)
 	}
 	if got := poll.StartCalls(); got != 1 {
 		t.Fatalf("poll Start calls = %d, want 1", got)
+	}
+}
+
+func TestBootstrapTrackedStateDoesNotResumeLegacyThreads(t *testing.T) {
+	service := newTestService(t)
+	ctx := context.Background()
+	thread := model.Thread{ID: "tracked-thread", Title: "Tracked", CWD: "/tmp/project", UpdatedAt: 1}
+	if err := service.store.UpsertThread(ctx, thread); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.store.SetBinding(ctx, 123456789, 0, thread.ID, model.BindingModeBound); err != nil {
+		t.Fatal(err)
+	}
+	live := &stubSession{}
+	poll := &stubSession{threadListResult: map[string]any{"data": []any{}}, threadReads: map[string]map[string]any{}}
+	service.mu.Lock()
+	service.live = live
+	service.liveConnected = true
+	service.poll = poll
+	service.pollConnected = true
+	service.mu.Unlock()
+
+	service.bootstrapTrackedState(ctx)
+	if len(live.threadResumeCalls) != 0 {
+		t.Fatalf("bootstrap ThreadResume calls = %#v, want none", live.threadResumeCalls)
+	}
+}
+
+func TestLegacyTurnLazilyStartsWriterAndClosesAfterTerminal(t *testing.T) {
+	service := newTestService(t)
+	ctx := context.Background()
+	thread := model.Thread{ID: "legacy-thread", Title: "Legacy", CWD: "/tmp/project", Status: "idle", UpdatedAt: 1}
+	if err := service.store.UpsertThread(ctx, thread); err != nil {
+		t.Fatal(err)
+	}
+	live := &stubSession{threadReads: map[string]map[string]any{
+		thread.ID: diagnosticThreadReadPayload(thread, "started-turn", "completed"),
+	}}
+	service.liveFactory = func() Session { return live }
+	service.threadClaims = appserver.NewThreadClaimRegistry()
+	service.legacyWriter = appserver.NewWriterManager("legacy", service.threadClaims, func() (Session, error) {
+		return service.liveFactory(), nil
+	})
+	service.mu.Lock()
+	service.live = nil
+	service.liveConnected = false
+	service.mu.Unlock()
+
+	response, err := service.sendInputToThread(ctx, 123456789, 0, thread.ID, "hello")
+	if err != nil {
+		t.Fatalf("sendInputToThread failed: %v", err)
+	}
+	if response == nil || response.ThreadID != thread.ID {
+		t.Fatalf("response = %#v, want legacy thread", response)
+	}
+	if live.startCalls != 1 {
+		t.Fatalf("legacy writer Start calls = %d, want 1", live.startCalls)
+	}
+	if len(live.threadResumeCalls) != 1 || len(live.turnStartCalls) != 1 {
+		t.Fatalf("legacy mutation calls: resume=%#v start=%#v", live.threadResumeCalls, live.turnStartCalls)
+	}
+	if got := service.legacyWriter.Snapshot(); got.State != appserver.WriterRunning || got.Active != 1 {
+		t.Fatalf("legacy writer after start = %#v", got)
+	}
+
+	service.handleLiveEvent(ctx, live, appserver.Event{Method: "turn/completed", Params: map[string]any{"threadId": thread.ID}})
+	if live.closeCalls != 1 {
+		t.Fatalf("legacy writer Close calls = %d, want 1", live.closeCalls)
+	}
+	if got := service.legacyWriter.Snapshot(); got.State != appserver.WriterStopped {
+		t.Fatalf("legacy writer after terminal = %#v", got)
+	}
+}
+
+func TestLegacyNewThreadClaimsReturnedIDBeforeFirstTurn(t *testing.T) {
+	service := newTestService(t)
+	ctx := context.Background()
+	live := &stubSession{
+		threadStartResult: map[string]any{"thread": map[string]any{
+			"id":     "created-thread",
+			"title":  "Created",
+			"cwd":    "/tmp/project",
+			"status": "idle",
+		}},
+	}
+	service.liveFactory = func() Session { return live }
+	service.threadClaims = appserver.NewThreadClaimRegistry()
+	service.legacyWriter = appserver.NewWriterManager("legacy", service.threadClaims, func() (Session, error) {
+		return service.liveFactory(), nil
+	})
+	service.mu.Lock()
+	service.live = nil
+	service.liveConnected = false
+	service.mu.Unlock()
+
+	response, err := service.createThreadFromProjectPrompt(ctx, 123456789, 0, pendingNewThreadState{CWD: "/tmp/project"}, "first prompt")
+	if err != nil {
+		t.Fatalf("createThreadFromProjectPrompt failed: %v", err)
+	}
+	if response == nil || response.ThreadID != "created-thread" || response.TurnID != "started-turn" {
+		t.Fatalf("response = %#v", response)
+	}
+	if live.startCalls != 1 || len(live.threadStartCalls) != 1 || len(live.turnStartCalls) != 1 {
+		t.Fatalf("writer calls: starts=%d threadStart=%#v turnStart=%#v", live.startCalls, live.threadStartCalls, live.turnStartCalls)
+	}
+	claim, ok := service.threadClaims.Lookup("created-thread")
+	if !ok || claim.Writer != "legacy" || claim.Generation != 1 {
+		t.Fatalf("created thread claim = %#v, %t", claim, ok)
 	}
 }
 
@@ -4803,6 +4908,8 @@ func (s *startCountingSession) StartCalls() int {
 }
 
 type stubSession struct {
+	startCalls             int
+	closeCalls             int
 	threadReads            map[string]map[string]any
 	threadListResult       map[string]any
 	threadListCalls        int
@@ -4848,8 +4955,14 @@ type respondRequestCall struct {
 	result    map[string]any
 }
 
-func (s *stubSession) Start(ctx context.Context) error { return nil }
-func (s *stubSession) Close() error                    { return nil }
+func (s *stubSession) Start(ctx context.Context) error {
+	s.startCalls++
+	return nil
+}
+func (s *stubSession) Close() error {
+	s.closeCalls++
+	return nil
+}
 func (s *stubSession) Subscribe() <-chan appserver.Event {
 	return nil
 }

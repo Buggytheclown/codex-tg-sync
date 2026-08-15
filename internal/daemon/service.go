@@ -61,14 +61,20 @@ type Service struct {
 	cfg   config.Config
 	store *storage.Store
 
-	liveFactory func() Session
-	pollFactory func() Session
+	liveFactory  func() Session
+	pollFactory  func() Session
+	threadClaims *appserver.ThreadClaimRegistry
+	legacyWriter *appserver.WriterManager[Session]
 
 	sessionMu      sync.Mutex
+	legacyMu       sync.Mutex
 	mu             sync.RWMutex
 	live           Session
 	poll           Session
 	liveEvents     <-chan control.Event
+	liveCancel     context.CancelFunc
+	runCtx         context.Context
+	legacyLeases   map[string]appserver.WriterLease[Session]
 	liveGeneration uint64
 	pollGeneration uint64
 	cancel         context.CancelFunc
@@ -129,7 +135,11 @@ func New(cfg config.Config) (*Service, error) {
 	service.pollFactory = func() Session {
 		return appserver.NewClient(cfg.CodexBin, cfg.AppServerListen, cfg.DefaultCWD, cfg.RequestTimeout)
 	}
-	service.live = service.liveFactory()
+	service.threadClaims = appserver.NewThreadClaimRegistry()
+	service.legacyWriter = appserver.NewWriterManager("legacy", service.threadClaims, func() (Session, error) {
+		return service.liveFactory(), nil
+	})
+	service.legacyLeases = map[string]appserver.WriterLease[Session]{}
 	service.poll = service.pollFactory()
 	return service, nil
 }
@@ -149,15 +159,21 @@ func (s *Service) Close() error {
 	s.mu.Lock()
 	live := s.live
 	poll := s.poll
+	liveCancel := s.liveCancel
 	s.live = nil
 	s.poll = nil
 	s.liveEvents = nil
+	s.liveCancel = nil
+	s.runCtx = nil
 	s.liveConnected = false
 	s.pollConnected = false
 	s.liveGeneration++
 	s.pollGeneration++
 	s.mu.Unlock()
 	s.sessionMu.Unlock()
+	if liveCancel != nil {
+		liveCancel()
+	}
 	if live != nil {
 		_ = live.Close()
 	}
@@ -181,6 +197,7 @@ func (s *Service) Start(ctx context.Context) error {
 	}
 	runCtx, cancel := context.WithCancel(ctx)
 	s.cancel = cancel
+	s.runCtx = runCtx
 	s.started = true
 	s.startedAt = time.Now().UTC()
 	s.ready = true
@@ -198,7 +215,6 @@ func (s *Service) Start(ctx context.Context) error {
 
 	s.spawn(runCtx, s.ensureSessions)
 	s.spawn(runCtx, s.indexLoop)
-	s.spawn(runCtx, s.attachLoop)
 	s.spawn(runCtx, s.pollLoop)
 	s.spawn(runCtx, s.deliveryLoop)
 	s.spawn(runCtx, s.controlLoop)
@@ -247,6 +263,220 @@ func (s *Service) controlReadSession(ctx context.Context) (Session, error) {
 		return nil, errors.New("app-server poll session unavailable")
 	}
 	return session, nil
+}
+
+type legacyWriterAccess struct {
+	session Session
+	lease   appserver.WriterLease[Session]
+	managed bool
+	fresh   bool
+}
+
+func (s *Service) legacyThreadSession(ctx context.Context, threadID string) (legacyWriterAccess, error) {
+	threadID = strings.TrimSpace(threadID)
+	if threadID == "" {
+		return legacyWriterAccess{}, errors.New("thread id is required")
+	}
+	s.legacyMu.Lock()
+	defer s.legacyMu.Unlock()
+	if lease, ok := s.legacyLeases[threadID]; ok {
+		s.mu.RLock()
+		connected := s.liveConnected && s.live == lease.Process && s.liveGeneration == lease.Generation
+		s.mu.RUnlock()
+		if !connected {
+			return legacyWriterAccess{}, errors.New("legacy writer process is not connected")
+		}
+		return legacyWriterAccess{session: lease.Process, lease: lease, managed: true}, nil
+	}
+
+	// Existing tests and explicitly injected embedders may provide a connected
+	// session directly. Production sessions are always accompanied by a lease.
+	s.mu.RLock()
+	direct := s.live
+	directConnected := s.liveConnected && direct != nil && s.legacyWriter.Snapshot().State == appserver.WriterStopped
+	s.mu.RUnlock()
+	if directConnected {
+		return legacyWriterAccess{session: direct}, nil
+	}
+
+	lease, err := s.legacyWriter.Reserve(ctx, threadID)
+	if err != nil {
+		return legacyWriterAccess{}, err
+	}
+	s.legacyLeases[threadID] = lease
+	s.installLegacyWriter(ctx, lease)
+	return legacyWriterAccess{session: lease.Process, lease: lease, managed: true, fresh: true}, nil
+}
+
+func (s *Service) legacyProcessSession(ctx context.Context, reservationID string) (legacyWriterAccess, error) {
+	s.legacyMu.Lock()
+	defer s.legacyMu.Unlock()
+	s.mu.RLock()
+	direct := s.live
+	directConnected := s.liveConnected && direct != nil && s.legacyWriter.Snapshot().State == appserver.WriterStopped
+	s.mu.RUnlock()
+	if directConnected {
+		return legacyWriterAccess{session: direct}, nil
+	}
+	lease, err := s.legacyWriter.ReserveProcess(ctx, reservationID)
+	if err != nil {
+		return legacyWriterAccess{}, err
+	}
+	s.installLegacyWriter(ctx, lease)
+	return legacyWriterAccess{session: lease.Process, lease: lease, managed: true, fresh: true}, nil
+}
+
+func (s *Service) existingLegacyThreadSession(threadID string) (Session, error) {
+	threadID = strings.TrimSpace(threadID)
+	s.legacyMu.Lock()
+	defer s.legacyMu.Unlock()
+	if lease, ok := s.legacyLeases[threadID]; ok {
+		s.mu.RLock()
+		connected := s.liveConnected && s.live == lease.Process && s.liveGeneration == lease.Generation
+		s.mu.RUnlock()
+		if connected {
+			return lease.Process, nil
+		}
+		return nil, errors.New("legacy writer process is not connected")
+	}
+	s.mu.RLock()
+	live := s.live
+	connected := s.liveConnected && s.legacyWriter.Snapshot().State == appserver.WriterStopped
+	s.mu.RUnlock()
+	if connected && live != nil {
+		return live, nil
+	}
+	return nil, errors.New("legacy writer process is not available")
+}
+
+func (s *Service) claimLegacyThread(access legacyWriterAccess, threadID string) (legacyWriterAccess, error) {
+	if !access.managed {
+		return access, nil
+	}
+	s.legacyMu.Lock()
+	defer s.legacyMu.Unlock()
+	lease, err := s.legacyWriter.ClaimThread(access.lease, threadID)
+	if err != nil {
+		return access, err
+	}
+	access.lease = lease
+	s.legacyLeases[threadID] = lease
+	return access, nil
+}
+
+func (s *Service) installLegacyWriter(ctx context.Context, lease appserver.WriterLease[Session]) {
+	s.mu.Lock()
+	if s.live == lease.Process && s.liveGeneration == lease.Generation && s.liveConnected {
+		s.mu.Unlock()
+		return
+	}
+	s.mu.Unlock()
+	events := lease.Process.Subscribe()
+	s.mu.Lock()
+	if s.live == lease.Process && s.liveGeneration == lease.Generation && s.liveConnected {
+		s.mu.Unlock()
+		return
+	}
+	oldCancel := s.liveCancel
+	baseCtx := s.runCtx
+	if baseCtx == nil {
+		baseCtx = context.Background()
+	}
+	loopCtx, loopCancel := context.WithCancel(baseCtx)
+	s.live = lease.Process
+	s.liveConnected = true
+	s.liveEvents = events
+	s.liveGeneration = lease.Generation
+	s.liveCancel = loopCancel
+	started := s.started
+	s.mu.Unlock()
+	if oldCancel != nil {
+		oldCancel()
+	}
+	_ = s.store.SetState(ctx, "appserver.live_connected", "true")
+	_ = s.store.SetState(ctx, "appserver.live.generation", strconv.FormatUint(lease.Generation, 10))
+	_ = s.store.SetState(ctx, "appserver.live.last_started_at", time.Now().UTC().Format(time.RFC3339Nano))
+	_ = s.store.SetState(ctx, "appserver.live.last_error", "")
+	if events == nil {
+		return
+	}
+	loop := func() { s.liveEventLoop(loopCtx, lease.Process, events, lease.Generation) }
+	if started {
+		s.wg.Add(1)
+		go func() {
+			defer s.wg.Done()
+			loop()
+		}()
+		return
+	}
+	go loop()
+}
+
+func (s *Service) finishFreshLegacyAccess(access legacyWriterAccess, outcome appserver.WriterThreadState) error {
+	if !access.managed || !access.fresh {
+		return nil
+	}
+	switch outcome {
+	case appserver.WriterThreadActive:
+		return s.legacyWriter.MarkActive(access.lease)
+	case appserver.WriterThreadUnknown:
+		return s.legacyWriter.MarkUnknown(access.lease)
+	default:
+		err := s.legacyWriter.Abort(access.lease)
+		if access.lease.ThreadID != "" {
+			s.legacyMu.Lock()
+			delete(s.legacyLeases, access.lease.ThreadID)
+			s.legacyMu.Unlock()
+		}
+		s.clearLegacyWriterIfStopped(access.lease)
+		return err
+	}
+}
+
+func (s *Service) completeLegacyWriterIfTerminal(ctx context.Context, threadID string) {
+	threadID = strings.TrimSpace(threadID)
+	if threadID == "" {
+		return
+	}
+	snapshot, err := s.store.GetSnapshot(ctx, threadID)
+	if err != nil || snapshot == nil || !isTerminalStatus(snapshot.LastSeenTurnStatus) {
+		return
+	}
+	s.legacyMu.Lock()
+	lease, ok := s.legacyLeases[threadID]
+	if ok {
+		delete(s.legacyLeases, threadID)
+	}
+	s.legacyMu.Unlock()
+	if !ok {
+		return
+	}
+	if err := s.legacyWriter.MarkTerminal(lease); err != nil {
+		s.setError(ctx, fmt.Errorf("close legacy writer after terminal: %w", err))
+		return
+	}
+	s.clearLegacyWriterIfStopped(lease)
+}
+
+func (s *Service) clearLegacyWriterIfStopped(lease appserver.WriterLease[Session]) {
+	if s.legacyWriter.Snapshot().State != appserver.WriterStopped {
+		return
+	}
+	s.mu.Lock()
+	if s.live != lease.Process || s.liveGeneration != lease.Generation {
+		s.mu.Unlock()
+		return
+	}
+	cancel := s.liveCancel
+	s.live = nil
+	s.liveEvents = nil
+	s.liveCancel = nil
+	s.liveConnected = false
+	s.mu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
+	_ = s.store.SetState(context.Background(), "appserver.live_connected", "false")
 }
 
 func (s *Service) StatusSnapshot(ctx context.Context, chatID, topicID int64) (string, error) {
@@ -484,56 +714,6 @@ func (s *Service) ensureSessions(ctx context.Context) {
 	s.bootstrapTrackedState(ctx)
 }
 
-func (s *Service) ensureLiveSession(ctx context.Context) {
-	s.sessionMu.Lock()
-	defer s.sessionMu.Unlock()
-	s.ensureLiveSessionLocked(ctx)
-}
-
-func (s *Service) ensureLiveSessionLocked(ctx context.Context) {
-	s.mu.RLock()
-	client := s.live
-	connected := s.liveConnected
-	s.mu.RUnlock()
-	if client == nil || connected {
-		return
-	}
-	sessionCtx, cancel := context.WithTimeout(ctx, s.cfg.RequestTimeout)
-	defer cancel()
-	started := time.Now()
-	s.logLifecycle("appserver_session_start", lifecycleFields{"role": "live"})
-	if err := client.Start(sessionCtx); err != nil {
-		_ = s.store.SetState(ctx, "appserver.live.last_error", sanitizeDiagnosticString(err.Error()))
-		s.logLifecycle("appserver_session_start_failed", lifecycleFields{
-			"role":        "live",
-			"duration_ms": time.Since(started).Milliseconds(),
-			"error":       err,
-			"stderr_tail": sanitizedStderrTail(client),
-		})
-		s.setError(ctx, err)
-		return
-	}
-	events := client.Subscribe()
-	s.mu.Lock()
-	s.liveConnected = true
-	s.liveEvents = events
-	s.liveGeneration++
-	generation := s.liveGeneration
-	s.mu.Unlock()
-	_ = s.store.SetState(ctx, "appserver.live_connected", "true")
-	_ = s.store.SetState(ctx, "appserver.live.generation", strconv.FormatUint(generation, 10))
-	_ = s.store.SetState(ctx, "appserver.live.last_started_at", time.Now().UTC().Format(time.RFC3339Nano))
-	_ = s.store.SetState(ctx, "appserver.live.last_error", "")
-	s.logLifecycle("appserver_session_started", lifecycleFields{
-		"role":        "live",
-		"generation":  generation,
-		"duration_ms": time.Since(started).Milliseconds(),
-	})
-	s.spawn(ctx, func(loopCtx context.Context) {
-		s.liveEventLoop(loopCtx, client, events, generation)
-	})
-}
-
 func (s *Service) ensurePollSession(ctx context.Context) {
 	s.sessionMu.Lock()
 	defer s.sessionMu.Unlock()
@@ -582,7 +762,6 @@ func (s *Service) ensurePollSessionLocked(ctx context.Context) {
 func (s *Service) ensureSessionLifecycle(ctx context.Context) {
 	s.sessionMu.Lock()
 	defer s.sessionMu.Unlock()
-	s.ensureLiveSessionLocked(ctx)
 	s.ensurePollSessionLocked(ctx)
 }
 
@@ -703,6 +882,7 @@ func (s *Service) handleLiveEvent(ctx context.Context, live Session, event contr
 			s.noteSessionError(ctx, "live_refresh", err)
 			return
 		}
+		s.completeLegacyWriterIfTerminal(ctx, threadID)
 		if hasLiveToolSnapshot {
 			_ = s.applyLiveToolSnapshot(ctx, threadID, liveToolSnapshot)
 		}
@@ -713,6 +893,7 @@ func (s *Service) handleLiveEvent(ctx context.Context, live Session, event contr
 			}
 		}
 		s.syncThreadPanel(ctx, threadID)
+		s.completeLegacyWriterIfTerminal(ctx, threadID)
 	}
 }
 
@@ -967,19 +1148,6 @@ func (s *Service) indexLoop(ctx context.Context) {
 	}
 }
 
-func (s *Service) attachLoop(ctx context.Context) {
-	ticker := time.NewTicker(s.cfg.AttachRefreshInterval)
-	defer ticker.Stop()
-	for {
-		s.attachTracked(ctx)
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-		}
-	}
-}
-
 func (s *Service) pollLoop(ctx context.Context) {
 	ticker := time.NewTicker(s.cfg.ObserverPollInterval)
 	defer ticker.Stop()
@@ -1045,29 +1213,18 @@ func (s *Service) reconcileSessions(ctx context.Context) {
 func (s *Service) repairSessions(ctx context.Context, reason string) {
 	s.sessionMu.Lock()
 	s.mu.Lock()
-	oldLive := s.live
 	oldPoll := s.poll
-	s.liveConnected = false
 	s.pollConnected = false
-	s.live = s.liveFactory()
 	s.poll = s.pollFactory()
-	s.liveEvents = nil
-	s.liveGeneration++
-	liveGeneration := s.liveGeneration
 	s.pollGeneration++
 	pollGeneration := s.pollGeneration
 	s.lastError = ""
 	s.mu.Unlock()
 	s.logLifecycle("appserver_session_repair_start", lifecycleFields{
 		"reason":          reason,
-		"live_generation": liveGeneration,
+		"legacy_writer":   s.legacyWriter.Snapshot().State,
 		"poll_generation": pollGeneration,
 	})
-	if oldLive != nil {
-		started := time.Now()
-		err := oldLive.Close()
-		s.logAppServerCall("Close", started, err, oldLive, lifecycleFields{"role": "live", "operation": "repair"})
-	}
 	if oldPoll != nil {
 		started := time.Now()
 		err := oldPoll.Close()
@@ -1075,11 +1232,9 @@ func (s *Service) repairSessions(ctx context.Context, reason string) {
 	}
 	rechecked, _ := s.store.MarkAllPendingApprovals(ctx, "needs_recheck")
 	_ = s.store.SetState(ctx, "repair.last_rechecked", strconv.FormatInt(rechecked, 10))
-	_ = s.store.SetState(ctx, "appserver.live_connected", "false")
 	_ = s.store.SetState(ctx, "appserver.poll_connected", "false")
-	_ = s.store.SetState(ctx, "appserver.live.generation", strconv.FormatUint(liveGeneration, 10))
 	_ = s.store.SetState(ctx, "appserver.poll.generation", strconv.FormatUint(pollGeneration, 10))
-	s.ensureLiveSessionLocked(ctx)
+	_ = s.legacyWriter.RetryClose()
 	s.ensurePollSessionLocked(ctx)
 	s.sessionMu.Unlock()
 	s.bootstrapTrackedState(ctx)
@@ -1087,21 +1242,16 @@ func (s *Service) repairSessions(ctx context.Context, reason string) {
 
 func (s *Service) bootstrapTrackedState(ctx context.Context) {
 	s.syncThreads(ctx, 200)
-	s.attachTracked(ctx)
 	s.pollTracked(ctx)
 }
 
 func (s *Service) syncThreads(ctx context.Context, limit int) {
 	s.mu.RLock()
-	live := s.live
 	poll := s.poll
-	liveConnected := s.liveConnected
 	pollConnected := s.pollConnected
 	s.mu.RUnlock()
 	var client Session
-	if liveConnected {
-		client = live
-	} else if pollConnected {
+	if pollConnected {
 		client = poll
 	}
 	if client == nil {
@@ -1134,33 +1284,6 @@ func (s *Service) syncThreads(ctx context.Context, limit int) {
 			return
 		}
 		cursor = nextCursor
-	}
-}
-
-func (s *Service) attachTracked(ctx context.Context) {
-	s.mu.RLock()
-	live := s.live
-	connected := s.liveConnected
-	s.mu.RUnlock()
-	if !connected || live == nil {
-		return
-	}
-	seen := map[string]struct{}{}
-	for _, threadID := range append(s.boundThreadIDs(ctx), s.currentPanelThreadIDs(ctx)...) {
-		if _, ok := seen[threadID]; ok {
-			continue
-		}
-		seen[threadID] = struct{}{}
-		thread, err := s.store.GetThread(ctx, threadID)
-		if err != nil || thread == nil {
-			continue
-		}
-		requestCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-		_, err = live.ThreadResume(requestCtx, thread.ID, thread.CWD)
-		cancel()
-		if err != nil {
-			s.setError(ctx, fmt.Errorf("thread_resume(bound): %w", err))
-		}
 	}
 }
 
@@ -1243,6 +1366,7 @@ func (s *Service) pollTracked(ctx context.Context) {
 		if catchup || s.threadNeedsLiveSync(ctx, current.Thread.ID) || snapshotHasPassiveChange(latestSnapshot, &current) {
 			s.syncThreadPanel(ctx, current.Thread.ID)
 		}
+		s.completeLegacyWriterIfTerminal(ctx, current.Thread.ID)
 	}
 }
 
@@ -1790,17 +1914,22 @@ func (s *Service) sendInputToThreadTurn(ctx context.Context, chatID, topicID int
 	if thread == nil {
 		return &DirectResponse{Text: fmt.Sprintf("Unknown thread: %s", threadID)}, nil
 	}
-	s.mu.RLock()
-	live := s.live
-	connected := s.liveConnected
-	s.mu.RUnlock()
-	if !connected || live == nil {
+	access, accessErr := s.legacyThreadSession(ctx, threadID)
+	if accessErr != nil {
 		s.logLifecycle("telegram_turn_input_rejected", lifecycleFields{
 			"thread_id": threadID,
-			"reason":    "live_session_not_ready",
+			"reason":    "legacy_writer_unavailable",
+			"error":     accessErr,
 		})
-		return &DirectResponse{Text: "Live app-server session is not ready yet. Try /status or /repair."}, nil
+		return nil, accessErr
 	}
+	live := access.session
+	freshResolved := !access.fresh
+	defer func() {
+		if !freshResolved {
+			_ = s.finishFreshLegacyAccess(access, "")
+		}
+	}()
 	requestCtx, cancel := context.WithTimeout(ctx, s.cfg.RequestTimeout)
 	defer cancel()
 	started := time.Now()
@@ -1809,6 +1938,10 @@ func (s *Service) sendInputToThreadTurn(ctx context.Context, chatID, topicID int
 		"thread_id": threadID,
 	})
 	if err != nil {
+		if access.fresh {
+			_ = s.finishFreshLegacyAccess(access, appserver.WriterThreadUnknown)
+			freshResolved = true
+		}
 		return nil, err
 	}
 	if refreshed, refreshErr := s.refreshThreadForOperation(ctx, live, threadID, "refresh_thread_before_start"); refreshErr == nil && refreshed != nil {
@@ -1908,6 +2041,10 @@ func (s *Service) sendInputToThreadTurn(ctx context.Context, chatID, topicID int
 			"request_message_len": len([]rune(text)),
 		})
 		if err != nil {
+			if access.fresh {
+				_ = s.finishFreshLegacyAccess(access, appserver.WriterThreadUnknown)
+				freshResolved = true
+			}
 			return nil, err
 		}
 		if usedDefaultOverride || effectiveCollaborationMode != "" {
@@ -1941,6 +2078,13 @@ func (s *Service) sendInputToThreadTurn(ctx context.Context, chatID, topicID int
 	}
 	if strings.TrimSpace(turn) != "" {
 		s.ensureStartedTurnSnapshot(ctx, thread, turn)
+	}
+	if access.fresh {
+		if err := s.finishFreshLegacyAccess(access, appserver.WriterThreadActive); err != nil {
+			freshResolved = true
+			return nil, err
+		}
+		freshResolved = true
 	}
 	explicitTarget := model.ObserverTarget{
 		ChatKey: model.ChatKey(chatID, topicID),
@@ -2070,6 +2214,7 @@ func (s *Service) telegramOriginHotPollOnce(ctx context.Context, threadID, turnI
 		return false
 	}
 	if isTerminalStatus(snapshot.LastSeenTurnStatus) {
+		s.completeLegacyWriterIfTerminal(ctx, threadID)
 		return false
 	}
 	return true
@@ -2166,13 +2311,17 @@ func (s *Service) interruptTurn(ctx context.Context, chatID, topicID int64, thre
 		return nil, err
 	}
 	thread, _ := s.store.GetThread(ctx, threadID)
-	s.mu.RLock()
-	live := s.live
-	connected := s.liveConnected
-	s.mu.RUnlock()
-	if !connected || live == nil {
-		return &DirectResponse{Text: "Live app-server session is not ready yet. Try /status or /repair."}, nil
+	access, accessErr := s.legacyThreadSession(ctx, threadID)
+	if accessErr != nil {
+		return nil, accessErr
 	}
+	live := access.session
+	freshResolved := !access.fresh
+	defer func() {
+		if !freshResolved {
+			_ = s.finishFreshLegacyAccess(access, "")
+		}
+	}()
 	if thread != nil {
 		requestCtx, cancel := context.WithTimeout(ctx, s.cfg.RequestTimeout)
 		started := time.Now()
@@ -2182,6 +2331,11 @@ func (s *Service) interruptTurn(ctx context.Context, chatID, topicID int64, thre
 			"operation": "interrupt_turn",
 			"thread_id": threadID,
 		})
+		if err != nil && access.fresh {
+			_ = s.finishFreshLegacyAccess(access, appserver.WriterThreadUnknown)
+			freshResolved = true
+			return nil, err
+		}
 	}
 	if refreshed, err := s.refreshThreadForOperation(ctx, live, threadID, "interrupt_turn_before_stop"); err == nil && refreshed != nil {
 		thread = refreshed
@@ -2213,7 +2367,18 @@ func (s *Service) interruptTurn(ctx context.Context, chatID, topicID int64, thre
 			"thread_id": threadID,
 			"turn_id":   turnID,
 		})
+		if access.fresh {
+			_ = s.finishFreshLegacyAccess(access, appserver.WriterThreadUnknown)
+			freshResolved = true
+		}
 		return nil, err
+	}
+	if access.fresh {
+		if err := s.finishFreshLegacyAccess(access, appserver.WriterThreadActive); err != nil {
+			freshResolved = true
+			return nil, err
+		}
+		freshResolved = true
 	}
 	_ = s.markTelegramOriginExplicitInterrupt(ctx, threadID, turnID)
 	s.logAppServerCall("TurnInterrupt", started, nil, live, lifecycleFields{
@@ -2237,11 +2402,8 @@ func (s *Service) approve(ctx context.Context, requestID, decision string) (*Dir
 	if approval == nil {
 		return &DirectResponse{Text: fmt.Sprintf("Unknown approval request: %s", requestID)}, nil
 	}
-	s.mu.RLock()
-	live := s.live
-	connected := s.liveConnected
-	s.mu.RUnlock()
-	if !connected || live == nil {
+	live, liveErr := s.existingLegacyThreadSession(approval.ThreadID)
+	if liveErr != nil {
 		return &DirectResponse{Text: "Live app-server session is not ready yet. Try /repair."}, nil
 	}
 	requestCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
@@ -2456,11 +2618,8 @@ func (s *Service) respondUserInputRequest(ctx context.Context, requestID, text s
 	if approval == nil {
 		return &DirectResponse{Text: fmt.Sprintf("Unknown input request: %s", requestID)}, nil
 	}
-	s.mu.RLock()
-	live := s.live
-	connected := s.liveConnected
-	s.mu.RUnlock()
-	if !connected || live == nil {
+	live, liveErr := s.existingLegacyThreadSession(approval.ThreadID)
+	if liveErr != nil {
 		return &DirectResponse{Text: "Live app-server session is not ready yet. Try /repair."}, nil
 	}
 	requestCtx, cancel := context.WithTimeout(ctx, 10*time.Second)

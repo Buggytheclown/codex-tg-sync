@@ -722,13 +722,17 @@ func (s *Service) createThreadFromProjectPrompt(ctx context.Context, chatID, top
 	if strings.TrimSpace(prompt) == "" {
 		return &DirectResponse{Text: "First prompt is empty. Use New thread again and send a non-empty prompt."}, nil
 	}
-	s.mu.RLock()
-	live := s.live
-	connected := s.liveConnected
-	s.mu.RUnlock()
-	if !connected || live == nil {
-		return &DirectResponse{Text: "Live app-server session is not ready yet. Try /status or /repair."}, nil
+	access, accessErr := s.legacyProcessSession(ctx, "new-thread:"+randomToken())
+	if accessErr != nil {
+		return nil, accessErr
 	}
+	live := access.session
+	freshResolved := !access.fresh
+	defer func() {
+		if !freshResolved {
+			_ = s.finishFreshLegacyAccess(access, "")
+		}
+	}()
 	requestCtx, cancel := context.WithTimeout(ctx, s.cfg.RequestTimeout)
 	defer cancel()
 	started := time.Now()
@@ -738,11 +742,27 @@ func (s *Service) createThreadFromProjectPrompt(ctx context.Context, chatID, top
 		"project_name": state.ProjectName,
 	})
 	if err != nil {
+		if access.fresh {
+			_ = s.finishFreshLegacyAccess(access, appserver.WriterThreadUnknown)
+			freshResolved = true
+		}
 		return nil, err
 	}
 	thread := threadFromStartPayload(threadPayload, state)
 	if strings.TrimSpace(thread.ID) == "" {
+		if access.fresh {
+			_ = s.finishFreshLegacyAccess(access, appserver.WriterThreadUnknown)
+			freshResolved = true
+		}
 		return &DirectResponse{Text: "App Server could not create thread: response did not include thread id."}, nil
+	}
+	access, err = s.claimLegacyThread(access, thread.ID)
+	if err != nil {
+		if access.fresh {
+			_ = s.finishFreshLegacyAccess(access, appserver.WriterThreadUnknown)
+			freshResolved = true
+		}
+		return nil, err
 	}
 	if err := s.store.UpsertThread(ctx, thread); err != nil {
 		return nil, err
@@ -758,6 +778,10 @@ func (s *Service) createThreadFromProjectPrompt(ctx context.Context, chatID, top
 		"reasoning_effort": options.ReasoningEffort,
 	})
 	if err != nil {
+		if access.fresh {
+			_ = s.finishFreshLegacyAccess(access, appserver.WriterThreadUnknown)
+			freshResolved = true
+		}
 		_ = s.store.SetBinding(ctx, chatID, topicID, thread.ID, model.BindingModeBound)
 		return &DirectResponse{
 			Text:     fmt.Sprintf("Created thread %s, but could not start first turn: %v\nUse /reply %s <text> to retry.", thread.ID, err, thread.ID),
@@ -772,6 +796,13 @@ func (s *Service) createThreadFromProjectPrompt(ctx context.Context, chatID, top
 		_ = s.store.UpsertThread(ctx, thread)
 		_ = s.markTelegramOriginTurnFromTelegram(ctx, thread.ID, turnID, chatID, topicID)
 		s.ensureStartedTurnSnapshot(ctx, &thread, turnID)
+	}
+	if access.fresh {
+		if err := s.finishFreshLegacyAccess(access, appserver.WriterThreadActive); err != nil {
+			freshResolved = true
+			return nil, err
+		}
+		freshResolved = true
 	}
 	if _, refreshErr := s.refreshThreadForOperation(ctx, live, thread.ID, "refresh_new_thread_after_start"); refreshErr != nil {
 		s.logLifecycle("thread_refresh_failed", lifecycleFields{

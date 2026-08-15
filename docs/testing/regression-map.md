@@ -18,7 +18,12 @@ Primary tests:
 - `internal/appserver/writer_manager_test.go::TestWriterManagerKeepsClaimsUntilLastTerminalClosesProcess`
 - `internal/appserver/writer_manager_test.go::TestWriterManagerUnknownDispatchBlocksCloseAndReplay`
 - `internal/appserver/writer_manager_test.go::TestWriterManagerStartFailureReleasesGenerationClaims`
+- `internal/appserver/writer_manager_test.go::TestWriterManagerClaimsThreadAfterUnclaimedProcessReservation`
 - `internal/appserver/writer_manager_test.go::TestWriterManagerCloseFailureKeepsClaimsAndFailsClosed`
+- `internal/daemon/service_test.go::TestEnsureSessionsStartsOnlyPollSession`
+- `internal/daemon/service_test.go::TestBootstrapTrackedStateDoesNotResumeLegacyThreads`
+- `internal/daemon/service_test.go::TestLegacyTurnLazilyStartsWriterAndClosesAfterTerminal`
+- `internal/daemon/service_test.go::TestLegacyNewThreadClaimsReturnedIDBeforeFirstTurn`
 
 Contract notes:
 
@@ -27,6 +32,8 @@ Contract notes:
 - `unknown` dispatch is fail-closed and is never replayed automatically.
 - Different writers may own different threads concurrently, but never the same
   thread.
+- `thread/start` uses an unclaimed process reservation and claims the returned
+  durable id before the first turn.
 - `/afc off` must not restore the observer or start/resume an eager legacy
   lifecycle; explicit later legacy work may start its writer lazily.
 

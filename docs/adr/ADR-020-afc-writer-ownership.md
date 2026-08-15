@@ -23,6 +23,9 @@ must not replay the prompt or kill the process blindly.
   independently for legacy DM mutations and AFC group mutations.
 - A shared process-local thread-claim registry coordinates the two managers.
 - A writer reserves a thread before any mutating App Server call.
+- `thread/start` is the sole exception where no durable thread id exists yet:
+  the manager holds an unclaimed process reservation, then claims the returned
+  thread id before `turn/start` or any other mutation of that thread.
 - A claim belongs to a writer process generation and remains until that process
   closes successfully. Turn terminal clears active work but does not directly
   release the claim.
@@ -36,6 +39,8 @@ must not replay the prompt or kill the process blindly.
 - Different writer processes may execute different threads concurrently.
 - Read-only polling uses a separate long-lived client and `thread/read`; polling
   does not acquire writer claims and must not call `thread/resume`.
+- Daemon startup, reconciliation, repair, and observer bootstrap start or repair
+  only the read-only poll client. They never start the legacy writer.
 
 ## AFC and legacy consequences
 

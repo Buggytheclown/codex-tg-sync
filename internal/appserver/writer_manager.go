@@ -118,6 +118,8 @@ type WriterLease[T WriterProcess] struct {
 	ThreadID   string
 	Generation uint64
 	Process    T
+
+	reservationID string
 }
 
 type WriterSnapshot struct {
@@ -136,16 +138,17 @@ type WriterSnapshot struct {
 type WriterManager[T WriterProcess] struct {
 	mu sync.Mutex
 
-	name       string
-	registry   *ThreadClaimRegistry
-	factory    WriterFactory[T]
-	state      WriterState
-	accepting  bool
-	generation uint64
-	process    T
-	startDone  chan struct{}
-	startErr   error
-	threads    map[string]WriterThreadState
+	name         string
+	registry     *ThreadClaimRegistry
+	factory      WriterFactory[T]
+	state        WriterState
+	accepting    bool
+	generation   uint64
+	process      T
+	startDone    chan struct{}
+	startErr     error
+	threads      map[string]WriterThreadState
+	leaseThreads map[string]string
 }
 
 func NewWriterManager[T WriterProcess](name string, registry *ThreadClaimRegistry, factory WriterFactory[T]) *WriterManager[T] {
@@ -153,21 +156,40 @@ func NewWriterManager[T WriterProcess](name string, registry *ThreadClaimRegistr
 		registry = NewThreadClaimRegistry()
 	}
 	return &WriterManager[T]{
-		name:      strings.TrimSpace(name),
-		registry:  registry,
-		factory:   factory,
-		state:     WriterStopped,
-		accepting: true,
-		threads:   map[string]WriterThreadState{},
+		name:         strings.TrimSpace(name),
+		registry:     registry,
+		factory:      factory,
+		state:        WriterStopped,
+		accepting:    true,
+		threads:      map[string]WriterThreadState{},
+		leaseThreads: map[string]string{},
 	}
 }
 
 func (m *WriterManager[T]) Reserve(ctx context.Context, threadID string) (WriterLease[T], error) {
-	var zero WriterLease[T]
 	threadID = strings.TrimSpace(threadID)
 	if threadID == "" {
+		var zero WriterLease[T]
 		return zero, errors.New("thread id is required")
 	}
+	return m.reserve(ctx, "thread:"+threadID, threadID)
+}
+
+// ReserveProcess starts or joins the lazy writer without claiming a Codex
+// thread. It is used only for thread/start, where the durable thread id does not
+// exist until App Server returns it. ClaimThread must run before the first
+// mutation of the created thread.
+func (m *WriterManager[T]) ReserveProcess(ctx context.Context, reservationID string) (WriterLease[T], error) {
+	reservationID = strings.TrimSpace(reservationID)
+	if reservationID == "" {
+		var zero WriterLease[T]
+		return zero, errors.New("process reservation id is required")
+	}
+	return m.reserve(ctx, "operation:"+reservationID, "")
+}
+
+func (m *WriterManager[T]) reserve(ctx context.Context, reservationID, threadID string) (WriterLease[T], error) {
+	var zero WriterLease[T]
 	if err := ctx.Err(); err != nil {
 		return zero, err
 	}
@@ -181,7 +203,7 @@ func (m *WriterManager[T]) Reserve(ctx context.Context, threadID string) (Writer
 		m.mu.Unlock()
 		return zero, ErrWriterClosing
 	}
-	if _, exists := m.threads[threadID]; exists {
+	if _, exists := m.threads[reservationID]; exists || (threadID != "" && m.hasThreadLocked(threadID, "")) {
 		m.mu.Unlock()
 		return zero, ErrWriterThreadBusy
 	}
@@ -189,13 +211,17 @@ func (m *WriterManager[T]) Reserve(ctx context.Context, threadID string) (Writer
 	if m.state == WriterStopped {
 		m.generation++
 		claim := ThreadClaim{Writer: m.name, Generation: m.generation}
-		if err := m.registry.Acquire(threadID, claim); err != nil {
-			m.mu.Unlock()
-			return zero, err
+		if threadID != "" {
+			if err := m.registry.Acquire(threadID, claim); err != nil {
+				m.mu.Unlock()
+				return zero, err
+			}
 		}
 		process, err := m.factory()
 		if err != nil {
-			m.registry.Release(threadID, claim)
+			if threadID != "" {
+				m.registry.Release(threadID, claim)
+			}
 			m.mu.Unlock()
 			return zero, err
 		}
@@ -203,7 +229,8 @@ func (m *WriterManager[T]) Reserve(ctx context.Context, threadID string) (Writer
 		m.state = WriterStarting
 		m.startDone = make(chan struct{})
 		m.startErr = nil
-		m.threads[threadID] = WriterThreadStarting
+		m.threads[reservationID] = WriterThreadStarting
+		m.leaseThreads[reservationID] = threadID
 		generation := m.generation
 		m.mu.Unlock()
 
@@ -215,6 +242,7 @@ func (m *WriterManager[T]) Reserve(ctx context.Context, threadID string) (Writer
 			if m.generation == generation && m.state == WriterStarting {
 				m.startErr = combined
 				m.threads = map[string]WriterThreadState{}
+				m.leaseThreads = map[string]string{}
 				if closeErr == nil {
 					var empty T
 					m.process = empty
@@ -238,18 +266,21 @@ func (m *WriterManager[T]) Reserve(ctx context.Context, threadID string) (Writer
 		}
 		m.state = WriterRunning
 		close(m.startDone)
-		lease := WriterLease[T]{Writer: m.name, ThreadID: threadID, Generation: generation, Process: process}
+		lease := m.leaseLocked(reservationID, process)
 		m.mu.Unlock()
 		return lease, nil
 	}
 
 	if m.state == WriterStarting {
 		claim := ThreadClaim{Writer: m.name, Generation: m.generation}
-		if err := m.registry.Acquire(threadID, claim); err != nil {
-			m.mu.Unlock()
-			return zero, err
+		if threadID != "" {
+			if err := m.registry.Acquire(threadID, claim); err != nil {
+				m.mu.Unlock()
+				return zero, err
+			}
 		}
-		m.threads[threadID] = WriterThreadStarting
+		m.threads[reservationID] = WriterThreadStarting
+		m.leaseThreads[reservationID] = threadID
 		generation := m.generation
 		done := m.startDone
 		m.mu.Unlock()
@@ -272,17 +303,47 @@ func (m *WriterManager[T]) Reserve(ctx context.Context, threadID string) (Writer
 		if m.state != WriterRunning {
 			return zero, ErrWriterClosing
 		}
-		return WriterLease[T]{Writer: m.name, ThreadID: threadID, Generation: generation, Process: m.process}, nil
+		return m.leaseLocked(reservationID, m.process), nil
 	}
 
 	claim := ThreadClaim{Writer: m.name, Generation: m.generation}
-	if err := m.registry.Acquire(threadID, claim); err != nil {
-		m.mu.Unlock()
-		return zero, err
+	if threadID != "" {
+		if err := m.registry.Acquire(threadID, claim); err != nil {
+			m.mu.Unlock()
+			return zero, err
+		}
 	}
-	m.threads[threadID] = WriterThreadStarting
-	lease := WriterLease[T]{Writer: m.name, ThreadID: threadID, Generation: m.generation, Process: m.process}
+	m.threads[reservationID] = WriterThreadStarting
+	m.leaseThreads[reservationID] = threadID
+	lease := m.leaseLocked(reservationID, m.process)
 	m.mu.Unlock()
+	return lease, nil
+}
+
+func (m *WriterManager[T]) ClaimThread(lease WriterLease[T], threadID string) (WriterLease[T], error) {
+	threadID = strings.TrimSpace(threadID)
+	if threadID == "" {
+		return lease, errors.New("thread id is required")
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if !m.validLeaseLocked(lease) {
+		return lease, ErrInvalidLease
+	}
+	currentThreadID := m.leaseThreads[lease.reservationID]
+	if currentThreadID == threadID {
+		lease.ThreadID = threadID
+		return lease, nil
+	}
+	if currentThreadID != "" || m.hasThreadLocked(threadID, lease.reservationID) {
+		return lease, ErrWriterThreadBusy
+	}
+	claim := ThreadClaim{Writer: m.name, Generation: m.generation}
+	if err := m.registry.Acquire(threadID, claim); err != nil {
+		return lease, err
+	}
+	m.leaseThreads[lease.reservationID] = threadID
+	lease.ThreadID = threadID
 	return lease, nil
 }
 
@@ -297,20 +358,21 @@ func (m *WriterManager[T]) MarkUnknown(lease WriterLease[T]) error {
 func (m *WriterManager[T]) transition(lease WriterLease[T], from, to WriterThreadState) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if !m.validLeaseLocked(lease) || m.threads[lease.ThreadID] != from {
+	if !m.validLeaseLocked(lease) || m.threads[lease.reservationID] != from {
 		return ErrInvalidLease
 	}
-	m.threads[lease.ThreadID] = to
+	m.threads[lease.reservationID] = to
 	return nil
 }
 
 func (m *WriterManager[T]) Abort(lease WriterLease[T]) error {
 	m.mu.Lock()
-	if !m.validLeaseLocked(lease) || m.threads[lease.ThreadID] != WriterThreadStarting {
+	if !m.validLeaseLocked(lease) || m.threads[lease.reservationID] != WriterThreadStarting {
 		m.mu.Unlock()
 		return ErrInvalidLease
 	}
-	delete(m.threads, lease.ThreadID)
+	delete(m.threads, lease.reservationID)
+	delete(m.leaseThreads, lease.reservationID)
 	return m.closeIfIdleLocked()
 }
 
@@ -320,11 +382,12 @@ func (m *WriterManager[T]) MarkTerminal(lease WriterLease[T]) error {
 		m.mu.Unlock()
 		return ErrInvalidLease
 	}
-	if _, ok := m.threads[lease.ThreadID]; !ok {
+	if _, ok := m.threads[lease.reservationID]; !ok {
 		m.mu.Unlock()
 		return ErrInvalidLease
 	}
-	delete(m.threads, lease.ThreadID)
+	delete(m.threads, lease.reservationID)
+	delete(m.leaseThreads, lease.reservationID)
 	return m.closeIfIdleLocked()
 }
 
@@ -378,7 +441,26 @@ func (m *WriterManager[T]) Snapshot() WriterSnapshot {
 }
 
 func (m *WriterManager[T]) validLeaseLocked(lease WriterLease[T]) bool {
-	return lease.Writer == m.name && lease.Generation == m.generation && strings.TrimSpace(lease.ThreadID) != ""
+	return lease.Writer == m.name && lease.Generation == m.generation && lease.reservationID != ""
+}
+
+func (m *WriterManager[T]) hasThreadLocked(threadID, exceptReservationID string) bool {
+	for reservationID, currentThreadID := range m.leaseThreads {
+		if reservationID != exceptReservationID && currentThreadID == threadID {
+			return true
+		}
+	}
+	return false
+}
+
+func (m *WriterManager[T]) leaseLocked(reservationID string, process T) WriterLease[T] {
+	return WriterLease[T]{
+		Writer:        m.name,
+		ThreadID:      m.leaseThreads[reservationID],
+		Generation:    m.generation,
+		Process:       process,
+		reservationID: reservationID,
+	}
 }
 
 func (m *WriterManager[T]) closeIfIdleLocked() error {
