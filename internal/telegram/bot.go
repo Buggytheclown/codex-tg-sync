@@ -288,7 +288,7 @@ func (b *Bot) handleMessage(ctx context.Context, message Message) error {
 	if message.ReplyToMessage != nil {
 		replyTo = message.ReplyToMessage.MessageID
 	}
-	response, err := b.service.HandleMessage(ctx, message.Chat.ID, message.MessageThreadID, message.From.ID, message.Text, replyTo)
+	response, err := b.service.HandleMessageWithID(ctx, message.Chat.ID, message.MessageThreadID, message.MessageID, message.From.ID, message.Text, replyTo)
 	if err != nil {
 		return b.sendFailureMessage(ctx, message.Chat.ID, message.MessageThreadID, err)
 	}

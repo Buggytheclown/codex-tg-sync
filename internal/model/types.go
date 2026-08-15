@@ -19,6 +19,16 @@ const (
 	AFCTopicConnected = "connected"
 	AFCTopicCleanup   = "cleanup"
 
+	AFCTurnStarting = "starting"
+	AFCTurnActive   = "active"
+	AFCTurnTerminal = "terminal"
+	AFCTurnUnknown  = "unknown"
+
+	AFCReceiptAccepted   = "accepted"
+	AFCReceiptDispatched = "dispatched"
+	AFCReceiptRejected   = "rejected"
+	AFCReceiptUnknown    = "unknown"
+
 	BindingModeBound    = "bound"
 	BindingModeObserver = "observer"
 
@@ -65,18 +75,32 @@ type AFCState struct {
 }
 
 type AFCTopic struct {
-	SessionID       string
-	ChatID          int64
-	TopicID         int64
-	ThreadID        string
-	Rank            int
-	Title           string
-	TelegramState   string
-	StatusMessageID int64
-	LastRenderFP    string
-	LastFinalFP     string
-	CreatedAt       TimeString
-	UpdatedAt       TimeString
+	SessionID        string
+	ChatID           int64
+	TopicID          int64
+	ThreadID         string
+	Rank             int
+	Title            string
+	TelegramState    string
+	StatusMessageID  int64
+	LastRenderFP     string
+	LastFinalFP      string
+	ActiveTurnID     string
+	ActiveTurnState  string
+	WriterGeneration uint64
+	CreatedAt        TimeString
+	UpdatedAt        TimeString
+}
+
+type AFCMessageReceipt struct {
+	ChatID    int64
+	TopicID   int64
+	MessageID int64
+	SessionID string
+	ThreadID  string
+	State     string
+	CreatedAt TimeString
+	UpdatedAt TimeString
 }
 
 type TimeString string

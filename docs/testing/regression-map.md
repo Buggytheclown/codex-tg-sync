@@ -491,6 +491,32 @@ Contract notes:
 - Logical off precedes cleanup, and off never restores the legacy observer or writer lifecycle.
 - Active restart recovery remains passive; interrupted activation becomes cleanup-only.
 
+## AFC Concurrent Managed Turns
+
+ADR: `docs/adr/ADR-023-afc-concurrent-turn-ownership.md`
+
+Primary tests:
+
+- `internal/appserver/writer_manager_test.go::TestWriterManagerForceCloseDropsUnfinishedWorkOnlyAfterProcessClose`
+- `internal/storage/store_afc_test.go::TestAFCMessageReceiptIsUniqueAndCarriesNoPromptBody`
+- `internal/storage/store_afc_test.go::TestAFCDispatchStateUpdateIsGenerationGuarded`
+- `internal/storage/store_afc_test.go::TestRecoverAFCWriterStateMarksUnfinishedInputUnknownWithoutReplay`
+- `internal/daemon/afc_test.go::TestAFCConcurrentTopicsShareWriterAndDuplicateDoesNotReplay`
+- `internal/daemon/afc_test.go::TestAFCLegacyClaimConflictRejectsBeforeMutation`
+- `internal/daemon/afc_test.go::TestAFCOwnershipBlocksLaterLegacyLaunchBeforeMutation`
+- `internal/daemon/afc_test.go::TestAFCAmbiguousTurnStartIsUnknownAndNeverReplayed`
+- `internal/daemon/afc_test.go::TestAFCTerminalEventsRoutePerTopicAndCloseAfterLastTurn`
+- `internal/daemon/afc_test.go::TestAFCPollTerminalEvidenceClosesWriterWhenEventWasMissed`
+
+Contract notes:
+
+- Durable receipts are inserted before mutation and contain no prompt body.
+- Duplicate or unknown source messages are never replayed.
+- Different topic threads may overlap in one AFC process; one topic has at most one unfinished turn.
+- Legacy and AFC share process-level thread claims and reject either conflict before mutation.
+- Session/thread/turn/generation guards prevent stale events from crossing topics.
+- The process remains open until the last terminal lease and restart creates no writer.
+
 ## Baseline Commands
 
 Run before commit or publish:

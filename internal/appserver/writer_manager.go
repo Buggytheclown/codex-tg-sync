@@ -355,6 +355,20 @@ func (m *WriterManager[T]) MarkUnknown(lease WriterLease[T]) error {
 	return m.transition(lease, WriterThreadStarting, WriterThreadUnknown)
 }
 
+func (m *WriterManager[T]) MarkUncertain(lease WriterLease[T]) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if !m.validLeaseLocked(lease) {
+		return ErrInvalidLease
+	}
+	state := m.threads[lease.reservationID]
+	if state != WriterThreadStarting && state != WriterThreadActive {
+		return ErrInvalidLease
+	}
+	m.threads[lease.reservationID] = WriterThreadUnknown
+	return nil
+}
+
 func (m *WriterManager[T]) transition(lease WriterLease[T], from, to WriterThreadState) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -421,6 +435,45 @@ func (m *WriterManager[T]) RetryClose() error {
 	generation := m.generation
 	m.mu.Unlock()
 	return m.finishClose(process, generation)
+}
+
+// ForceClose is the process-shutdown escape hatch. It never claims that
+// unfinished operations completed; it only makes the process generation
+// terminal and releases its claims after Close succeeds.
+func (m *WriterManager[T]) ForceClose() error {
+	m.mu.Lock()
+	m.accepting = false
+	if m.state == WriterStopped {
+		m.threads = map[string]WriterThreadState{}
+		m.leaseThreads = map[string]string{}
+		m.mu.Unlock()
+		return nil
+	}
+	if m.state == WriterStarting {
+		m.mu.Unlock()
+		return ErrWriterBusy
+	}
+	process := m.process
+	generation := m.generation
+	m.state = WriterClosing
+	m.mu.Unlock()
+	if err := process.Close(); err != nil {
+		return err
+	}
+	claim := ThreadClaim{Writer: m.name, Generation: generation}
+	m.mu.Lock()
+	if m.generation == generation && m.state == WriterClosing {
+		var empty T
+		m.process = empty
+		m.state = WriterStopped
+		m.startDone = nil
+		m.startErr = nil
+		m.threads = map[string]WriterThreadState{}
+		m.leaseThreads = map[string]string{}
+	}
+	m.mu.Unlock()
+	m.registry.ReleaseWriter(claim)
+	return nil
 }
 
 func (m *WriterManager[T]) Snapshot() WriterSnapshot {

@@ -93,3 +93,111 @@ func TestRecoverAFCStateMakesInterruptedActivationCleanupOnly(t *testing.T) {
 		t.Fatalf("topics = %#v", topics)
 	}
 }
+
+func TestAFCMessageReceiptIsUniqueAndCarriesNoPromptBody(t *testing.T) {
+	t.Parallel()
+	store := openTestStore(t)
+	ctx := context.Background()
+	if err := store.BeginAFCActivation(ctx, "session-1", -1001); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.UpsertAFCTopic(ctx, model.AFCTopic{SessionID: "session-1", ChatID: -1001, TopicID: 11, ThreadID: "thread-1", TelegramState: model.AFCTopicConnected}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.FinishAFCActivation(ctx, "session-1", `{}`, true); err != nil {
+		t.Fatal(err)
+	}
+
+	receipt, created, err := store.AcceptAFCMessage(ctx, -1001, 11, 501)
+	if err != nil || !created || receipt.State != model.AFCReceiptAccepted || receipt.ThreadID != "thread-1" {
+		t.Fatalf("receipt=%#v created=%v err=%v", receipt, created, err)
+	}
+	duplicate, created, err := store.AcceptAFCMessage(ctx, -1001, 11, 501)
+	if err != nil || created || duplicate.State != model.AFCReceiptAccepted {
+		t.Fatalf("duplicate=%#v created=%v err=%v", duplicate, created, err)
+	}
+	var bodyColumns int
+	rows, err := store.db.QueryContext(ctx, `PRAGMA table_info(afc_message_receipts)`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var cid, notNull, pk int
+		var name, kind string
+		var defaultValue any
+		if err := rows.Scan(&cid, &name, &kind, &notNull, &defaultValue, &pk); err != nil {
+			t.Fatal(err)
+		}
+		if name == "text" || name == "body" || name == "prompt" {
+			bodyColumns++
+		}
+	}
+	if bodyColumns != 0 {
+		t.Fatalf("receipt schema stores prompt body in %d column(s)", bodyColumns)
+	}
+}
+
+func TestAFCDispatchStateUpdateIsGenerationGuarded(t *testing.T) {
+	t.Parallel()
+	store := openTestStore(t)
+	ctx := context.Background()
+	if err := store.BeginAFCActivation(ctx, "session-1", -1001); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.UpsertAFCTopic(ctx, model.AFCTopic{SessionID: "session-1", ChatID: -1001, TopicID: 11, ThreadID: "thread-1", TelegramState: model.AFCTopicConnected}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.FinishAFCActivation(ctx, "session-1", `{}`, true); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := store.AcceptAFCMessage(ctx, -1001, 11, 501); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.MarkAFCDispatched(ctx, "session-1", 11, 501, "turn-1", 7); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.MarkAFCTerminal(ctx, "session-1", "thread-1", "turn-1", 6); err == nil {
+		t.Fatal("stale generation marked current turn terminal")
+	}
+	if err := store.MarkAFCTerminal(ctx, "session-1", "thread-1", "turn-1", 7); err != nil {
+		t.Fatal(err)
+	}
+	topic, err := store.GetActiveAFCTopic(ctx, -1001, 11)
+	if err != nil || topic == nil || topic.ActiveTurnState != model.AFCTurnTerminal {
+		t.Fatalf("topic=%#v err=%v", topic, err)
+	}
+}
+
+func TestRecoverAFCWriterStateMarksUnfinishedInputUnknownWithoutReplay(t *testing.T) {
+	t.Parallel()
+	store := openTestStore(t)
+	ctx := context.Background()
+	if err := store.BeginAFCActivation(ctx, "session-1", -1001); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.UpsertAFCTopic(ctx, model.AFCTopic{SessionID: "session-1", ChatID: -1001, TopicID: 11, ThreadID: "thread-1", TelegramState: model.AFCTopicConnected}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.FinishAFCActivation(ctx, "session-1", `{}`, true); err != nil {
+		t.Fatal(err)
+	}
+	receipt, _, err := store.AcceptAFCMessage(ctx, -1001, 11, 501)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.MarkAFCStarting(ctx, receipt, 7); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.RecoverAFCWriterState(ctx); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := store.GetAFCReceipt(ctx, 11, 501)
+	if err != nil || loaded == nil || loaded.State != model.AFCReceiptUnknown {
+		t.Fatalf("receipt=%#v err=%v", loaded, err)
+	}
+	topic, err := store.GetActiveAFCTopic(ctx, -1001, 11)
+	if err != nil || topic == nil || topic.ActiveTurnState != model.AFCTurnUnknown {
+		t.Fatalf("topic=%#v err=%v", topic, err)
+	}
+}

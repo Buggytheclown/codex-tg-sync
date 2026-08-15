@@ -262,3 +262,28 @@ func TestWriterManagerCloseFailureKeepsClaimsAndFailsClosed(t *testing.T) {
 		t.Fatalf("Reserve while close unresolved = %v, want ErrWriterClosing", err)
 	}
 }
+
+func TestWriterManagerForceCloseDropsUnfinishedWorkOnlyAfterProcessClose(t *testing.T) {
+	registry := NewThreadClaimRegistry()
+	process := &fakeWriterProcess{}
+	manager := NewWriterManager("afc", registry, func() (*fakeWriterProcess, error) { return process, nil })
+	lease, err := manager.Reserve(context.Background(), "thread-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.MarkActive(lease); err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.ForceClose(); err != nil {
+		t.Fatal(err)
+	}
+	if snapshot := manager.Snapshot(); snapshot.State != WriterStopped || snapshot.Active != 0 || snapshot.Accepting {
+		t.Fatalf("snapshot = %#v", snapshot)
+	}
+	if _, ok := registry.Lookup("thread-a"); ok {
+		t.Fatal("claim survived successful forced process close")
+	}
+	if _, closes := process.calls(); closes != 1 {
+		t.Fatalf("close calls = %d", closes)
+	}
+}

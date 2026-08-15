@@ -65,38 +65,43 @@ type Service struct {
 	pollFactory  func() Session
 	threadClaims *appserver.ThreadClaimRegistry
 	legacyWriter *appserver.WriterManager[Session]
+	afcWriter    *appserver.WriterManager[Session]
 
-	sessionMu      sync.Mutex
-	legacyMu       sync.Mutex
-	mu             sync.RWMutex
-	live           Session
-	poll           Session
-	liveEvents     <-chan control.Event
-	liveCancel     context.CancelFunc
-	runCtx         context.Context
-	legacyLeases   map[string]appserver.WriterLease[Session]
-	liveGeneration uint64
-	pollGeneration uint64
-	cancel         context.CancelFunc
-	wg             sync.WaitGroup
-	panelMu        sync.Mutex
-	afcMu          sync.Mutex
-	afcForum       AFCForum
-	sender         Sender
-	logger         *log.Logger
-	diagnosticMu   sync.Mutex
-	diagnosticWin  time.Time
-	diagnosticN    int
-	diagnosticBy   map[string]int
-	diagnosticLast map[string]time.Time
-	now            func() time.Time
-	started        bool
-	startedAt      time.Time
-	ready          bool
-	phase          string
-	lastError      string
-	liveConnected  bool
-	pollConnected  bool
+	sessionMu          sync.Mutex
+	legacyMu           sync.Mutex
+	mu                 sync.RWMutex
+	live               Session
+	poll               Session
+	liveEvents         <-chan control.Event
+	liveCancel         context.CancelFunc
+	runCtx             context.Context
+	legacyLeases       map[string]appserver.WriterLease[Session]
+	liveGeneration     uint64
+	pollGeneration     uint64
+	cancel             context.CancelFunc
+	wg                 sync.WaitGroup
+	panelMu            sync.Mutex
+	afcMu              sync.Mutex
+	afcForum           AFCForum
+	afcLeases          map[string]appserver.WriterLease[Session]
+	afcEventProcess    Session
+	afcEventGeneration uint64
+	afcEventCancel     context.CancelFunc
+	sender             Sender
+	logger             *log.Logger
+	diagnosticMu       sync.Mutex
+	diagnosticWin      time.Time
+	diagnosticN        int
+	diagnosticBy       map[string]int
+	diagnosticLast     map[string]time.Time
+	now                func() time.Time
+	started            bool
+	startedAt          time.Time
+	ready              bool
+	phase              string
+	lastError          string
+	liveConnected      bool
+	pollConnected      bool
 }
 
 const (
@@ -141,7 +146,11 @@ func New(cfg config.Config) (*Service, error) {
 	service.legacyWriter = appserver.NewWriterManager("legacy", service.threadClaims, func() (Session, error) {
 		return service.liveFactory(), nil
 	})
+	service.afcWriter = appserver.NewWriterManager("afc", service.threadClaims, func() (Session, error) {
+		return service.liveFactory(), nil
+	})
 	service.legacyLeases = map[string]appserver.WriterLease[Session]{}
+	service.afcLeases = map[string]appserver.WriterLease[Session]{}
 	service.poll = service.pollFactory()
 	return service, nil
 }
@@ -157,6 +166,17 @@ func (s *Service) Close() error {
 		cancel()
 	}
 	s.wg.Wait()
+	s.afcMu.Lock()
+	afcEventCancel := s.afcEventCancel
+	s.afcEventCancel = nil
+	s.afcMu.Unlock()
+	if afcEventCancel != nil {
+		afcEventCancel()
+	}
+	var afcCloseErr error
+	if s.afcWriter != nil {
+		afcCloseErr = s.afcWriter.ForceClose()
+	}
 	s.sessionMu.Lock()
 	s.mu.Lock()
 	live := s.live
@@ -182,7 +202,7 @@ func (s *Service) Close() error {
 	if poll != nil {
 		_ = poll.Close()
 	}
-	return s.store.Close()
+	return errors.Join(afcCloseErr, s.store.Close())
 }
 
 func (s *Service) SetSender(sender Sender) {
@@ -220,6 +240,7 @@ func (s *Service) Start(ctx context.Context) error {
 	_ = s.store.SetState(runCtx, "daemon.started_at", s.startedAt.Format(time.RFC3339Nano))
 	_ = s.store.SetState(runCtx, "daemon.last_error", "")
 	_ = s.store.RecoverAFCState(runCtx)
+	_ = s.store.RecoverAFCWriterState(runCtx)
 	s.cleanupTempArtifacts(runCtx)
 
 	s.spawn(runCtx, s.ensureSessions)
@@ -555,11 +576,15 @@ func (s *Service) StatusSnapshot(ctx context.Context, chatID, topicID int64) (st
 }
 
 func (s *Service) HandleMessage(ctx context.Context, chatID, topicID, userID int64, text string, replyToMessageID int64) (*DirectResponse, error) {
+	return s.HandleMessageWithID(ctx, chatID, topicID, 0, userID, text, replyToMessageID)
+}
+
+func (s *Service) HandleMessageWithID(ctx context.Context, chatID, topicID, messageID, userID int64, text string, replyToMessageID int64) (*DirectResponse, error) {
 	if !s.IsAllowed(userID, chatID) {
 		return nil, nil
 	}
 	if s.isAFCGroup(chatID) {
-		return s.handleAFCMessage(ctx, topicID, userID, text)
+		return s.handleAFCMessage(ctx, topicID, messageID, userID, text)
 	}
 	text = strings.TrimSpace(text)
 	if text == "" {

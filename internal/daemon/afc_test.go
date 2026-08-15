@@ -3,9 +3,11 @@ package daemon
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
+	"github.com/mideco-tech/codex-tg/internal/appserver"
 	"github.com/mideco-tech/codex-tg/internal/model"
 )
 
@@ -29,6 +31,13 @@ type fakeAFCEdit struct {
 	topicID, messageID int64
 	text               string
 }
+
+type afcWriterSession struct {
+	*stubSession
+	events chan appserver.Event
+}
+
+func (s *afcWriterSession) Subscribe() <-chan appserver.Event { return s.events }
 
 func (f *fakeAFCForum) ValidateAFCGroup(context.Context, int64) error { return f.validateErr }
 func (f *fakeAFCForum) CreateAFCTopic(_ context.Context, title string) (int64, error) {
@@ -209,4 +218,201 @@ func TestAFCOffMarksOffBeforeCleanupAndDoesNotRestoreLegacy(t *testing.T) {
 	if service.legacyWriter.Snapshot().State != "stopped" {
 		t.Fatalf("legacy writer restarted: %#v", service.legacyWriter.Snapshot())
 	}
+}
+
+func TestAFCConcurrentTopicsShareWriterAndDuplicateDoesNotReplay(t *testing.T) {
+	service := activeAFCService(t)
+	writer := &afcWriterSession{stubSession: &stubSession{}, events: make(chan appserver.Event, 8)}
+	service.liveFactory = func() Session { return writer }
+	ctx := context.Background()
+
+	first, err := service.HandleMessageWithID(ctx, -1001, 11, 501, 123456789, "first prompt", 0)
+	if err != nil || first == nil || !strings.Contains(first.Text, "started") {
+		t.Fatalf("first=%#v err=%v", first, err)
+	}
+	duplicate, err := service.HandleMessageWithID(ctx, -1001, 11, 501, 123456789, "must not replay", 0)
+	if err != nil || duplicate == nil || !strings.Contains(duplicate.Text, "already dispatched") {
+		t.Fatalf("duplicate=%#v err=%v", duplicate, err)
+	}
+	sameTopic, err := service.HandleMessageWithID(ctx, -1001, 11, 502, 123456789, "second same topic", 0)
+	if err != nil || sameTopic == nil || !strings.Contains(sameTopic.Text, "already active") {
+		t.Fatalf("sameTopic=%#v err=%v", sameTopic, err)
+	}
+	second, err := service.HandleMessageWithID(ctx, -1001, 12, 601, 123456789, "parallel prompt", 0)
+	if err != nil || second == nil || !strings.Contains(second.Text, "started") {
+		t.Fatalf("second=%#v err=%v", second, err)
+	}
+
+	if writer.startCalls != 1 {
+		t.Fatalf("writer starts=%d, want one shared process", writer.startCalls)
+	}
+	if len(writer.threadResumeCalls) != 2 || len(writer.turnStartCalls) != 2 {
+		t.Fatalf("resume=%#v starts=%#v", writer.threadResumeCalls, writer.turnStartCalls)
+	}
+	if writer.turnStartCalls[0].message != "first prompt" || writer.turnStartCalls[1].message != "parallel prompt" {
+		t.Fatalf("prompts=%#v", writer.turnStartCalls)
+	}
+	snapshot := service.afcWriter.Snapshot()
+	if snapshot.Active != 2 || snapshot.Generation == 0 {
+		t.Fatalf("writer snapshot=%#v", snapshot)
+	}
+}
+
+func TestAFCLegacyClaimConflictRejectsBeforeMutation(t *testing.T) {
+	service := activeAFCService(t)
+	legacy := &stubSession{}
+	service.liveFactory = func() Session { return legacy }
+	lease, err := service.legacyWriter.Reserve(context.Background(), "thread-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := service.legacyWriter.MarkActive(lease); err != nil {
+		t.Fatal(err)
+	}
+	response, err := service.HandleMessageWithID(context.Background(), -1001, 11, 501, 123456789, "blocked", 0)
+	if err != nil || response == nil || !strings.Contains(response.Text, "owned by legacy") {
+		t.Fatalf("response=%#v err=%v", response, err)
+	}
+	if len(legacy.threadResumeCalls) != 0 || len(legacy.turnStartCalls) != 0 {
+		t.Fatalf("mutation occurred: %#v %#v", legacy.threadResumeCalls, legacy.turnStartCalls)
+	}
+	if err := service.legacyWriter.MarkTerminal(lease); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestAFCOwnershipBlocksLaterLegacyLaunchBeforeMutation(t *testing.T) {
+	service := activeAFCService(t)
+	writer := &stubSession{}
+	service.liveFactory = func() Session { return writer }
+	ctx := context.Background()
+	if _, err := service.HandleMessageWithID(ctx, -1001, 11, 501, 123456789, "AFC owns this", 0); err != nil {
+		t.Fatal(err)
+	}
+	beforeResume, beforeStart := len(writer.threadResumeCalls), len(writer.turnStartCalls)
+	if _, err := service.sendInputToThreadTurn(ctx, 123456789, 0, "thread-1", "", "legacy must fail", ""); !errors.Is(err, appserver.ErrThreadClaimed) {
+		t.Fatalf("legacy error=%v, want ErrThreadClaimed", err)
+	}
+	if len(writer.threadResumeCalls) != beforeResume || len(writer.turnStartCalls) != beforeStart {
+		t.Fatalf("legacy mutated AFC process: resume=%#v starts=%#v", writer.threadResumeCalls, writer.turnStartCalls)
+	}
+}
+
+func TestAFCAmbiguousTurnStartIsUnknownAndNeverReplayed(t *testing.T) {
+	service := activeAFCService(t)
+	writer := &stubSession{turnStartErr: errors.New("request timeout for turn/start")}
+	service.liveFactory = func() Session { return writer }
+	ctx := context.Background()
+	response, err := service.HandleMessageWithID(ctx, -1001, 11, 501, 123456789, "once", 0)
+	if err != nil || response == nil || !strings.Contains(response.Text, "unknown") {
+		t.Fatalf("response=%#v err=%v", response, err)
+	}
+	response, err = service.HandleMessageWithID(ctx, -1001, 11, 501, 123456789, "replay", 0)
+	if err != nil || response == nil || !strings.Contains(response.Text, "unknown") {
+		t.Fatalf("duplicate=%#v err=%v", response, err)
+	}
+	if len(writer.turnStartCalls) != 0 {
+		t.Fatalf("stub records successful calls only, got %#v", writer.turnStartCalls)
+	}
+	if service.afcWriter.Snapshot().Unknown != 1 {
+		t.Fatalf("writer=%#v", service.afcWriter.Snapshot())
+	}
+}
+
+func TestAFCTerminalEventsRoutePerTopicAndCloseAfterLastTurn(t *testing.T) {
+	service := activeAFCService(t)
+	writer := &afcWriterSession{stubSession: &stubSession{threadReads: map[string]map[string]any{
+		"thread-1": afcCompletedPayload("thread-1", "started-turn", "done one"),
+		"thread-2": afcCompletedPayload("thread-2", "started-turn", "done two"),
+	}}, events: make(chan appserver.Event, 8)}
+	service.liveFactory = func() Session { return writer }
+	forum := &fakeAFCForum{}
+	service.SetAFCForum(forum)
+	ctx := context.Background()
+	if _, err := service.HandleMessageWithID(ctx, -1001, 11, 501, 123456789, "one", 0); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.HandleMessageWithID(ctx, -1001, 12, 601, 123456789, "two", 0); err != nil {
+		t.Fatal(err)
+	}
+	generation := service.afcWriter.Snapshot().Generation
+	eventOne := appserver.Event{Method: "turn/completed", Params: map[string]any{"threadId": "thread-1", "turnId": "started-turn"}}
+	service.handleAFCWriterEvent(ctx, writer, eventOne, generation+1)
+	if len(forum.sends) != 0 {
+		t.Fatalf("stale generation routed sends=%#v", forum.sends)
+	}
+	service.handleAFCWriterEvent(ctx, writer, eventOne, generation)
+	if service.afcWriter.Snapshot().Active != 1 || writer.closeCalls != 0 {
+		t.Fatalf("after first: writer=%#v closes=%d", service.afcWriter.Snapshot(), writer.closeCalls)
+	}
+	for _, send := range forum.sends {
+		if send.topicID != 11 {
+			t.Fatalf("first event crossed topic: %#v", forum.sends)
+		}
+	}
+	eventTwo := appserver.Event{Method: "turn/completed", Params: map[string]any{"threadId": "thread-2", "turnId": "started-turn"}}
+	service.handleAFCWriterEvent(ctx, writer, eventTwo, generation)
+	if service.afcWriter.Snapshot().State != appserver.WriterStopped || writer.closeCalls != 1 {
+		t.Fatalf("after last: writer=%#v closes=%d", service.afcWriter.Snapshot(), writer.closeCalls)
+	}
+	seenTwo := false
+	for _, send := range forum.sends {
+		if send.topicID == 12 {
+			seenTwo = true
+		}
+	}
+	if !seenTwo {
+		t.Fatalf("second topic received no routed event: %#v", forum.sends)
+	}
+}
+
+func TestAFCPollTerminalEvidenceClosesWriterWhenEventWasMissed(t *testing.T) {
+	service := activeAFCService(t)
+	writer := &stubSession{}
+	service.liveFactory = func() Session { return writer }
+	ctx := context.Background()
+	if _, err := service.HandleMessageWithID(ctx, -1001, 11, 501, 123456789, "one", 0); err != nil {
+		t.Fatal(err)
+	}
+	poll := &stubSession{threadReads: map[string]map[string]any{"thread-1": afcCompletedPayload("thread-1", "started-turn", "done")}}
+	service.mu.Lock()
+	service.poll, service.pollConnected = poll, true
+	service.mu.Unlock()
+	service.syncAFC(ctx)
+	if snapshot := service.afcWriter.Snapshot(); snapshot.State != appserver.WriterStopped || snapshot.Active != 0 {
+		t.Fatalf("writer=%#v", snapshot)
+	}
+	if writer.closeCalls != 1 {
+		t.Fatalf("writer close calls=%d", writer.closeCalls)
+	}
+}
+
+func afcCompletedPayload(threadID, turnID, finalText string) map[string]any {
+	return map[string]any{"thread": map[string]any{"id": threadID, "status": "completed", "turns": []any{map[string]any{
+		"id": turnID, "status": "completed", "items": []any{map[string]any{"id": "final", "type": "agentMessage", "phase": "final_answer", "text": finalText}},
+	}}}}
+}
+
+func activeAFCService(t *testing.T) *Service {
+	t.Helper()
+	service := newTestService(t)
+	service.cfg.AFCGroupID = -1001
+	ctx := context.Background()
+	if err := service.store.BeginAFCActivation(ctx, "s", -1001); err != nil {
+		t.Fatal(err)
+	}
+	for index, topicID := range []int64{11, 12} {
+		threadID := fmt.Sprintf("thread-%d", index+1)
+		if err := service.store.UpsertAFCTopic(ctx, model.AFCTopic{SessionID: "s", ChatID: -1001, TopicID: topicID, ThreadID: threadID, Title: "Topic", TelegramState: model.AFCTopicConnected}); err != nil {
+			t.Fatal(err)
+		}
+		if err := service.store.UpsertThread(ctx, model.Thread{ID: threadID, Title: "Topic", CWD: "/tmp/project", Status: "idle"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := service.store.FinishAFCActivation(ctx, "s", `{}`, true); err != nil {
+		t.Fatal(err)
+	}
+	service.SetAFCForum(&fakeAFCForum{})
+	return service
 }
