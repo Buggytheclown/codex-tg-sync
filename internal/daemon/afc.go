@@ -194,6 +194,7 @@ func (s *Service) dispatchAFCMessage(ctx context.Context, topic model.AFCTopic, 
 		_ = s.store.MarkAFCDispatchFailure(ctx, receipt, model.AFCReceiptUnknown, model.AFCTurnUnknown, lease.Generation)
 		return &DirectResponse{Text: "AFC dispatched the request but could not persist confirmation; outcome is unknown."}, nil
 	}
+	_ = s.markTelegramOriginTurnFromTelegram(ctx, topic.ThreadID, turnID, topic.ChatID, topic.TopicID)
 	if thread != nil {
 		s.ensureStartedTurnSnapshot(ctx, thread, turnID)
 	}
@@ -379,8 +380,7 @@ func (s *Service) syncAFC(ctx context.Context) {
 			continue
 		}
 		current := appserver.SnapshotFromThreadRead(payload)
-		s.persistAndDeliverAFCSnapshotLocked(ctx, forum, topic, current)
-		s.completeAFCTurnLocked(ctx, state, topic, current)
+		s.processAFCSnapshotLocked(ctx, state, forum, topic, current, "afc_poll")
 	}
 }
 
@@ -467,10 +467,22 @@ func (s *Service) handleAFCWriterEvent(ctx context.Context, process Session, eve
 	}
 	current := appserver.SnapshotFromThreadRead(payload)
 	forum := s.getAFCForum()
-	if forum != nil {
-		s.persistAndDeliverAFCSnapshotLocked(ctx, forum, *topic, current)
+	s.processAFCSnapshotLocked(ctx, state, forum, *topic, current, "afc_event")
+}
+
+func (s *Service) processAFCSnapshotLocked(ctx context.Context, state model.AFCState, forum AFCForum, topic model.AFCTopic, current appserver.ThreadReadSnapshot, operation string) {
+	if topic.ActiveTurnState == model.AFCTurnActive &&
+		strings.TrimSpace(topic.ActiveTurnID) != "" &&
+		current.LatestTurnID == topic.ActiveTurnID {
+		previous, _ := s.store.GetSnapshot(ctx, topic.ThreadID)
+		if s.applyTelegramOriginTerminalGate(ctx, operation, &current, previous) {
+			return
+		}
 	}
-	s.completeAFCTurnLocked(ctx, state, *topic, current)
+	if forum != nil {
+		s.persistAndDeliverAFCSnapshotLocked(ctx, forum, topic, current)
+	}
+	s.completeAFCTurnLocked(ctx, state, topic, current)
 }
 
 func (s *Service) completeAFCTurnLocked(ctx context.Context, state model.AFCState, topic model.AFCTopic, current appserver.ThreadReadSnapshot) {

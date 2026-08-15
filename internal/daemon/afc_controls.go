@@ -36,6 +36,7 @@ func (s *Service) stopAFCTurn(ctx context.Context, topicID int64) (*DirectRespon
 	if err := lease.Process.TurnInterrupt(ctx, topic.ThreadID, topic.ActiveTurnID); err != nil {
 		return &DirectResponse{Text: fmt.Sprintf("Stop request failed: %v", err)}, nil
 	}
+	_ = s.markTelegramOriginExplicitInterrupt(ctx, topic.ThreadID, topic.ActiveTurnID)
 	return &DirectResponse{Text: "Stop requested. AFC remains active until terminal confirmation."}, nil
 }
 
@@ -68,7 +69,9 @@ func (s *Service) forceDeactivateAFC(ctx context.Context) (*DirectResponse, erro
 		if !ok || lease.Generation != topic.WriterGeneration {
 			continue
 		}
-		_ = lease.Process.TurnInterrupt(ctx, topic.ThreadID, topic.ActiveTurnID)
+		if err := lease.Process.TurnInterrupt(ctx, topic.ThreadID, topic.ActiveTurnID); err == nil {
+			_ = s.markTelegramOriginExplicitInterrupt(ctx, topic.ThreadID, topic.ActiveTurnID)
+		}
 	}
 	s.afcMu.Unlock()
 

@@ -417,6 +417,96 @@ func TestAFCTerminalEventsRoutePerTopicAndCloseAfterLastTurn(t *testing.T) {
 	}
 }
 
+func TestAFCTransientInterruptedEventKeepsWriterAndRecoversProgress(t *testing.T) {
+	service := activeAFCService(t)
+	reads := map[string]map[string]any{
+		"thread-1": afcInterruptedPayload("thread-1", "started-turn"),
+	}
+	writer := &afcWriterSession{stubSession: &stubSession{threadReads: reads}, events: make(chan appserver.Event, 4)}
+	service.liveFactory = func() Session { return writer }
+	forum := &fakeAFCForum{}
+	service.SetAFCForum(forum)
+	ctx := context.Background()
+	if _, err := service.HandleMessageWithID(ctx, -1001, 11, 501, 123456789, "one", 0); err != nil {
+		t.Fatal(err)
+	}
+	if !service.isTelegramOriginTurn(ctx, "thread-1", "started-turn") {
+		t.Fatal("AFC turn was not marked as Telegram-origin")
+	}
+
+	generation := service.afcWriter.Snapshot().Generation
+	event := appserver.Event{Method: "turn/completed", Params: map[string]any{"threadId": "thread-1", "turnId": "started-turn"}}
+	service.handleAFCWriterEvent(ctx, writer, event, generation)
+	if snapshot := service.afcWriter.Snapshot(); snapshot.Active != 1 || snapshot.State != appserver.WriterRunning {
+		t.Fatalf("transient interrupted released writer: %#v", snapshot)
+	}
+	if writer.closeCalls != 0 || len(forum.sends) != 0 {
+		t.Fatalf("transient interrupted became visible/terminal: closes=%d sends=%#v", writer.closeCalls, forum.sends)
+	}
+
+	reads["thread-1"] = afcRunningPayload("thread-1", "started-turn")
+	service.handleAFCWriterEvent(ctx, writer, appserver.Event{Method: "item/updated", Params: map[string]any{"threadId": "thread-1", "turnId": "started-turn"}}, generation)
+	if len(forum.sends) != 1 || !strings.Contains(forum.sends[0].text, "inProgress") {
+		t.Fatalf("recovered progress not delivered: %#v", forum.sends)
+	}
+	reads["thread-1"] = afcCompletedPayload("thread-1", "started-turn", "done")
+	service.handleAFCWriterEvent(ctx, writer, event, generation)
+	if snapshot := service.afcWriter.Snapshot(); snapshot.State != appserver.WriterStopped || snapshot.Active != 0 {
+		t.Fatalf("confirmed terminal did not release writer: %#v", snapshot)
+	}
+	if writer.closeCalls != 1 {
+		t.Fatalf("writer close calls=%d, want 1", writer.closeCalls)
+	}
+}
+
+func TestAFCPollDefersTransientInterrupted(t *testing.T) {
+	service := activeAFCService(t)
+	writer := &stubSession{}
+	service.liveFactory = func() Session { return writer }
+	ctx := context.Background()
+	if _, err := service.HandleMessageWithID(ctx, -1001, 11, 501, 123456789, "one", 0); err != nil {
+		t.Fatal(err)
+	}
+	service.mu.Lock()
+	service.poll = &stubSession{threadReads: map[string]map[string]any{
+		"thread-1": afcInterruptedPayload("thread-1", "started-turn"),
+	}}
+	service.pollConnected = true
+	service.mu.Unlock()
+
+	service.syncAFC(ctx)
+	if snapshot := service.afcWriter.Snapshot(); snapshot.Active != 1 || snapshot.State != appserver.WriterRunning {
+		t.Fatalf("poll released transient interrupted writer: %#v", snapshot)
+	}
+	if writer.closeCalls != 0 {
+		t.Fatalf("writer close calls=%d, want 0", writer.closeCalls)
+	}
+}
+
+func TestAFCExplicitStopInterruptedBypassesTerminalGrace(t *testing.T) {
+	service := activeAFCService(t)
+	writer := &afcWriterSession{stubSession: &stubSession{threadReads: map[string]map[string]any{
+		"thread-1": afcInterruptedPayload("thread-1", "started-turn"),
+	}}, events: make(chan appserver.Event, 4)}
+	service.liveFactory = func() Session { return writer }
+	ctx := context.Background()
+	if _, err := service.HandleMessageWithID(ctx, -1001, 11, 501, 123456789, "one", 0); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.HandleMessageWithID(ctx, -1001, 11, 502, 123456789, "/stop", 0); err != nil {
+		t.Fatal(err)
+	}
+	service.handleAFCWriterEvent(ctx, writer, appserver.Event{Method: "turn/completed", Params: map[string]any{
+		"threadId": "thread-1", "turnId": "started-turn",
+	}}, service.afcWriter.Snapshot().Generation)
+	if snapshot := service.afcWriter.Snapshot(); snapshot.State != appserver.WriterStopped || snapshot.Active != 0 {
+		t.Fatalf("explicit stop did not bypass grace: %#v", snapshot)
+	}
+	if writer.closeCalls != 1 {
+		t.Fatalf("writer close calls=%d, want 1", writer.closeCalls)
+	}
+}
+
 func TestAFCPollTerminalEvidenceClosesWriterWhenEventWasMissed(t *testing.T) {
 	service := activeAFCService(t)
 	writer := &stubSession{}
@@ -776,6 +866,10 @@ func TestAFCProjectCallbackFromOldSessionFailsBeforeThreadStart(t *testing.T) {
 
 func afcRunningPayload(threadID, turnID string) map[string]any {
 	return map[string]any{"thread": map[string]any{"id": threadID, "status": "inProgress", "turns": []any{map[string]any{"id": turnID, "status": "inProgress", "items": []any{}}}}}
+}
+
+func afcInterruptedPayload(threadID, turnID string) map[string]any {
+	return map[string]any{"thread": map[string]any{"id": threadID, "status": "interrupted", "turns": []any{map[string]any{"id": turnID, "status": "interrupted", "items": []any{}}}}}
 }
 
 func afcCompletedPayload(threadID, turnID, finalText string) map[string]any {
