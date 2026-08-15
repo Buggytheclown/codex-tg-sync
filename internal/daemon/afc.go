@@ -56,11 +56,21 @@ func NewAFCForumFailure(kind AFCForumFailureKind, err error) error {
 }
 
 type afcActivationSummary struct {
-	SnapshotAt string   `json:"snapshot_at"`
-	Selected   int      `json:"selected"`
-	Created    int      `json:"created"`
-	Failed     []string `json:"failed,omitempty"`
-	Unknown    []string `json:"unknown,omitempty"`
+	SnapshotAt string              `json:"snapshot_at"`
+	Selected   int                 `json:"selected"`
+	Created    int                 `json:"created"`
+	Failed     []string            `json:"failed,omitempty"`
+	Unknown    []string            `json:"unknown,omitempty"`
+	Items      []afcActivationItem `json:"items"`
+}
+
+type afcActivationItem struct {
+	Rank     int    `json:"rank"`
+	ThreadID string `json:"thread_id"`
+	Title    string `json:"title"`
+	Telegram string `json:"telegram"`
+	Codex    string `json:"codex"`
+	Error    string `json:"error,omitempty"`
 }
 
 func (s *Service) isAFCGroup(chatID int64) bool {
@@ -94,6 +104,8 @@ func (s *Service) handleAFCMessage(ctx context.Context, topicID, messageID, user
 			return s.deactivateAFC(ctx)
 		case len(fields) == 1 && fields[0] == "/status":
 			return s.afcStatus(ctx)
+		case len(fields) == 1 && (fields[0] == "/projects" || fields[0] == "/newchat"):
+			return s.afcProjectsMenu(ctx, topicID)
 		default:
 			return &DirectResponse{Text: "AFC Control accepts /afc on, /afc off, and /status. Legacy commands are disabled in this group."}, nil
 		}
@@ -243,6 +255,9 @@ func (s *Service) activateAFC(ctx context.Context, userID int64) (*DirectRespons
 	}
 	summary := afcActivationSummary{SnapshotAt: now.Format(time.RFC3339Nano), Selected: len(filtered)}
 	for rank, thread := range filtered {
+		summary.Items = append(summary.Items, afcActivationItem{Rank: rank + 1, ThreadID: thread.ID, Title: afcTopicTitle(thread), Telegram: "pending", Codex: afcCodexStatus(thread)})
+	}
+	for rank, thread := range filtered {
 		title := afcTopicTitle(thread)
 		topicID, createErr := forum.CreateAFCTopic(ctx, title)
 		if createErr != nil {
@@ -250,18 +265,23 @@ func (s *Service) activateAFC(ctx context.Context, userID int64) (*DirectRespons
 			entry := fmt.Sprintf("%s: %s", thread.ID, createErr)
 			if errors.As(createErr, &failure) && failure.Kind == AFCForumFailureDefinitive {
 				summary.Failed = append(summary.Failed, entry)
+				summary.Items[rank].Telegram = "create failed"
 			} else {
 				summary.Unknown = append(summary.Unknown, entry)
+				summary.Items[rank].Telegram = "create outcome unknown"
 			}
+			summary.Items[rank].Error = createErr.Error()
 			continue
 		}
 		if err := s.store.UpsertAFCTopic(ctx, model.AFCTopic{SessionID: sessionID, ChatID: s.cfg.AFCGroupID,
 			TopicID: topicID, ThreadID: thread.ID, Rank: rank + 1, Title: title, TelegramState: model.AFCTopicConnected}); err != nil {
 			_ = forum.DeleteAFCTopic(ctx, topicID)
 			summary.Failed = append(summary.Failed, fmt.Sprintf("%s: persist: %s", thread.ID, err))
+			summary.Items[rank].Telegram, summary.Items[rank].Error = "binding failed", err.Error()
 			continue
 		}
 		summary.Created++
+		summary.Items[rank].Telegram = "connected"
 		_ = s.store.UpsertThread(ctx, thread)
 	}
 	summaryJSON, _ := json.Marshal(summary)
@@ -529,13 +549,29 @@ func afcTopicTitle(thread model.Thread) string {
 
 func renderAFCActivationSummary(summary afcActivationSummary) string {
 	text := fmt.Sprintf("AFC activation snapshot %s\nselected: %d\nactive: %d\nfailed: %d\nunknown: %d", summary.SnapshotAt, summary.Selected, summary.Created, len(summary.Failed), len(summary.Unknown))
-	if len(summary.Failed) > 0 {
-		text += "\n" + strings.Join(summary.Failed, "\n")
-	}
-	if len(summary.Unknown) > 0 {
-		text += "\n" + strings.Join(summary.Unknown, "\n")
+	for _, item := range summary.Items {
+		text += fmt.Sprintf("\n\n%d. %s\nTelegram: %s\nCodex: %s", item.Rank, item.Title, item.Telegram, item.Codex)
+		if item.Error != "" {
+			text += "\nError: " + item.Error
+		}
 	}
 	return text
+}
+
+func afcCodexStatus(thread model.Thread) string {
+	status := strings.ToLower(strings.TrimSpace(thread.Status))
+	switch {
+	case strings.Contains(status, "waiting"):
+		return "waiting"
+	case strings.Contains(status, "progress"), strings.Contains(status, "running"), strings.Contains(status, "active"):
+		return "running"
+	case strings.Contains(status, "complete"):
+		return "completed"
+	case strings.Contains(status, "interrupt"), strings.Contains(status, "cancel"), strings.Contains(status, "failed"):
+		return "interrupted"
+	default:
+		return "unknown"
+	}
 }
 
 func renderAFCStatus(snapshot appserver.ThreadReadSnapshot) string {

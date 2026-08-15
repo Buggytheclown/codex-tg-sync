@@ -201,6 +201,7 @@ Primary environment variables:
 - `CTR_GO_TELEGRAM_BOT_TOKEN`
 - `CTR_GO_ALLOWED_USER_IDS`
 - `CTR_GO_ALLOWED_CHAT_IDS`
+- `CTR_GO_AFC_GROUP_ID` (optional exact private forum supergroup for AFC)
 - `CTR_GO_DEFAULT_CWD`
 - `CTR_GO_CODEX_CHATS_ROOT` (`~/Documents/Codex` by default)
 - `CTR_GO_NOTIFY_NEW_RUN` (`true` by default; set `false`/`off`/`0` to send `New run` silently)
@@ -221,6 +222,17 @@ Compatibility fallbacks:
 - `CTR_TELEGRAM_BOT_TOKEN`
 - `CTR_ALLOWED_USER_IDS`
 - `CTR_ALLOWED_CHAT_IDS`
+
+## AFC forum group
+
+Set `CTR_GO_AFC_GROUP_ID` to one private Telegram forum supergroup and configure
+exactly one `CTR_GO_ALLOWED_USER_IDS` value. The group must contain only that
+user and the bot; the bot must be able to manage topics and delete messages.
+Use `/afc on` in the built-in General/Control topic to create managed topics for
+up to eight recent Codex threads. `/projects` or `/newchat` creates an empty task
+topic; send its first prompt only after the topic is ready. `/afc off` never
+restores the legacy observer automatically. Use `/afc off --force` only when AFC
+turns must be interrupted and drained.
 
 ## Verification
 

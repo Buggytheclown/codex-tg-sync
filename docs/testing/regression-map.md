@@ -542,6 +542,25 @@ Contract notes:
 - Force timeout remains draining, rejects new work, and does not kill the writer.
 - Off never restores observer or legacy lifecycle.
 
+## AFC Durable New Task Creation
+
+ADR: `docs/adr/ADR-025-afc-durable-new-task-creation.md`
+
+Primary tests:
+
+- `internal/daemon/afc_test.go::TestAFCProjectPickerCreatesThreadThenTopicThenDurableBinding`
+- `internal/daemon/afc_test.go::TestAFCNewTaskKeepsCreatedThreadWhenTopicCreationFails`
+- `internal/daemon/afc_test.go::TestAFCProjectsFailClosedWhileOff`
+- `internal/daemon/afc_test.go::TestAFCProjectCallbackFromOldSessionFailsBeforeThreadStart`
+
+Contract notes:
+
+- AFC project callbacks carry no first prompt and are consumed before `thread/start`.
+- Creation order is durable Codex thread, Telegram topic, then AFC binding.
+- First `turn/start` occurs only from a later source Telegram message in the ready topic.
+- Topic failure retains the Codex thread and writes no binding or automatic retry.
+- Off-session callbacks fail before App Server mutation.
+
 ## Baseline Commands
 
 Run before commit or publish:

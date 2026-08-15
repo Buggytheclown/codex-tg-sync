@@ -202,6 +202,13 @@ func (s *Service) handleAFCCallback(ctx context.Context, topicID, messageID int6
 		return nil, err
 	}
 	generation := uint64(afcPayloadInt64(payload, "generation"))
+	if route.Action == "afc_new_project" {
+		if state.State != model.AFCStateActive || afcPayloadString(payload, "session_id") != state.SessionID || afcPayloadInt64(payload, "control_topic_id") != topicID {
+			return &DirectResponse{CallbackText: "AFC project button is stale."}, nil
+		}
+		_ = s.store.ExpireCallbackRoute(ctx, route.Token)
+		return s.createAFCNewTaskLocked(ctx, state, payload)
+	}
 	if state.State != model.AFCStateActive || afcPayloadString(payload, "session_id") != state.SessionID || afcPayloadInt64(payload, "topic_id") != topicID || route.TelegramMessageID != 0 && route.TelegramMessageID != messageID {
 		return &DirectResponse{CallbackText: "AFC button is stale."}, nil
 	}

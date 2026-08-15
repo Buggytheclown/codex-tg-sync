@@ -22,6 +22,7 @@ type fakeAFCForum struct {
 	edits       []fakeAFCEdit
 	actions     []fakeAFCAction
 	onDelete    func()
+	onCreate    func(string)
 }
 
 type fakeAFCSend struct {
@@ -49,6 +50,9 @@ func (s *afcWriterSession) Subscribe() <-chan appserver.Event { return s.events 
 func (f *fakeAFCForum) ValidateAFCGroup(context.Context, int64) error { return f.validateErr }
 func (f *fakeAFCForum) CreateAFCTopic(_ context.Context, title string) (int64, error) {
 	f.creates = append(f.creates, title)
+	if f.onCreate != nil {
+		f.onCreate(title)
+	}
 	if f.createErrAt > 0 && len(f.creates) == f.createErrAt {
 		return 0, errors.New("create failed")
 	}
@@ -103,6 +107,9 @@ func TestAFCPartialActivationOwnsGroupAndDisablesLegacyObserver(t *testing.T) {
 	}
 	if len(forum.creates) != 2 || forum.creates[0] != "New" || forum.creates[1] != "Old" {
 		t.Fatalf("creates = %v", forum.creates)
+	}
+	if !strings.Contains(response.Text, "1. New\nTelegram: connected") || !strings.Contains(response.Text, "2. Old\nTelegram: create outcome unknown") || strings.Index(response.Text, "1. New") > strings.Index(response.Text, "2. Old") {
+		t.Fatalf("ordered activation summary = %q", response.Text)
 	}
 	state, _ := service.store.GetAFCState(ctx)
 	if state.State != model.AFCStateActive {
@@ -611,6 +618,127 @@ func TestAFCRestartUnknownOwnershipBlocksSafeAndForceCleanup(t *testing.T) {
 	}
 	if len(forum.deletes) != 0 {
 		t.Fatalf("unknown ownership was cleaned up: %v", forum.deletes)
+	}
+}
+
+func TestAFCProjectPickerCreatesThreadThenTopicThenDurableBinding(t *testing.T) {
+	service := activeAFCService(t)
+	writer := &stubSession{threadStartResult: map[string]any{"thread": map[string]any{"id": "new-thread", "title": "New task", "cwd": "/tmp/project", "updatedAt": float64(100)}}}
+	service.liveFactory = func() Session { return writer }
+	ctx := context.Background()
+	forum := &fakeAFCForum{nextTopicID: 20}
+	forum.onCreate = func(string) {
+		thread, _ := service.store.GetThread(ctx, "new-thread")
+		if thread == nil {
+			t.Fatal("Telegram topic created before Codex thread was durable")
+		}
+	}
+	service.SetAFCForum(forum)
+	menu, err := service.HandleMessageWithID(ctx, -1001, 1, 700, 123456789, "/projects", 0)
+	if err != nil || menu == nil || len(menu.Buttons) == 0 {
+		t.Fatalf("menu=%#v err=%v", menu, err)
+	}
+	token := menu.Buttons[0][0].CallbackData
+	created, err := service.HandleCallback(ctx, -1001, 1, 900, 123456789, token)
+	if err != nil || created == nil || !strings.Contains(created.Text, "ready") {
+		t.Fatalf("created=%#v err=%v", created, err)
+	}
+	if len(writer.threadStartCalls) != 1 || len(writer.turnStartCalls) != 0 {
+		t.Fatalf("thread starts=%#v turn starts=%#v", writer.threadStartCalls, writer.turnStartCalls)
+	}
+	topics, err := service.store.ListAFCTopics(ctx, "s")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var newTopic *model.AFCTopic
+	for _, topic := range topics {
+		if topic.ThreadID == "new-thread" {
+			copy := topic
+			newTopic = &copy
+		}
+	}
+	if newTopic == nil || newTopic.TopicID != 21 {
+		t.Fatalf("topics=%#v", topics)
+	}
+	duplicate, err := service.HandleCallback(ctx, -1001, 1, 900, 123456789, token)
+	if err != nil || duplicate == nil || !strings.Contains(duplicate.CallbackText, "stale") || len(writer.threadStartCalls) != 1 {
+		t.Fatalf("duplicate=%#v calls=%#v err=%v", duplicate, writer.threadStartCalls, err)
+	}
+	firstPrompt, err := service.HandleMessageWithID(ctx, -1001, 21, 901, 123456789, "first prompt", 0)
+	if err != nil || firstPrompt == nil || !strings.Contains(firstPrompt.Text, "started") {
+		t.Fatalf("firstPrompt=%#v err=%v", firstPrompt, err)
+	}
+	if len(writer.turnStartCalls) != 1 || writer.turnStartCalls[0].message != "first prompt" {
+		t.Fatalf("turn starts=%#v", writer.turnStartCalls)
+	}
+}
+
+func TestAFCNewTaskKeepsCreatedThreadWhenTopicCreationFails(t *testing.T) {
+	service := activeAFCService(t)
+	writer := &stubSession{threadStartResult: map[string]any{"thread": map[string]any{"id": "orphan-thread", "title": "Safe partial", "cwd": "/tmp/project"}}}
+	service.liveFactory = func() Session { return writer }
+	forum := &fakeAFCForum{createErrAt: 1}
+	service.SetAFCForum(forum)
+	ctx := context.Background()
+	menu, err := service.HandleMessageWithID(ctx, -1001, 1, 700, 123456789, "/newchat", 0)
+	if err != nil || menu == nil || len(menu.Buttons) == 0 {
+		t.Fatalf("menu=%#v err=%v", menu, err)
+	}
+	response, err := service.HandleCallback(ctx, -1001, 1, 900, 123456789, menu.Buttons[0][0].CallbackData)
+	if err != nil || response == nil || !strings.Contains(response.Text, "topic creation failed") {
+		t.Fatalf("response=%#v err=%v", response, err)
+	}
+	thread, _ := service.store.GetThread(ctx, "orphan-thread")
+	if thread == nil {
+		t.Fatal("created Codex thread was rolled back")
+	}
+	topics, _ := service.store.ListAFCTopics(ctx, "s")
+	for _, topic := range topics {
+		if topic.ThreadID == "orphan-thread" {
+			t.Fatalf("failed topic got binding: %#v", topic)
+		}
+	}
+	if service.afcWriter.Snapshot().State != appserver.WriterStopped {
+		t.Fatalf("writer=%#v", service.afcWriter.Snapshot())
+	}
+	duplicate, err := service.HandleCallback(ctx, -1001, 1, 900, 123456789, menu.Buttons[0][0].CallbackData)
+	if err != nil || duplicate == nil || !strings.Contains(duplicate.CallbackText, "stale") || len(writer.threadStartCalls) != 1 {
+		t.Fatalf("duplicate=%#v starts=%#v err=%v", duplicate, writer.threadStartCalls, err)
+	}
+}
+
+func TestAFCProjectsFailClosedWhileOff(t *testing.T) {
+	service := newTestService(t)
+	service.cfg.AFCGroupID = -1001
+	forum := &fakeAFCForum{}
+	service.SetAFCForum(forum)
+	response, err := service.HandleMessageWithID(context.Background(), -1001, 1, 700, 123456789, "/projects", 0)
+	if err != nil || response == nil || len(response.Buttons) != 0 || len(forum.creates) != 0 {
+		t.Fatalf("response=%#v creates=%v err=%v", response, forum.creates, err)
+	}
+	if service.afcWriter.Snapshot().State != appserver.WriterStopped {
+		t.Fatalf("writer=%#v", service.afcWriter.Snapshot())
+	}
+}
+
+func TestAFCProjectCallbackFromOldSessionFailsBeforeThreadStart(t *testing.T) {
+	service := activeAFCService(t)
+	writer := &stubSession{threadStartResult: map[string]any{"thread": map[string]any{"id": "must-not-start"}}}
+	service.liveFactory = func() Session { return writer }
+	ctx := context.Background()
+	menu, err := service.HandleMessageWithID(ctx, -1001, 1, 700, 123456789, "/projects", 0)
+	if err != nil || menu == nil || len(menu.Buttons) == 0 {
+		t.Fatalf("menu=%#v err=%v", menu, err)
+	}
+	if _, err := service.store.MarkAFCOff(ctx, "s"); err != nil {
+		t.Fatal(err)
+	}
+	response, err := service.HandleCallback(ctx, -1001, 1, 900, 123456789, menu.Buttons[0][0].CallbackData)
+	if err != nil || response == nil || !strings.Contains(response.CallbackText, "stale") {
+		t.Fatalf("response=%#v err=%v", response, err)
+	}
+	if len(writer.threadStartCalls) != 0 {
+		t.Fatalf("stale callback started thread: %#v", writer.threadStartCalls)
 	}
 }
 
