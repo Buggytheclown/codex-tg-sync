@@ -108,6 +108,9 @@ visible to Desktop because both clients share the daemon.
   automatic topic recreation is outside the MVP.
 - Daemon or bridge restart: restore mappings and subscriptions without duplicate
   topics or messages.
+- A bridge restart converts unfinished local writer state to unknown. In
+  shared-daemon mode only, a later new message can clear that local state after
+  authoritative `thread/read`; it never replays the old receipt.
 
 ## MVP Non-goals
 

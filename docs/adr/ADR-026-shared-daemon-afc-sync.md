@@ -45,6 +45,11 @@ Desktop sees without maintaining a second App Server runtime.
 - `/stop` may target the authoritative active turn regardless of origin. A
   normal topic message steers an active expected turn and starts a new turn only
   after terminal or stale-active recovery evidence.
+- After a bridge restart, a local `ownership-unknown` topic remains
+  non-replayable, but a new Telegram message may reconcile it from an
+  authoritative shared-daemon `thread/read`. The old receipt stays unchanged;
+  the new message steers the confirmed active turn or starts only after
+  confirmed idle. Spawned mode stays fail-closed.
 - AFC active and legacy DM mutation are mutually exclusive. Legacy code remains
   lazy and compatible; `/afc off` does not restore it automatically.
 
@@ -65,7 +70,7 @@ Desktop sees without maintaining a second App Server runtime.
 ## Non-goals
 
 - Public or remote App Server exposure.
-- Direct Go WebSocket transport in the MVP.
+- Public or cross-host WebSocket transport.
 - Simultaneous AFC and legacy Telegram mutation.
 - Automatic archive/delete or manual-topic repair synchronization.
 - Automatic replay after ambiguous dispatch.

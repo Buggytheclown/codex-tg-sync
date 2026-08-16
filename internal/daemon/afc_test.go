@@ -931,6 +931,48 @@ func TestAFCActiveTopicMessageSteersCurrentTelegramTurn(t *testing.T) {
 	}
 }
 
+func TestAFCSharedDaemonRestartUnknownReconcilesBeforeSteer(t *testing.T) {
+	service := activeAFCService(t)
+	service.cfg.AppServerMode = "daemon"
+	ctx := context.Background()
+	oldReceipt, _, err := service.store.AcceptAFCMessage(ctx, -1001, 11, 500)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := service.store.MarkAFCStarting(ctx, oldReceipt, 7); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.store.MarkAFCDispatchState(ctx, oldReceipt, model.AFCReceiptDispatched, "shared-turn", model.AFCTurnActive, 7); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.store.RecoverAFCWriterState(ctx); err != nil {
+		t.Fatal(err)
+	}
+	poll := &stubSession{threadReads: map[string]map[string]any{
+		"thread-1": afcRunningPayloadWithCommentary("thread-1", "shared-turn", "still running"),
+	}}
+	service.mu.Lock()
+	service.poll, service.pollConnected = poll, true
+	service.mu.Unlock()
+	writer := &stubSession{}
+	service.liveFactory = func() Session { return writer }
+
+	response, err := service.HandleMessageWithID(ctx, -1001, 11, 501, 123456789, "continue after restart", 0)
+	if err != nil || response == nil || response.TurnID != "shared-turn" || !strings.Contains(response.Text, "steered") {
+		t.Fatalf("response=%#v err=%v", response, err)
+	}
+	if len(writer.turnSteerCalls) != 1 || writer.turnSteerCalls[0].turnID != "shared-turn" {
+		t.Fatalf("steers=%#v", writer.turnSteerCalls)
+	}
+	if len(writer.turnStartCalls) != 0 {
+		t.Fatalf("parallel starts=%#v", writer.turnStartCalls)
+	}
+	loadedOld, err := service.store.GetAFCReceipt(ctx, 11, 500)
+	if err != nil || loadedOld == nil || loadedOld.State != model.AFCReceiptDispatched {
+		t.Fatalf("old receipt=%#v err=%v, want no replay mutation", loadedOld, err)
+	}
+}
+
 func TestAFCDesktopOriginActiveTurnIsSteeredWithoutParallelStart(t *testing.T) {
 	service := activeAFCService(t)
 	service.cfg.AppServerMode = "daemon"

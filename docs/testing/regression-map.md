@@ -59,6 +59,9 @@ Planned primary tests:
   subscriptions without duplicate topics or prompt replay.
 - `internal/daemon/afc_test.go` proves active topic messages steer the expected
   turn and stale-active recovery does not create a parallel turn.
+- `internal/daemon/afc_test.go::TestAFCSharedDaemonRestartUnknownReconcilesBeforeSteer`
+  proves bridge restart recovery adopts the authoritative active turn without
+  replaying the old receipt or starting a parallel turn.
 - `internal/daemon/afc_test.go` proves Stop interrupts current Desktop-origin
   and Telegram-origin turns through guarded authoritative coordinates.
 

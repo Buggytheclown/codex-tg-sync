@@ -521,6 +521,20 @@ func (s *Store) MarkAFCStarting(ctx context.Context, receipt model.AFCMessageRec
 	return nil
 }
 
+func (s *Store) ResolveAFCSharedDaemonUnknown(ctx context.Context, sessionID string, topicID int64, threadID string, generation uint64) error {
+	result, err := s.db.ExecContext(ctx, `UPDATE afc_topics SET active_turn_id=NULL, active_turn_state=?, writer_generation=0, updated_at=?
+		WHERE session_id=? AND topic_id=? AND thread_id=? AND telegram_state=? AND active_turn_state=? AND writer_generation=?`,
+		model.AFCTurnTerminal, model.NowString(), sessionID, topicID, threadID, model.AFCTopicConnected, model.AFCTurnUnknown, generation)
+	if err != nil {
+		return err
+	}
+	changed, _ := result.RowsAffected()
+	if changed != 1 {
+		return errors.New("AFC shared-daemon unknown transition is stale")
+	}
+	return nil
+}
+
 func (s *Store) MarkAFCReceiptState(ctx context.Context, receipt model.AFCMessageReceipt, state string) error {
 	result, err := s.db.ExecContext(ctx, `UPDATE afc_message_receipts SET state=?, updated_at=?
 		WHERE chat_id=? AND topic_id=? AND message_id=? AND session_id=? AND state=?`, state, model.NowString(),

@@ -152,9 +152,29 @@ func (s *Service) dispatchAFCMessage(ctx context.Context, topic model.AFCTopic, 
 	if topic.ActiveTurnState == model.AFCTurnActive {
 		return s.steerManagedAFCTurnLocked(ctx, topic, receipt, text)
 	}
-	if topic.ActiveTurnState == model.AFCTurnStarting || topic.ActiveTurnState == model.AFCTurnUnknown {
+	if topic.ActiveTurnState == model.AFCTurnStarting {
 		_ = s.store.MarkAFCReceiptState(ctx, receipt, model.AFCReceiptRejected)
 		return &DirectResponse{Text: "This AFC topic is starting or ownership-unknown. The new message was not queued."}, nil
+	}
+	if topic.ActiveTurnState == model.AFCTurnUnknown {
+		if !strings.EqualFold(strings.TrimSpace(s.cfg.AppServerMode), string(appserver.TransportDaemon)) {
+			_ = s.store.MarkAFCReceiptState(ctx, receipt, model.AFCReceiptRejected)
+			return &DirectResponse{Text: "This AFC topic is starting or ownership-unknown. The new message was not queued."}, nil
+		}
+		if _, reconcileErr := s.authoritativeAFCActiveTurnLocked(ctx, topic); reconcileErr != nil {
+			_ = s.store.MarkAFCReceiptState(ctx, receipt, model.AFCReceiptRejected)
+			return &DirectResponse{Text: "AFC could not reconcile restart ownership from the shared daemon; the new message was not sent: " + reconcileErr.Error()}, nil
+		}
+		if reconcileErr := s.store.ResolveAFCSharedDaemonUnknown(ctx, topic.SessionID, topic.TopicID, topic.ThreadID, topic.WriterGeneration); reconcileErr != nil {
+			_ = s.store.MarkAFCReceiptState(ctx, receipt, model.AFCReceiptRejected)
+			return &DirectResponse{Text: "AFC shared-daemon restart reconciliation became stale; the new message was not sent."}, nil
+		}
+		refreshed, refreshErr := s.store.GetActiveAFCTopic(ctx, topic.ChatID, topic.TopicID)
+		if refreshErr != nil || refreshed == nil {
+			_ = s.store.MarkAFCReceiptState(ctx, receipt, model.AFCReceiptRejected)
+			return &DirectResponse{Text: "AFC shared-daemon restart reconciliation could not reload the topic; the new message was not sent."}, nil
+		}
+		topic = *refreshed
 	}
 	targetTurnID, targetErr := s.authoritativeAFCActiveTurnLocked(ctx, topic)
 	if targetErr != nil {
