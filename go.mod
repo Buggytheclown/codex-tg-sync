@@ -5,6 +5,7 @@ go 1.26.0
 require (
 	fyne.io/systray v1.12.1
 	github.com/eekstunt/telegramify-markdown-go v0.2.0
+	github.com/gorilla/websocket v1.5.3
 	golang.org/x/term v0.42.0
 	modernc.org/sqlite v1.39.1
 )

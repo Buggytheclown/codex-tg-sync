@@ -46,9 +46,10 @@ Planned primary tests:
 
 - `internal/config/config_test.go` covers daemon transport selection and the
   default/configured AFC initial topic limit.
-- `internal/appserver/client_test.go` proves daemon mode builds
-  `app-server proxy`, spawned mode keeps `app-server --listen`, and
-  `thread/resume` contains only `threadId`.
+- `internal/appserver/client_test.go` proves daemon mode connects directly over
+  WebSocket on the Unix socket without spawning a process, spawned mode keeps
+  `app-server --listen`, and `thread/resume` contains only `threadId`;
+  serialized App Server messages omit the unsupported `jsonrpc` header.
 - `internal/daemon/afc_test.go` proves AFC-active legacy mutations fail before
   App Server access and explicit post-off legacy work remains lazy.
 - `internal/daemon/afc_test.go` proves initial activation uses the configured
@@ -63,8 +64,8 @@ Planned primary tests:
 
 Contract notes:
 
-- Desktop and `codex-tg` share one managed App Server daemon; proxy processes
-  are transport connections, not independent runtimes.
+- Desktop and `codex-tg` share one managed App Server daemon through independent
+  WebSocket connections to the same Unix socket.
 - Shared-daemon mode is fail-closed and never silently spawns a private server.
 - AFC activation creates five recent topics by default, configurable through
   `CTR_GO_AFC_INITIAL_TOPIC_LIMIT`, then continuously discovers new chats.

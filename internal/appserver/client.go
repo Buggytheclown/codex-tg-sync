@@ -2,11 +2,13 @@ package appserver
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -16,6 +18,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/gorilla/websocket"
 	"github.com/mideco-tech/codex-tg/internal/control"
 	"github.com/mideco-tech/codex-tg/internal/version"
 )
@@ -44,6 +47,68 @@ type rpcResponse struct {
 	Result any
 	Error  error
 }
+
+type websocketConnection struct {
+	conn      *websocket.Conn
+	closeOnce sync.Once
+}
+
+func (c *websocketConnection) Close() error {
+	var err error
+	c.closeOnce.Do(func() { err = c.conn.Close() })
+	return err
+}
+
+type websocketWriteCloser struct {
+	connection *websocketConnection
+}
+
+func (w *websocketWriteCloser) Write(payload []byte) (int, error) {
+	message := bytes.TrimSuffix(payload, []byte{'\n'})
+	if err := w.connection.conn.WriteMessage(websocket.TextMessage, message); err != nil {
+		return 0, err
+	}
+	return len(payload), nil
+}
+
+func (w *websocketWriteCloser) Close() error { return w.connection.Close() }
+
+type websocketReadCloser struct {
+	connection *websocketConnection
+	mu         sync.Mutex
+	buffer     *bytes.Reader
+}
+
+func (r *websocketReadCloser) Read(destination []byte) (int, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for {
+		if r.buffer != nil {
+			read, err := r.buffer.Read(destination)
+			if err == io.EOF {
+				r.buffer = nil
+				if read > 0 {
+					return read, nil
+				}
+				continue
+			}
+			return read, err
+		}
+		messageType, payload, err := r.connection.conn.ReadMessage()
+		if err != nil {
+			return 0, err
+		}
+		if messageType != websocket.TextMessage && messageType != websocket.BinaryMessage {
+			continue
+		}
+		framed := make([]byte, len(payload)+1)
+		copy(framed, payload)
+		framed[len(payload)] = '\n'
+		r.buffer = bytes.NewReader(framed)
+	}
+}
+
+func (r *websocketReadCloser) Close() error { return r.connection.Close() }
 
 type Client struct {
 	codexBin       string
@@ -104,27 +169,8 @@ func (c *Client) Start(ctx context.Context) error {
 		c.mu.Unlock()
 		return nil
 	}
-	cmd, err := c.buildCommand()
+	cmd, stdin, stdout, stderr, err := c.openTransport(ctx)
 	if err != nil {
-		c.mu.Unlock()
-		return err
-	}
-	stdin, err := cmd.StdinPipe()
-	if err != nil {
-		c.mu.Unlock()
-		return err
-	}
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		c.mu.Unlock()
-		return err
-	}
-	stderr, err := cmd.StderrPipe()
-	if err != nil {
-		c.mu.Unlock()
-		return err
-	}
-	if err := cmd.Start(); err != nil {
 		c.mu.Unlock()
 		return err
 	}
@@ -224,9 +270,8 @@ func (c *Client) Request(ctx context.Context, method string, params map[string]a
 	c.mu.Unlock()
 
 	message := map[string]any{
-		"jsonrpc": "2.0",
-		"id":      id,
-		"method":  method,
+		"id":     id,
+		"method": method,
 	}
 	if params != nil {
 		message["params"] = params
@@ -276,8 +321,7 @@ func (c *Client) Notify(ctx context.Context, method string, params map[string]an
 	stdin := c.stdin
 	c.mu.Unlock()
 	message := map[string]any{
-		"jsonrpc": "2.0",
-		"method":  method,
+		"method": method,
 	}
 	if params != nil {
 		message["params"] = params
@@ -303,9 +347,8 @@ func (c *Client) RespondServerRequest(ctx context.Context, requestID string, res
 	delete(c.serverRequests, requestID)
 	c.mu.Unlock()
 	payload, err := json.Marshal(map[string]any{
-		"jsonrpc": "2.0",
-		"id":      requestID,
-		"result":  result,
+		"id":     requestID,
+		"result": result,
 	})
 	if err != nil {
 		return err
@@ -795,6 +838,9 @@ func (c *Client) StderrTail() []string {
 }
 
 func (c *Client) buildCommand() (*exec.Cmd, error) {
+	if c.transport.Mode == TransportDaemon {
+		return nil, errors.New("managed daemon uses a direct Unix WebSocket connection")
+	}
 	executable, err := exec.LookPath(c.codexBin)
 	if err != nil {
 		executable = c.codexBin
@@ -817,26 +863,94 @@ func (c *Client) buildCommand() (*exec.Cmd, error) {
 	return cmd, nil
 }
 
+func (c *Client) openTransport(ctx context.Context) (*exec.Cmd, io.WriteCloser, io.ReadCloser, io.ReadCloser, error) {
+	if c.transport.Mode == TransportDaemon {
+		stdin, stdout, err := c.openDaemonWebSocket(ctx)
+		return nil, stdin, stdout, nil, err
+	}
+	cmd, err := c.buildCommand()
+	if err != nil {
+		return nil, nil, nil, nil, err
+	}
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		return nil, nil, nil, nil, err
+	}
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		_ = stdin.Close()
+		return nil, nil, nil, nil, err
+	}
+	stderr, err := cmd.StderrPipe()
+	if err != nil {
+		_ = stdin.Close()
+		_ = stdout.Close()
+		return nil, nil, nil, nil, err
+	}
+	if err := cmd.Start(); err != nil {
+		_ = stdin.Close()
+		_ = stdout.Close()
+		_ = stderr.Close()
+		return nil, nil, nil, nil, err
+	}
+	return cmd, stdin, stdout, stderr, nil
+}
+
+func (c *Client) openDaemonWebSocket(ctx context.Context) (io.WriteCloser, io.ReadCloser, error) {
+	socketPath, err := c.daemonSocketPath()
+	if err != nil {
+		return nil, nil, err
+	}
+	dialer := websocket.Dialer{
+		HandshakeTimeout: c.requestTimeout,
+		NetDialContext: func(dialContext context.Context, _, _ string) (net.Conn, error) {
+			return (&net.Dialer{}).DialContext(dialContext, "unix", socketPath)
+		},
+	}
+	conn, response, err := dialer.DialContext(ctx, "ws://localhost/", nil)
+	if response != nil && response.Body != nil {
+		_ = response.Body.Close()
+	}
+	if err != nil {
+		return nil, nil, fmt.Errorf("connect app-server daemon socket %q: %w", socketPath, err)
+	}
+	conn.SetReadLimit(16 * 1024 * 1024)
+	connection := &websocketConnection{conn: conn}
+	return &websocketWriteCloser{connection: connection}, &websocketReadCloser{connection: connection}, nil
+}
+
+func (c *Client) daemonSocketPath() (string, error) {
+	if socketPath := strings.TrimSpace(c.transport.SocketPath); socketPath != "" {
+		return socketPath, nil
+	}
+	codexHome := strings.TrimSpace(os.Getenv("CODEX_HOME"))
+	if codexHome == "" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return "", fmt.Errorf("resolve home for app-server daemon socket: %w", err)
+		}
+		codexHome = filepath.Join(home, ".codex")
+	}
+	return filepath.Join(codexHome, "app-server-control", "app-server-control.sock"), nil
+}
+
 func (c *Client) appServerArgs() ([]string, error) {
 	switch c.transport.Mode {
 	case TransportSpawned:
 		return []string{"app-server", "--listen", c.transport.ListenURL}, nil
 	case TransportDaemon:
-		args := []string{"app-server", "proxy"}
-		if socketPath := strings.TrimSpace(c.transport.SocketPath); socketPath != "" {
-			args = append(args, "--sock", socketPath)
-		}
-		return args, nil
+		return nil, errors.New("managed daemon uses a direct Unix WebSocket connection")
 	default:
 		return nil, fmt.Errorf("unsupported app-server transport mode %q", c.transport.Mode)
 	}
 }
 
 func (c *Client) readStdout(generation uint64) {
-	defer close(c.readerDone)
 	c.mu.Lock()
 	stdout := c.stdout
+	readerDone := c.readerDone
 	c.mu.Unlock()
+	defer close(readerDone)
 	if stdout == nil {
 		return
 	}
@@ -871,10 +985,11 @@ func (c *Client) isStartedGeneration(generation uint64) bool {
 }
 
 func (c *Client) readStderr(generation uint64) {
-	defer close(c.stderrDone)
 	c.mu.Lock()
 	stderr := c.stderr
+	stderrDone := c.stderrDone
 	c.mu.Unlock()
+	defer close(stderrDone)
 	if stderr == nil {
 		return
 	}

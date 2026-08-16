@@ -20,12 +20,15 @@ Desktop sees without maintaining a second App Server runtime.
 
 - Desktop and `codex-tg` use one managed local App Server daemon as the runtime
   authority.
-- `codex-tg` daemon mode connects through `codex app-server proxy`; spawned
-  stdio remains an explicit compatibility mode.
+- `codex-tg` daemon mode connects directly to the daemon Unix socket with a
+  standard WebSocket client and Unix-domain dialer; spawned stdio remains an
+  explicit compatibility mode.
+- WebSocket text frames use the native App Server wire format:
+  JSON-RPC-shaped messages omit the `jsonrpc` header required by generic
+  JSON-RPC 2.0 transports.
 - Daemon mode never silently falls back to spawned stdio when the daemon is
   unavailable or incompatible.
-- Proxy process lifetime is client-connection lifetime, not thread ownership or
-  App Server lifetime.
+- WebSocket connection lifetime is not thread ownership or App Server lifetime.
 - A tracked shared-daemon thread is subscribed with `thread/resume` containing
   only `threadId`. CWD and history options are not added to resume.
 - Live events are preferred for presentation and `thread/read` remains the
@@ -48,7 +51,7 @@ Desktop sees without maintaining a second App Server runtime.
 ## Consequences
 
 - Desktop and Telegram observe and mutate the same in-memory thread state.
-- Thin proxy connections may remain separate without recreating the
+- Multiple client connections may remain separate without recreating the
   cross-process writer problem.
 - ADR-020 process-generation claims remain valid inside spawned-stdio mode and
   for bridge-local dispatch safety, but are not a distributed ownership claim

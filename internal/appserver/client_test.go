@@ -3,6 +3,8 @@ package appserver
 import (
 	"context"
 	"encoding/json"
+	"net"
+	"net/http"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -11,9 +13,11 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/gorilla/websocket"
 )
 
-func TestBuildCommandUsesManagedDaemonProxy(t *testing.T) {
+func TestBuildCommandRejectsManagedDaemonTransport(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("command args are platform-specific")
 	}
@@ -22,13 +26,89 @@ func TestBuildCommandUsesManagedDaemonProxy(t *testing.T) {
 		SocketPath: "/tmp/codex-app-server.sock",
 	}, t.TempDir(), time.Second)
 
-	cmd, err := client.buildCommand()
-	if err != nil {
-		t.Fatalf("buildCommand failed: %v", err)
+	_, err := client.buildCommand()
+	if err == nil || !strings.Contains(err.Error(), "direct Unix WebSocket") {
+		t.Fatalf("buildCommand error = %v, want direct Unix WebSocket message", err)
 	}
-	want := []string{"app-server", "proxy", "--sock", "/tmp/codex-app-server.sock"}
-	if got := cmd.Args[1:]; !reflect.DeepEqual(got, want) {
-		t.Fatalf("command args = %#v, want %#v", got, want)
+}
+
+func TestDaemonTransportConnectsDirectlyOverUnixWebSocket(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Unix sockets are platform-specific")
+	}
+	root, err := os.MkdirTemp("/tmp", "codex-tg-ws-")
+	if err != nil {
+		t.Fatalf("MkdirTemp failed: %v", err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(root) })
+	socketPath := filepath.Join(root, "app-server.sock")
+	listener, err := net.Listen("unix", socketPath)
+	if err != nil {
+		t.Fatalf("Listen(unix) failed: %v", err)
+	}
+	upgrader := websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }}
+	messages := make(chan map[string]any, 2)
+	serverErrors := make(chan error, 1)
+	server := &http.Server{Handler: http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		conn, upgradeErr := upgrader.Upgrade(writer, request, nil)
+		if upgradeErr != nil {
+			serverErrors <- upgradeErr
+			return
+		}
+		defer conn.Close()
+		for index := 0; index < 2; index++ {
+			var payload map[string]any
+			if readErr := conn.ReadJSON(&payload); readErr != nil {
+				serverErrors <- readErr
+				return
+			}
+			messages <- payload
+			if index == 0 {
+				if writeErr := conn.WriteJSON(map[string]any{"id": payload["id"], "result": map[string]any{}}); writeErr != nil {
+					serverErrors <- writeErr
+					return
+				}
+			}
+		}
+	})}
+	go func() {
+		if serveErr := server.Serve(listener); serveErr != nil && serveErr != http.ErrServerClosed {
+			serverErrors <- serveErr
+		}
+	}()
+	t.Cleanup(func() { _ = server.Close() })
+
+	client := NewClientWithTransport("codex", TransportConfig{
+		Mode:       TransportDaemon,
+		SocketPath: socketPath,
+	}, t.TempDir(), 2*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if err := client.Start(ctx); err != nil {
+		t.Fatalf("Start failed: %v", err)
+	}
+	t.Cleanup(func() { _ = client.Close() })
+
+	client.mu.Lock()
+	cmd := client.cmd
+	client.mu.Unlock()
+	if cmd != nil {
+		t.Fatalf("daemon transport spawned process: %v", cmd.Args)
+	}
+	for _, wantMethod := range []string{"initialize", "initialized"} {
+		select {
+		case payload := <-messages:
+			if got := payload["method"]; got != wantMethod {
+				t.Fatalf("method = %v, want %q", got, wantMethod)
+			}
+			if _, present := payload["jsonrpc"]; present {
+				t.Fatalf("wire message contains jsonrpc header: %#v", payload)
+			}
+		case serverErr := <-serverErrors:
+			t.Fatalf("WebSocket server failed: %v", serverErr)
+		case <-ctx.Done():
+			t.Fatalf("waiting for %s: %v", wantMethod, ctx.Err())
+		}
 	}
 }
 
@@ -390,6 +470,9 @@ func TestClientSerializesConcurrentJSONRPCWrites(t *testing.T) {
 		var payload map[string]any
 		if err := json.Unmarshal(line, &payload); err != nil {
 			t.Fatalf("invalid JSON-RPC line %q: %v", line, err)
+		}
+		if _, present := payload["jsonrpc"]; present {
+			t.Fatalf("App Server wire message contains forbidden jsonrpc header: %s", line)
 		}
 	}
 }

@@ -15,10 +15,9 @@ thread, and new chats created on either side become visible on the other side.
 ## Runtime Architecture
 
 Codex Desktop and `codex-tg` connect to one managed local Codex App Server
-daemon. Desktop uses the daemon Unix socket directly. `codex-tg` uses
-`codex app-server proxy`, preserving its existing JSONL client without adding a
-WebSocket dependency. Proxy processes are transport adapters, not independent
-App Server runtimes.
+daemon. Both use the daemon Unix socket directly. `codex-tg` uses a standard
+WebSocket client with a Unix-domain dialer because the control socket requires
+an HTTP Upgrade and one JSON-RPC-shaped message per text frame.
 
 Daemon mode is explicit and fail-closed. If the managed daemon is unavailable,
 AFC reports a degraded/unavailable state and does not silently spawn a private
@@ -26,7 +25,7 @@ App Server. Spawned stdio remains supported for legacy compatibility and tests.
 
 The implementation keeps the existing long-lived read/reconciliation client
 and lazy control connections for the first slice. They share one underlying
-daemon, so closing a proxy closes only that client connection and never unloads
+daemon, so closing a connection never unloads
 the authoritative Desktop runtime.
 
 ## Exclusive Telegram Modes
@@ -81,8 +80,8 @@ mutation. Duplicate delivery and ambiguous dispatch are never replayed.
   Telegram act at the same time.
 
 Local writer leases remain useful for Telegram idempotency, guarded callbacks,
-and unknown dispatch. They no longer claim that a proxy process exclusively
-owns a Codex thread relative to Desktop.
+and unknown dispatch. They no longer claim that one client connection
+exclusively owns a Codex thread relative to Desktop.
 
 ## Chat Creation
 
@@ -99,7 +98,7 @@ visible to Desktop because both clients share the daemon.
 ## Failure And Recovery
 
 - Daemon unavailable: fail closed with no private runtime fallback.
-- Proxy disconnect: reconnect, list/read tracked threads, restore subscriptions,
+- Socket disconnect: reconnect, list/read tracked threads, restore subscriptions,
   and never replay prompts.
 - Ambiguous mutation: keep the durable receipt unknown until reconciliation
   proves terminal or active state.
