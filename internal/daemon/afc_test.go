@@ -574,6 +574,37 @@ func TestAFCStatusUsesLegacyRunTimingFooter(t *testing.T) {
 	}
 }
 
+func TestAFCStatusUsesNewestCommentaryBlock(t *testing.T) {
+	service := activeAFCService(t)
+	ctx := context.Background()
+	poll := &stubSession{threadReads: map[string]map[string]any{
+		"thread-1": afcRunningPayloadWithCommentaries("thread-1", "turn-1", "first block"),
+	}}
+	service.mu.Lock()
+	service.poll, service.pollConnected = poll, true
+	service.mu.Unlock()
+	forum := &fakeAFCForum{}
+	service.SetAFCForum(forum)
+
+	service.syncAFC(ctx)
+	if len(forum.sends) != 1 || !strings.Contains(forum.sends[0].text, "first block") {
+		t.Fatalf("initial status sends=%#v, want first commentary block", forum.sends)
+	}
+	statusID := forum.sends[0].messageID
+
+	poll.threadReads["thread-1"] = afcRunningPayloadWithCommentaries("thread-1", "turn-1", "first block", "newest block")
+	service.syncAFC(ctx)
+	if len(forum.sends) != 1 {
+		t.Fatalf("new commentary created another status: %#v", forum.sends)
+	}
+	if len(forum.edits) != 1 || forum.edits[0].messageID != statusID {
+		t.Fatalf("new commentary edits=%#v, want existing status %d", forum.edits, statusID)
+	}
+	if !strings.Contains(forum.edits[0].text, "newest block") || strings.Contains(forum.edits[0].text, "first block") {
+		t.Fatalf("updated status=%q, want only newest commentary block", forum.edits[0].text)
+	}
+}
+
 func TestAFCPassiveSyncTicksElapsedFromStableTurnStart(t *testing.T) {
 	service := activeAFCService(t)
 	ctx := context.Background()
@@ -1705,8 +1736,18 @@ func afcRunningPayload(threadID, turnID string) map[string]any {
 }
 
 func afcRunningPayloadWithCommentary(threadID, turnID, commentary string) map[string]any {
+	return afcRunningPayloadWithCommentaries(threadID, turnID, commentary)
+}
+
+func afcRunningPayloadWithCommentaries(threadID, turnID string, commentaries ...string) map[string]any {
+	items := make([]any, 0, len(commentaries))
+	for index, commentary := range commentaries {
+		items = append(items, map[string]any{
+			"id": fmt.Sprintf("%s-commentary-%d", turnID, index+1), "type": "agentMessage", "phase": "commentary", "text": commentary,
+		})
+	}
 	return map[string]any{"thread": map[string]any{"id": threadID, "status": "inProgress", "turns": []any{map[string]any{
-		"id": turnID, "status": "inProgress", "items": []any{map[string]any{"id": turnID + "-commentary", "type": "agentMessage", "phase": "commentary", "text": commentary}},
+		"id": turnID, "status": "inProgress", "items": items,
 	}}}}
 }
 

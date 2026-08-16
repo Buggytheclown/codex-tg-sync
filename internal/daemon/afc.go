@@ -1054,7 +1054,7 @@ func renderAFCStatusAt(snapshot appserver.ThreadReadSnapshot, now time.Time) str
 	}
 	detail := strings.TrimSpace(snapshot.LatestProgressText)
 	if detail == "" && len(snapshot.LatestAgentMessages) > 0 {
-		detail = strings.TrimSpace(snapshot.LatestAgentMessages[len(snapshot.LatestAgentMessages)-1])
+		detail = strings.TrimSpace(snapshot.LatestAgentMessages[0])
 	}
 	if detail == "" {
 		detail = strings.TrimSpace(snapshot.Thread.LastPreview)
