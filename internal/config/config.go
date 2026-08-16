@@ -47,7 +47,9 @@ func (p Paths) Ensure() error {
 type Config struct {
 	Paths                       Paths
 	CodexBin                    string
+	AppServerMode               string
 	AppServerListen             string
+	AppServerSocket             string
 	ControlAPIListen            string
 	TelegramBotToken            string
 	AllowedUserIDs              []int64
@@ -130,10 +132,16 @@ func fromSource(source envSource) Config {
 	if listen == "" {
 		listen = "stdio://"
 	}
+	appServerMode := strings.ToLower(strings.TrimSpace(source.get("CTR_GO_APP_SERVER_MODE")))
+	if appServerMode == "" {
+		appServerMode = "spawned"
+	}
 	return Config{
 		Paths:                       paths,
 		CodexBin:                    codexBin,
+		AppServerMode:               appServerMode,
 		AppServerListen:             listen,
+		AppServerSocket:             source.get("CTR_GO_APP_SERVER_SOCKET"),
 		ControlAPIListen:            source.get("CTR_GO_CONTROL_API_LISTEN"),
 		TelegramBotToken:            source.first("CTR_GO_TELEGRAM_BOT_TOKEN", "CTR_TELEGRAM_BOT_TOKEN"),
 		AllowedUserIDs:              parseInt64List(source.first("CTR_GO_ALLOWED_USER_IDS", "CTR_ALLOWED_USER_IDS")),
@@ -162,7 +170,9 @@ func (c Config) MarshalJSON() ([]byte, error) {
 		Home                        string  `json:"home"`
 		DBPath                      string  `json:"db_path"`
 		CodexBin                    string  `json:"codex_bin"`
+		AppServerMode               string  `json:"app_server_mode"`
 		AppServerListen             string  `json:"app_server_listen"`
+		AppServerSocket             string  `json:"app_server_socket,omitempty"`
 		ControlAPIListen            string  `json:"control_api_listen,omitempty"`
 		HasTelegramToken            bool    `json:"telegram_configured"`
 		AllowedUserIDs              []int64 `json:"allowed_user_ids"`
@@ -185,7 +195,9 @@ func (c Config) MarshalJSON() ([]byte, error) {
 		Home:                        c.Paths.Home,
 		DBPath:                      c.Paths.DBPath,
 		CodexBin:                    c.CodexBin,
+		AppServerMode:               c.AppServerMode,
 		AppServerListen:             c.AppServerListen,
+		AppServerSocket:             c.AppServerSocket,
 		ControlAPIListen:            c.ControlAPIListen,
 		HasTelegramToken:            c.TelegramBotToken != "",
 		AllowedUserIDs:              c.AllowedUserIDs,

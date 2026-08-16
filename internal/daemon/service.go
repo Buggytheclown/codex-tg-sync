@@ -136,11 +136,16 @@ func New(cfg config.Config) (*Service, error) {
 		now:            time.Now,
 		phase:          "created",
 	}
+	transport := appserver.TransportConfig{
+		Mode:       appserver.TransportMode(cfg.AppServerMode),
+		ListenURL:  cfg.AppServerListen,
+		SocketPath: cfg.AppServerSocket,
+	}
 	service.liveFactory = func() Session {
-		return appserver.NewClient(cfg.CodexBin, cfg.AppServerListen, cfg.DefaultCWD, cfg.RequestTimeout)
+		return appserver.NewClientWithTransport(cfg.CodexBin, transport, cfg.DefaultCWD, cfg.RequestTimeout)
 	}
 	service.pollFactory = func() Session {
-		return appserver.NewClient(cfg.CodexBin, cfg.AppServerListen, cfg.DefaultCWD, cfg.RequestTimeout)
+		return appserver.NewClientWithTransport(cfg.CodexBin, transport, cfg.DefaultCWD, cfg.RequestTimeout)
 	}
 	service.threadClaims = appserver.NewThreadClaimRegistry()
 	service.legacyWriter = appserver.NewWriterManager("legacy", service.threadClaims, func() (Session, error) {

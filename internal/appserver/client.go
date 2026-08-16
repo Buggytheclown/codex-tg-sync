@@ -27,6 +27,19 @@ type CollaborationModeOption = control.CollaborationModeOption
 
 var _ control.ControlPlane = (*Client)(nil)
 
+type TransportMode string
+
+const (
+	TransportSpawned TransportMode = "spawned"
+	TransportDaemon  TransportMode = "daemon"
+)
+
+type TransportConfig struct {
+	Mode       TransportMode
+	ListenURL  string
+	SocketPath string
+}
+
 type rpcResponse struct {
 	Result any
 	Error  error
@@ -34,7 +47,7 @@ type rpcResponse struct {
 
 type Client struct {
 	codexBin       string
-	listenURL      string
+	transport      TransportConfig
 	cwd            string
 	requestTimeout time.Duration
 
@@ -57,9 +70,22 @@ type Client struct {
 }
 
 func NewClient(codexBin, listenURL, cwd string, requestTimeout time.Duration) *Client {
+	return NewClientWithTransport(codexBin, TransportConfig{
+		Mode:      TransportSpawned,
+		ListenURL: listenURL,
+	}, cwd, requestTimeout)
+}
+
+func NewClientWithTransport(codexBin string, transport TransportConfig, cwd string, requestTimeout time.Duration) *Client {
+	if transport.Mode == "" {
+		transport.Mode = TransportSpawned
+	}
+	if strings.TrimSpace(transport.ListenURL) == "" {
+		transport.ListenURL = "stdio://"
+	}
 	return &Client{
 		codexBin:       codexBin,
-		listenURL:      listenURL,
+		transport:      transport,
 		cwd:            cwd,
 		requestTimeout: requestTimeout,
 		pending:        map[uint64]chan rpcResponse{},
@@ -383,19 +409,16 @@ func (c *Client) ThreadRead(ctx context.Context, threadID string, includeTurns b
 	return asMap(result), nil
 }
 
-func (c *Client) ThreadResume(ctx context.Context, threadID, cwd string) (map[string]any, error) {
-	params := map[string]any{
-		"threadId":               threadID,
-		"persistExtendedHistory": true,
-	}
-	if strings.TrimSpace(cwd) != "" {
-		params["cwd"] = cwd
-	}
-	result, err := c.Request(ctx, "thread/resume", params)
+func (c *Client) ThreadResume(ctx context.Context, threadID, _ string) (map[string]any, error) {
+	result, err := c.Request(ctx, "thread/resume", threadResumeParams(threadID))
 	if err != nil {
 		return nil, err
 	}
 	return asMap(result), nil
+}
+
+func threadResumeParams(threadID string) map[string]any {
+	return map[string]any{"threadId": threadID}
 }
 
 func (c *Client) TurnStart(ctx context.Context, threadID, message, cwd string, options TurnStartOptions) (map[string]any, error) {
@@ -776,18 +799,37 @@ func (c *Client) buildCommand() (*exec.Cmd, error) {
 	if err != nil {
 		executable = c.codexBin
 	}
+	args, err := c.appServerArgs()
+	if err != nil {
+		return nil, err
+	}
 	if runtime.GOOS == "windows" {
 		ext := strings.ToLower(filepath.Ext(executable))
 		if ext == ".cmd" || ext == ".bat" {
-			command := fmt.Sprintf("%s app-server --listen %s", executable, c.listenURL)
+			command := strings.Join(append([]string{executable}, args...), " ")
 			cmd := exec.Command(os.Getenv("ComSpec"), "/d", "/c", command)
 			cmd.Dir = c.cwd
 			return cmd, nil
 		}
 	}
-	cmd := exec.Command(executable, "app-server", "--listen", c.listenURL)
+	cmd := exec.Command(executable, args...)
 	cmd.Dir = c.cwd
 	return cmd, nil
+}
+
+func (c *Client) appServerArgs() ([]string, error) {
+	switch c.transport.Mode {
+	case TransportSpawned:
+		return []string{"app-server", "--listen", c.transport.ListenURL}, nil
+	case TransportDaemon:
+		args := []string{"app-server", "proxy"}
+		if socketPath := strings.TrimSpace(c.transport.SocketPath); socketPath != "" {
+			args = append(args, "--sock", socketPath)
+		}
+		return args, nil
+	default:
+		return nil, fmt.Errorf("unsupported app-server transport mode %q", c.transport.Mode)
+	}
 }
 
 func (c *Client) readStdout(generation uint64) {

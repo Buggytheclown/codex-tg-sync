@@ -196,7 +196,9 @@ Primary environment variables:
 - `CTR_GO_HOME`
 - `CTR_GO_CONFIG` (`~/.codex-tg/config.env` by default)
 - `CTR_GO_CODEX_BIN`
+- `CTR_GO_APP_SERVER_MODE` (`spawned` by default; use `daemon` to connect through `codex app-server proxy`)
 - `CTR_GO_APP_SERVER_LISTEN`
+- `CTR_GO_APP_SERVER_SOCKET` (optional Unix socket override for daemon mode)
 - `CTR_GO_CONTROL_API_LISTEN` (empty/off by default; experimental local router-agent API, loopback TCP only)
 - `CTR_GO_TELEGRAM_BOT_TOKEN`
 - `CTR_GO_ALLOWED_USER_IDS`

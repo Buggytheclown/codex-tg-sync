@@ -5,12 +5,73 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 )
+
+func TestBuildCommandUsesManagedDaemonProxy(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("command args are platform-specific")
+	}
+	client := NewClientWithTransport("codex", TransportConfig{
+		Mode:       TransportDaemon,
+		SocketPath: "/tmp/codex-app-server.sock",
+	}, t.TempDir(), time.Second)
+
+	cmd, err := client.buildCommand()
+	if err != nil {
+		t.Fatalf("buildCommand failed: %v", err)
+	}
+	want := []string{"app-server", "proxy", "--sock", "/tmp/codex-app-server.sock"}
+	if got := cmd.Args[1:]; !reflect.DeepEqual(got, want) {
+		t.Fatalf("command args = %#v, want %#v", got, want)
+	}
+}
+
+func TestBuildCommandKeepsSpawnedListenTransport(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("command args are platform-specific")
+	}
+	client := NewClientWithTransport("codex", TransportConfig{
+		Mode:      TransportSpawned,
+		ListenURL: "stdio://",
+	}, t.TempDir(), time.Second)
+
+	cmd, err := client.buildCommand()
+	if err != nil {
+		t.Fatalf("buildCommand failed: %v", err)
+	}
+	want := []string{"app-server", "--listen", "stdio://"}
+	if got := cmd.Args[1:]; !reflect.DeepEqual(got, want) {
+		t.Fatalf("command args = %#v, want %#v", got, want)
+	}
+}
+
+func TestBuildCommandRejectsUnknownTransportMode(t *testing.T) {
+	client := NewClientWithTransport("codex", TransportConfig{
+		Mode: "unexpected",
+	}, t.TempDir(), time.Second)
+
+	_, err := client.buildCommand()
+	if err == nil {
+		t.Fatal("buildCommand succeeded, want unsupported transport error")
+	}
+	if !strings.Contains(err.Error(), "unsupported app-server transport mode") {
+		t.Fatalf("error = %v, want unsupported transport message", err)
+	}
+}
+
+func TestThreadResumeParamsContainOnlyThreadID(t *testing.T) {
+	params := threadResumeParams("thread-1")
+	want := map[string]any{"threadId": "thread-1"}
+	if !reflect.DeepEqual(params, want) {
+		t.Fatalf("threadResumeParams = %#v, want %#v", params, want)
+	}
+}
 
 type overlapDetectingWriteCloser struct {
 	mu      sync.Mutex

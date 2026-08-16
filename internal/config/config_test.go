@@ -32,10 +32,39 @@ func TestFromEnvReadsAFCGroupID(t *testing.T) {
 	}
 }
 
+func TestFromEnvReadsManagedDaemonTransport(t *testing.T) {
+	t.Setenv("CTR_GO_CONFIG", filepath.Join(t.TempDir(), "missing.env"))
+	t.Setenv("CTR_GO_APP_SERVER_MODE", "daemon")
+	t.Setenv("CTR_GO_APP_SERVER_SOCKET", filepath.Join(t.TempDir(), "app-server.sock"))
+
+	cfg := FromEnv()
+
+	if got, want := cfg.AppServerMode, "daemon"; got != want {
+		t.Fatalf("AppServerMode = %q, want %q", got, want)
+	}
+	if got, want := cfg.AppServerSocket, os.Getenv("CTR_GO_APP_SERVER_SOCKET"); got != want {
+		t.Fatalf("AppServerSocket = %q, want %q", got, want)
+	}
+}
+
+func TestFromEnvDefaultsToSpawnedAppServer(t *testing.T) {
+	t.Setenv("CTR_GO_CONFIG", filepath.Join(t.TempDir(), "missing.env"))
+	t.Setenv("CTR_GO_APP_SERVER_MODE", "")
+
+	cfg := FromEnv()
+
+	if got, want := cfg.AppServerMode, "spawned"; got != want {
+		t.Fatalf("AppServerMode = %q, want %q", got, want)
+	}
+	if cfg.AppServerSocket != "" {
+		t.Fatalf("AppServerSocket = %q, want empty default socket", cfg.AppServerSocket)
+	}
+}
+
 func TestMarshalJSONIncludesPublicRuntimeConfig(t *testing.T) {
 	t.Parallel()
 
-	data, err := json.Marshal(Config{NotifyNewRun: true, ControlAPIListen: "127.0.0.1:8765", AFCGroupID: -100123})
+	data, err := json.Marshal(Config{AppServerMode: "daemon", AppServerSocket: "/tmp/codex.sock", NotifyNewRun: true, ControlAPIListen: "127.0.0.1:8765", AFCGroupID: -100123})
 	if err != nil {
 		t.Fatalf("json.Marshal failed: %v", err)
 	}
@@ -51,6 +80,12 @@ func TestMarshalJSONIncludesPublicRuntimeConfig(t *testing.T) {
 	}
 	if got["afc_group_id"] != float64(-100123) {
 		t.Fatalf("afc_group_id = %#v, want -100123", got["afc_group_id"])
+	}
+	if got["app_server_mode"] != "daemon" {
+		t.Fatalf("app_server_mode = %#v, want daemon", got["app_server_mode"])
+	}
+	if got["app_server_socket"] != "/tmp/codex.sock" {
+		t.Fatalf("app_server_socket = %#v, want configured socket", got["app_server_socket"])
 	}
 }
 
