@@ -148,9 +148,17 @@ func (s *Service) dispatchAFCMessage(ctx context.Context, topic model.AFCTopic, 
 	if !created {
 		return afcDuplicateReceiptResponse(receipt), nil
 	}
-	if topic.ActiveTurnState == model.AFCTurnStarting || topic.ActiveTurnState == model.AFCTurnActive || topic.ActiveTurnState == model.AFCTurnUnknown {
+	if topic.ActiveTurnState == model.AFCTurnActive {
+		return s.steerManagedAFCTurnLocked(ctx, topic, receipt, text)
+	}
+	if topic.ActiveTurnState == model.AFCTurnStarting || topic.ActiveTurnState == model.AFCTurnUnknown {
 		_ = s.store.MarkAFCReceiptState(ctx, receipt, model.AFCReceiptRejected)
-		return &DirectResponse{Text: "This AFC topic is already active or ownership-unknown. The new message was not queued."}, nil
+		return &DirectResponse{Text: "This AFC topic is starting or ownership-unknown. The new message was not queued."}, nil
+	}
+	targetTurnID, targetErr := s.authoritativeAFCActiveTurnLocked(ctx, topic)
+	if targetErr != nil {
+		_ = s.store.MarkAFCReceiptState(ctx, receipt, model.AFCReceiptRejected)
+		return &DirectResponse{Text: "AFC could not verify the current daemon turn; no prompt was sent: " + targetErr.Error()}, nil
 	}
 	lease, err := s.afcWriter.Reserve(ctx, topic.ThreadID)
 	if err != nil {
@@ -194,8 +202,36 @@ func (s *Service) dispatchAFCMessage(ctx context.Context, topic model.AFCTopic, 
 		_ = s.store.MarkAFCDispatchFailure(ctx, receipt, model.AFCReceiptRejected, model.AFCTurnTerminal, lease.Generation)
 		return &DirectResponse{Text: fmt.Sprintf("AFC could not resume the thread; the prompt was not sent: %v", err)}, nil
 	}
-	result, turnErr := lease.Process.TurnStart(ctx, topic.ThreadID, text, cwd, s.turnStartOptions(ctx, "", thread))
+	startedNewTurn := targetTurnID == ""
+	var result map[string]any
+	var turnErr error
+	if targetTurnID != "" {
+		result, turnErr = lease.Process.TurnSteer(ctx, topic.ThreadID, targetTurnID, text)
+		if foundTurnID := activeTurnIDFromSteerMismatch(turnErr); foundTurnID != "" {
+			targetTurnID = foundTurnID
+			result, turnErr = lease.Process.TurnSteer(ctx, topic.ThreadID, targetTurnID, text)
+		}
+		if result == nil && steerFailureMeansNoActiveTurn(turnErr) {
+			current, readErr := readAuthoritativeAFCSnapshot(ctx, lease.Process, topic.ThreadID)
+			if readErr != nil {
+				turnErr = readErr
+			} else {
+				if refreshedTurnID := activeTurnIDFromAFCSnapshot(current); refreshedTurnID != "" {
+					targetTurnID = refreshedTurnID
+					result, turnErr = lease.Process.TurnSteer(ctx, topic.ThreadID, targetTurnID, text)
+				} else {
+					startedNewTurn = true
+					result, turnErr = lease.Process.TurnStart(ctx, topic.ThreadID, text, cwd, s.turnStartOptions(ctx, "", thread))
+				}
+			}
+		}
+	} else {
+		result, turnErr = lease.Process.TurnStart(ctx, topic.ThreadID, text, cwd, s.turnStartOptions(ctx, "", thread))
+	}
 	turnID := appserverThreadTurnID(result)
+	if turnID == "" && turnErr == nil && !startedNewTurn {
+		turnID = targetTurnID
+	}
 	if turnErr != nil || strings.TrimSpace(turnID) == "" {
 		if afcDispatchAmbiguous(turnErr, turnID) {
 			_ = s.afcWriter.MarkUnknown(lease)
@@ -217,12 +253,98 @@ func (s *Service) dispatchAFCMessage(ctx context.Context, topic model.AFCTopic, 
 		_ = s.store.MarkAFCDispatchFailure(ctx, receipt, model.AFCReceiptUnknown, model.AFCTurnUnknown, lease.Generation)
 		return &DirectResponse{Text: "AFC dispatched the request but could not persist confirmation; outcome is unknown."}, nil
 	}
-	_ = s.markTelegramOriginTurnFromTelegram(ctx, topic.ThreadID, turnID, topic.ChatID, topic.TopicID)
+	if startedNewTurn {
+		_ = s.markTelegramOriginTurnFromTelegram(ctx, topic.ThreadID, turnID, topic.ChatID, topic.TopicID)
+	}
 	if thread != nil {
 		s.ensureStartedTurnSnapshot(ctx, thread, turnID)
 	}
 	s.startAFCTelegramOriginHotPoll(ctx, topic.ThreadID, turnID)
-	return &DirectResponse{Text: fmt.Sprintf("AFC turn started: %s", turnID), ThreadID: topic.ThreadID, TurnID: turnID}, nil
+	if startedNewTurn {
+		return &DirectResponse{Text: fmt.Sprintf("AFC turn started: %s", turnID), ThreadID: topic.ThreadID, TurnID: turnID}, nil
+	}
+	return &DirectResponse{Text: fmt.Sprintf("AFC input steered to active turn: %s", turnID), ThreadID: topic.ThreadID, TurnID: turnID}, nil
+}
+
+func (s *Service) steerManagedAFCTurnLocked(ctx context.Context, topic model.AFCTopic, receipt model.AFCMessageReceipt, text string) (*DirectResponse, error) {
+	lease, ok := s.afcLeases[topic.ThreadID]
+	if !ok || lease.Generation != topic.WriterGeneration || strings.TrimSpace(topic.ActiveTurnID) == "" {
+		_ = s.store.MarkAFCReceiptState(ctx, receipt, model.AFCReceiptRejected)
+		return &DirectResponse{Text: "This AFC turn has no current guarded writer; the message was not sent."}, nil
+	}
+	turnID := topic.ActiveTurnID
+	result, err := lease.Process.TurnSteer(ctx, topic.ThreadID, turnID, text)
+	if foundTurnID := activeTurnIDFromSteerMismatch(err); foundTurnID != "" {
+		turnID = foundTurnID
+		result, err = lease.Process.TurnSteer(ctx, topic.ThreadID, turnID, text)
+	}
+	if err != nil || result == nil {
+		_ = s.store.MarkAFCReceiptState(ctx, receipt, model.AFCReceiptRejected)
+		return &DirectResponse{Text: activeThreadReplyText(&model.Thread{ID: topic.ThreadID, Title: topic.Title, Status: "active", ActiveTurnID: turnID}, err)}, nil
+	}
+	if err := s.store.MarkAFCDispatchState(ctx, receipt, model.AFCReceiptDispatched, turnID, model.AFCTurnActive, lease.Generation); err != nil {
+		_ = s.store.MarkAFCReceiptState(ctx, receipt, model.AFCReceiptUnknown)
+		return &DirectResponse{Text: "AFC steered the turn but could not persist confirmation; outcome is unknown."}, nil
+	}
+	return &DirectResponse{Text: fmt.Sprintf("AFC input steered to active turn: %s", turnID), ThreadID: topic.ThreadID, TurnID: turnID}, nil
+}
+
+func (s *Service) authoritativeAFCActiveTurnLocked(ctx context.Context, topic model.AFCTopic) (string, error) {
+	if !strings.EqualFold(strings.TrimSpace(s.cfg.AppServerMode), string(appserver.TransportDaemon)) {
+		return "", nil
+	}
+	s.mu.RLock()
+	poll, connected := s.poll, s.pollConnected
+	s.mu.RUnlock()
+	if !connected || poll == nil {
+		return "", errors.New("shared daemon session is unavailable")
+	}
+	current, err := readAuthoritativeAFCSnapshot(ctx, poll, topic.ThreadID)
+	if err != nil {
+		return "", err
+	}
+	_ = s.store.UpsertThread(ctx, current.Thread)
+	return activeTurnIDFromAFCSnapshot(current), nil
+}
+
+func readAuthoritativeAFCSnapshot(ctx context.Context, session Session, threadID string) (appserver.ThreadReadSnapshot, error) {
+	payload, err := session.ThreadRead(ctx, threadID, true)
+	if err != nil {
+		return appserver.ThreadReadSnapshot{}, err
+	}
+	if payload == nil {
+		return appserver.ThreadReadSnapshot{}, errors.New("App Server returned an empty thread snapshot")
+	}
+	current := appserver.SnapshotFromThreadRead(payload)
+	if strings.TrimSpace(current.Thread.ID) != strings.TrimSpace(threadID) {
+		return appserver.ThreadReadSnapshot{}, fmt.Errorf("App Server returned thread %q while %q was requested", current.Thread.ID, threadID)
+	}
+	return current, nil
+}
+
+func activeTurnIDFromAFCSnapshot(snapshot appserver.ThreadReadSnapshot) string {
+	turnID := strings.TrimSpace(snapshot.LatestTurnID)
+	if turnID == "" || isTerminalStatus(snapshot.LatestTurnStatus) || !threadLooksActiveForInput(&snapshot.Thread) {
+		return ""
+	}
+	return turnID
+}
+
+func (s *Service) afcOwnsTelegramMutations(ctx context.Context) (bool, error) {
+	state, err := s.store.GetAFCState(ctx)
+	if err != nil {
+		return false, err
+	}
+	return state.State == model.AFCStateActivating || state.State == model.AFCStateActive || state.State == model.AFCStateDraining, nil
+}
+
+func afcLegacyReadOnlyCommand(text string) bool {
+	fields := strings.Fields(strings.TrimSpace(strings.ToLower(text)))
+	if len(fields) != 1 {
+		return false
+	}
+	command, _, _ := strings.Cut(fields[0], "@")
+	return command == "/help" || command == "/status"
 }
 
 func isAFCNoRolloutError(err error) bool {

@@ -1,6 +1,6 @@
 # ADR-020: AFC and Legacy Writer Ownership
 
-- Status: accepted
+- Status: accepted; AFC/legacy mutation policy amended by ADR-026
 - Amends: ADR-001, ADR-012, ADR-019
 - Related: `docs/testing/regression-map.md`
 
@@ -44,8 +44,10 @@ must not replay the prompt or kill the process blindly.
 
 ## AFC and legacy consequences
 
-- A legacy turn that started before AFC activation may finish normally, and its
-  approvals and Stop controls remain on the legacy DM surface.
+- A legacy turn that started before AFC activation may finish normally. In the
+  shared-daemon AFC product mode, ADR-026 disables legacy DM mutations,
+  including old approval and Stop controls, until AFC is off; passive runtime
+  completion is still observed without replay.
 - New legacy mutations of an AFC-managed thread fail before an App Server
   mutation while another process generation owns that thread.
 - AFC shutdown drains and closes only the AFC writer. It does not interrupt a

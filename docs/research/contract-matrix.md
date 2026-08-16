@@ -122,6 +122,14 @@ Local HTTP adapter:
 
 - AFC Control exposes `/sync` to trigger the same idempotent Desktop-chat
   reconciliation that normally runs on the observer poll interval.
+- While AFC is activating, active, or draining, legacy DM `/help` and `/status`
+  remain read-only but every legacy Telegram mutation is rejected before an
+  App Server call. `/afc off` does not restart legacy lifecycle; a later
+  explicit DM mutation starts it lazily.
+- A plain message in an active AFC topic steers the authoritative active turn.
+  A new turn starts only after terminal or explicit stale-active evidence.
+- In shared-daemon mode, topic `/stop` interrupts the exact active turn returned
+  by an immediate authoritative read, regardless of Desktop or Telegram origin.
 
 - Global observer monitoring is default-on when an operator target can be resolved automatically.
 - `/observe all` moves the single global observer target to the current chat/topic.

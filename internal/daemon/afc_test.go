@@ -704,7 +704,7 @@ func TestAFCConcurrentTopicsShareWriterAndDuplicateDoesNotReplay(t *testing.T) {
 		t.Fatalf("duplicate=%#v err=%v", duplicate, err)
 	}
 	sameTopic, err := service.HandleMessageWithID(ctx, -1001, 11, 502, 123456789, "second same topic", 0)
-	if err != nil || sameTopic == nil || !strings.Contains(sameTopic.Text, "already active") {
+	if err != nil || sameTopic == nil || !strings.Contains(sameTopic.Text, "steered") {
 		t.Fatalf("sameTopic=%#v err=%v", sameTopic, err)
 	}
 	second, err := service.HandleMessageWithID(ctx, -1001, 12, 601, 123456789, "parallel prompt", 0)
@@ -717,6 +717,9 @@ func TestAFCConcurrentTopicsShareWriterAndDuplicateDoesNotReplay(t *testing.T) {
 	}
 	if len(writer.threadResumeCalls) != 2 || len(writer.turnStartCalls) != 2 {
 		t.Fatalf("resume=%#v starts=%#v", writer.threadResumeCalls, writer.turnStartCalls)
+	}
+	if len(writer.turnSteerCalls) != 1 || writer.turnSteerCalls[0].threadID != "thread-1" || writer.turnSteerCalls[0].message != "second same topic" {
+		t.Fatalf("steers=%#v", writer.turnSteerCalls)
 	}
 	if writer.turnStartCalls[0].message != "first prompt" || writer.turnStartCalls[1].message != "parallel prompt" {
 		t.Fatalf("prompts=%#v", writer.turnStartCalls)
@@ -764,6 +767,117 @@ func TestAFCOwnershipBlocksLaterLegacyLaunchBeforeMutation(t *testing.T) {
 	}
 	if len(writer.threadResumeCalls) != beforeResume || len(writer.turnStartCalls) != beforeStart {
 		t.Fatalf("legacy mutated AFC process: resume=%#v starts=%#v", writer.threadResumeCalls, writer.turnStartCalls)
+	}
+}
+
+func TestAFCActiveBlocksLegacyDMBeforeAppServerAndOffKeepsLegacyLazy(t *testing.T) {
+	service := activeAFCService(t)
+	ctx := context.Background()
+	if err := service.store.SetBinding(ctx, 123456789, 0, "thread-1", model.BindingModeBound); err != nil {
+		t.Fatal(err)
+	}
+	legacy := &stubSession{}
+	service.liveFactory = func() Session { return legacy }
+
+	blocked, err := service.HandleMessageWithID(ctx, 123456789, 0, 801, 123456789, "legacy prompt", 0)
+	if err != nil || blocked == nil || !strings.Contains(blocked.Text, "AFC active") {
+		t.Fatalf("blocked=%#v err=%v", blocked, err)
+	}
+	if legacy.startCalls != 0 || len(legacy.threadResumeCalls) != 0 || len(legacy.turnStartCalls) != 0 {
+		t.Fatalf("legacy App Server was touched: start=%d resume=%#v turn=%#v", legacy.startCalls, legacy.threadResumeCalls, legacy.turnStartCalls)
+	}
+	help, err := service.HandleMessageWithID(ctx, 123456789, 0, 802, 123456789, "/help", 0)
+	if err != nil || help == nil || !strings.Contains(help.Text, "Commands:") {
+		t.Fatalf("help=%#v err=%v", help, err)
+	}
+	status, err := service.HandleMessageWithID(ctx, 123456789, 0, 803, 123456789, "/status", 0)
+	if err != nil || status == nil || !strings.Contains(status.Text, "Go core status") {
+		t.Fatalf("status=%#v err=%v", status, err)
+	}
+
+	if _, err := service.HandleMessageWithID(ctx, -1001, 1, 804, 123456789, "/afc off", 0); err != nil {
+		t.Fatal(err)
+	}
+	if legacy.startCalls != 0 {
+		t.Fatalf("off eagerly started legacy writer: %d", legacy.startCalls)
+	}
+	started, err := service.HandleMessageWithID(ctx, 123456789, 0, 805, 123456789, "explicit legacy prompt", 0)
+	if err != nil || started == nil || started.TurnID != "started-turn" {
+		t.Fatalf("started=%#v err=%v", started, err)
+	}
+	if legacy.startCalls != 1 || len(legacy.turnStartCalls) != 1 {
+		t.Fatalf("legacy did not start lazily: start=%d turns=%#v", legacy.startCalls, legacy.turnStartCalls)
+	}
+}
+
+func TestAFCActiveTopicMessageSteersCurrentTelegramTurn(t *testing.T) {
+	service := activeAFCService(t)
+	writer := &stubSession{}
+	service.liveFactory = func() Session { return writer }
+	ctx := context.Background()
+	if _, err := service.HandleMessageWithID(ctx, -1001, 11, 501, 123456789, "first", 0); err != nil {
+		t.Fatal(err)
+	}
+
+	response, err := service.HandleMessageWithID(ctx, -1001, 11, 502, 123456789, "steer this", 0)
+	if err != nil || response == nil || !strings.Contains(response.Text, "steered") {
+		t.Fatalf("response=%#v err=%v", response, err)
+	}
+	if len(writer.turnSteerCalls) != 1 || writer.turnSteerCalls[0].turnID != "started-turn" || writer.turnSteerCalls[0].message != "steer this" {
+		t.Fatalf("steers=%#v", writer.turnSteerCalls)
+	}
+	if len(writer.turnStartCalls) != 1 {
+		t.Fatalf("turn starts=%#v, want only initial turn", writer.turnStartCalls)
+	}
+}
+
+func TestAFCDesktopOriginActiveTurnIsSteeredWithoutParallelStart(t *testing.T) {
+	service := activeAFCService(t)
+	service.cfg.AppServerMode = "daemon"
+	ctx := context.Background()
+	poll := &stubSession{threadReads: map[string]map[string]any{
+		"thread-1": afcRunningPayloadWithCommentary("thread-1", "desktop-turn", "desktop progress"),
+	}}
+	service.mu.Lock()
+	service.poll, service.pollConnected = poll, true
+	service.mu.Unlock()
+	writer := &stubSession{}
+	service.liveFactory = func() Session { return writer }
+
+	response, err := service.HandleMessageWithID(ctx, -1001, 11, 503, 123456789, "continue from Telegram", 0)
+	if err != nil || response == nil || response.TurnID != "desktop-turn" || !strings.Contains(response.Text, "steered") {
+		t.Fatalf("response=%#v err=%v", response, err)
+	}
+	if len(writer.turnSteerCalls) != 1 || writer.turnSteerCalls[0].turnID != "desktop-turn" {
+		t.Fatalf("steers=%#v", writer.turnSteerCalls)
+	}
+	if len(writer.turnStartCalls) != 0 {
+		t.Fatalf("parallel turn starts=%#v", writer.turnStartCalls)
+	}
+}
+
+func TestAFCStaleDesktopActiveTurnFallsBackAfterAuthoritativeRead(t *testing.T) {
+	service := activeAFCService(t)
+	service.cfg.AppServerMode = "daemon"
+	ctx := context.Background()
+	poll := &stubSession{threadReads: map[string]map[string]any{
+		"thread-1": afcRunningPayload("thread-1", "stale-desktop-turn"),
+	}}
+	service.mu.Lock()
+	service.poll, service.pollConnected = poll, true
+	service.mu.Unlock()
+	writer := &stubSession{
+		turnSteerErr: errors.New("map[code:-32600 message:no active turn to steer]"),
+		threadReads:  map[string]map[string]any{"thread-1": afcCompletedPayload("thread-1", "stale-desktop-turn", "done")},
+	}
+	service.liveFactory = func() Session { return writer }
+
+	response, err := service.HandleMessageWithID(ctx, -1001, 11, 504, 123456789, "start after stale", 0)
+	if err != nil || response == nil || response.TurnID != "started-turn" {
+		t.Fatalf("response=%#v err=%v", response, err)
+	}
+	if len(writer.turnSteerCalls) != 1 || len(writer.turnStartCalls) != 1 {
+		t.Fatalf("steers=%#v starts=%#v", writer.turnSteerCalls, writer.turnStartCalls)
 	}
 }
 
@@ -1047,6 +1161,26 @@ func TestAFCStopInterruptsOnlyCurrentTopicTurn(t *testing.T) {
 	}
 	if len(writer.turnInterruptCalls) != 1 || writer.turnInterruptCalls[0].threadID != "thread-1" {
 		t.Fatalf("interrupts=%#v", writer.turnInterruptCalls)
+	}
+}
+
+func TestAFCStopInterruptsDesktopOriginTurnFromAuthoritativeDaemonSnapshot(t *testing.T) {
+	service := activeAFCService(t)
+	service.cfg.AppServerMode = "daemon"
+	ctx := context.Background()
+	poll := &stubSession{threadReads: map[string]map[string]any{
+		"thread-1": afcRunningPayload("thread-1", "desktop-turn"),
+	}}
+	service.mu.Lock()
+	service.poll, service.pollConnected = poll, true
+	service.mu.Unlock()
+
+	response, err := service.HandleMessageWithID(ctx, -1001, 11, 701, 123456789, "/stop", 0)
+	if err != nil || response == nil || !strings.Contains(response.Text, "Stop requested") {
+		t.Fatalf("response=%#v err=%v", response, err)
+	}
+	if len(poll.turnInterruptCalls) != 1 || poll.turnInterruptCalls[0].threadID != "thread-1" || poll.turnInterruptCalls[0].turnID != "desktop-turn" {
+		t.Fatalf("interrupts=%#v", poll.turnInterruptCalls)
 	}
 }
 

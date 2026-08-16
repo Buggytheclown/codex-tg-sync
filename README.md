@@ -238,7 +238,11 @@ topic for each newly discovered Desktop chat; `/sync` triggers the same reconcil
 immediately. Control advertises `/projects` and `/newchat`;
 either command creates a Telegram draft topic without holding an App Server
 writer. Send its first prompt only after the topic is ready: AFC creates the
-Codex thread and first turn together, then renames the topic from that prompt. `/afc off` never
+Codex thread and first turn together, then renames the topic from that prompt.
+Messages sent while a topic turn is active steer that exact turn, and `/stop`
+targets the current shared-daemon turn regardless of whether Desktop or Telegram
+started it. While AFC is active, legacy DM mutations are disabled; `/help` and
+`/status` remain available. `/afc off` never
 restores the legacy observer automatically. Use `/afc off --force` only when AFC
 turns must be interrupted and drained.
 

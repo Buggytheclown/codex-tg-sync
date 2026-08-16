@@ -1,6 +1,6 @@
 # ADR-024: AFC Guarded Controls And Draining
 
-- Status: accepted
+- Status: accepted; Stop origin restriction amended by ADR-026
 - Related: ADR-020, ADR-023
 
 ## Context
@@ -18,8 +18,10 @@ and force-off must not trade cleanup convenience for lost turn ownership.
   actionable. Passive/Desktop-origin waiting state remains display-only.
 - Resolving a request or observing its turn terminal expires every matching AFC
   callback. Telegram send failure does not retain writer ownership.
-- `/stop` in a managed topic interrupts only its current AFC lease and waits for
-  normal terminal evidence; it never targets passive/Desktop ownership.
+- In spawned compatibility mode, `/stop` in a managed topic interrupts only its
+  current AFC lease. In shared-daemon mode, ADR-026 allows `/stop` to re-read
+  the topic's exact durable thread and interrupt its authoritative active turn
+  regardless of Desktop or Telegram origin. It never guesses a turn id.
 - Safe `/afc off` refuses while starting, active, or unknown leases exist and
   lists their stable topic titles.
 - `/afc off --force` first changes the writer/session to `draining`, rejects new

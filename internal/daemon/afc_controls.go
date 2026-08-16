@@ -26,18 +26,40 @@ func (s *Service) stopAFCTurn(ctx context.Context, topicID int64) (*DirectRespon
 	if err != nil {
 		return nil, err
 	}
-	if topic == nil || topic.ActiveTurnState != model.AFCTurnActive || topic.ActiveTurnID == "" {
-		return &DirectResponse{Text: "This topic has no stoppable Telegram-origin turn."}, nil
+	if topic == nil {
+		return &DirectResponse{Text: "This AFC topic is stale or unknown."}, nil
 	}
-	lease, ok := s.afcLeases[topic.ThreadID]
-	if !ok || lease.Generation != topic.WriterGeneration {
-		return &DirectResponse{Text: "Turn ownership is unknown; AFC will not interrupt it blindly."}, nil
+	if topic.ActiveTurnState == model.AFCTurnActive && topic.ActiveTurnID != "" {
+		lease, ok := s.afcLeases[topic.ThreadID]
+		if ok && lease.Generation == topic.WriterGeneration {
+			if err := lease.Process.TurnInterrupt(ctx, topic.ThreadID, topic.ActiveTurnID); err != nil {
+				return &DirectResponse{Text: fmt.Sprintf("Stop request failed: %v", err)}, nil
+			}
+			_ = s.markTelegramOriginExplicitInterrupt(ctx, topic.ThreadID, topic.ActiveTurnID)
+			return &DirectResponse{Text: "Stop requested. AFC remains active until terminal confirmation."}, nil
+		}
 	}
-	if err := lease.Process.TurnInterrupt(ctx, topic.ThreadID, topic.ActiveTurnID); err != nil {
+	if !strings.EqualFold(strings.TrimSpace(s.cfg.AppServerMode), "daemon") {
+		return &DirectResponse{Text: "This topic has no stoppable AFC-owned turn."}, nil
+	}
+	s.mu.RLock()
+	poll, connected := s.poll, s.pollConnected
+	s.mu.RUnlock()
+	if !connected || poll == nil {
+		return &DirectResponse{Text: "Shared daemon session is unavailable; Stop was not sent."}, nil
+	}
+	current, readErr := readAuthoritativeAFCSnapshot(ctx, poll, topic.ThreadID)
+	if readErr != nil {
+		return &DirectResponse{Text: fmt.Sprintf("Stop could not verify the current turn: %v", readErr)}, nil
+	}
+	turnID := activeTurnIDFromAFCSnapshot(current)
+	if turnID == "" {
+		return &DirectResponse{Text: "This topic has no active turn to stop."}, nil
+	}
+	if err := poll.TurnInterrupt(ctx, topic.ThreadID, turnID); err != nil {
 		return &DirectResponse{Text: fmt.Sprintf("Stop request failed: %v", err)}, nil
 	}
-	_ = s.markTelegramOriginExplicitInterrupt(ctx, topic.ThreadID, topic.ActiveTurnID)
-	return &DirectResponse{Text: "Stop requested. AFC remains active until terminal confirmation."}, nil
+	return &DirectResponse{Text: "Stop requested for the current shared-daemon turn."}, nil
 }
 
 func (s *Service) forceDeactivateAFC(ctx context.Context) (*DirectResponse, error) {

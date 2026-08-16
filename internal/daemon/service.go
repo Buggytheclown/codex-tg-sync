@@ -594,6 +594,13 @@ func (s *Service) HandleMessageWithID(ctx context.Context, chatID, topicID, mess
 	if s.isAFCGroup(chatID) {
 		return s.handleAFCMessage(ctx, topicID, messageID, userID, text)
 	}
+	s.afcMu.Lock()
+	defer s.afcMu.Unlock()
+	if active, err := s.afcOwnsTelegramMutations(ctx); err != nil {
+		return nil, err
+	} else if active && !afcLegacyReadOnlyCommand(text) {
+		return &DirectResponse{Text: "AFC active — use the configured forum group. Legacy Telegram mutations are disabled."}, nil
+	}
 	text = strings.TrimSpace(text)
 	if text == "" {
 		return &DirectResponse{Text: "Plain text messages only right now. Send text, or use /context for routing help."}, nil
@@ -610,6 +617,13 @@ func (s *Service) HandleCallback(ctx context.Context, chatID, topicID, messageID
 	}
 	if s.isAFCGroup(chatID) {
 		return s.handleAFCCallback(ctx, topicID, messageID, token)
+	}
+	s.afcMu.Lock()
+	defer s.afcMu.Unlock()
+	if active, err := s.afcOwnsTelegramMutations(ctx); err != nil {
+		return nil, err
+	} else if active {
+		return &DirectResponse{CallbackText: "AFC active — use the configured forum group."}, nil
 	}
 	route, err := s.store.GetCallbackRoute(ctx, token)
 	if err != nil {
