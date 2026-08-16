@@ -526,6 +526,7 @@ Primary tests:
 - `internal/daemon/afc_test.go::TestAFCDirectDeliveryDeleteFailureStillCreatesTailStatus`
 - `internal/daemon/afc_test.go::TestAFCPresentationIgnoresStalePollTurnWhileAFCWriterIsActive`
 - `internal/daemon/afc_test.go::TestAFCStatusUsesLegacyRunTimingFooter`
+- `internal/daemon/afc_test.go::TestAFCStatusUsesNewestCommentaryBlock`
 - `internal/daemon/afc_test.go::TestAFCPassiveSyncTicksElapsedFromStableTurnStart`
 - `internal/daemon/afc_test.go::TestAFCTelegramOriginHotPollRefreshesAndStopsAtTerminal`
 - `internal/daemon/afc_test.go::TestAFCLiveToolOverlaySurvivesLaggingThreadRead`
@@ -541,6 +542,9 @@ Contract notes:
 - Active restart recovery remains passive; interrupted activation becomes cleanup-only.
 - AFC status uses the legacy observed turn timing and duration formatting;
   elapsed-only changes edit the existing active-turn status message.
+- When App Server exposes multiple commentary blocks newest-first, AFC renders
+  the newest block and edits the existing status anchor rather than displaying
+  an older block from the bounded history window.
 - A successful prompt/steer acknowledgement is followed by one reanchored live
   status at the topic tail; same-turn stale status is removed best-effort while
   previous-turn history remains intact.

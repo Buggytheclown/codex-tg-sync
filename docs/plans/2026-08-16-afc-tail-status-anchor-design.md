@@ -10,6 +10,12 @@ remain anchored above a later Telegram prompt or AFC dispatch acknowledgement.
 Completed-turn history remains unchanged. A new turn still receives its own
 status message and final notification.
 
+Within an active turn, App Server returns `LatestAgentMessages` newest-first.
+When no plan or tool progress is available, AFC renders element zero as the
+current commentary. Each later Codex reasoning/commentary block therefore edits
+the same live status message; older blocks are fallback history, not the active
+status detail.
+
 ## Design
 
 Telegram cannot move an edited message. After a successful AFC topic dispatch,
@@ -49,3 +55,5 @@ final fingerprints, and writer ownership are unchanged.
 - Legacy lifecycle tests remain unchanged.
 - Live Telegram readback verifies that a steer leaves `[Status]` last and later
   progress edits that same message.
+- Multi-commentary readback verifies that each newer Codex block replaces the
+  status detail in place while preserving the status message id.
