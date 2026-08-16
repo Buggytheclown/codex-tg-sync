@@ -120,6 +120,9 @@ Local HTTP adapter:
 
 ## Telegram Adapter Contract
 
+- AFC Control exposes `/sync` to trigger the same idempotent Desktop-chat
+  reconciliation that normally runs on the observer poll interval.
+
 - Global observer monitoring is default-on when an operator target can be resolved automatically.
 - `/observe all` moves the single global observer target to the current chat/topic.
 - `/observe off` disables global background monitoring.

@@ -141,6 +141,7 @@ type Thread struct {
 	CWD             string          `json:"cwd,omitempty"`
 	ProjectName     string          `json:"project_name"`
 	DirectoryName   string          `json:"directory_name,omitempty"`
+	CreatedAt       int64           `json:"created_at,omitempty"`
 	UpdatedAt       int64           `json:"updated_at"`
 	Status          string          `json:"status,omitempty"`
 	LastPreview     string          `json:"last_preview,omitempty"`

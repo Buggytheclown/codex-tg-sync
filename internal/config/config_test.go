@@ -24,11 +24,26 @@ func TestFromEnvReadsCodexChatsRoot(t *testing.T) {
 func TestFromEnvReadsAFCGroupID(t *testing.T) {
 	t.Setenv("CTR_GO_CONFIG", filepath.Join(t.TempDir(), "missing.env"))
 	t.Setenv("CTR_GO_AFC_GROUP_ID", "-1001234567890")
+	t.Setenv("CTR_GO_AFC_INITIAL_TOPIC_LIMIT", "9")
 
 	cfg := FromEnv()
 
 	if cfg.AFCGroupID != -1001234567890 {
 		t.Fatalf("AFCGroupID = %d, want -1001234567890", cfg.AFCGroupID)
+	}
+	if cfg.AFCInitialTopicLimit != 9 {
+		t.Fatalf("AFCInitialTopicLimit = %d, want 9", cfg.AFCInitialTopicLimit)
+	}
+}
+
+func TestFromEnvDefaultsAFCInitialTopicLimitToFive(t *testing.T) {
+	t.Setenv("CTR_GO_CONFIG", filepath.Join(t.TempDir(), "missing.env"))
+	t.Setenv("CTR_GO_AFC_INITIAL_TOPIC_LIMIT", "0")
+
+	cfg := FromEnv()
+
+	if cfg.AFCInitialTopicLimit != 5 {
+		t.Fatalf("AFCInitialTopicLimit = %d, want 5", cfg.AFCInitialTopicLimit)
 	}
 }
 
@@ -64,7 +79,7 @@ func TestFromEnvDefaultsToSpawnedAppServer(t *testing.T) {
 func TestMarshalJSONIncludesPublicRuntimeConfig(t *testing.T) {
 	t.Parallel()
 
-	data, err := json.Marshal(Config{AppServerMode: "daemon", AppServerSocket: "/tmp/codex.sock", NotifyNewRun: true, ControlAPIListen: "127.0.0.1:8765", AFCGroupID: -100123})
+	data, err := json.Marshal(Config{AppServerMode: "daemon", AppServerSocket: "/tmp/codex.sock", NotifyNewRun: true, ControlAPIListen: "127.0.0.1:8765", AFCGroupID: -100123, AFCInitialTopicLimit: 9})
 	if err != nil {
 		t.Fatalf("json.Marshal failed: %v", err)
 	}
@@ -80,6 +95,9 @@ func TestMarshalJSONIncludesPublicRuntimeConfig(t *testing.T) {
 	}
 	if got["afc_group_id"] != float64(-100123) {
 		t.Fatalf("afc_group_id = %#v, want -100123", got["afc_group_id"])
+	}
+	if got["afc_initial_topic_limit"] != float64(9) {
+		t.Fatalf("afc_initial_topic_limit = %#v, want 9", got["afc_initial_topic_limit"])
 	}
 	if got["app_server_mode"] != "daemon" {
 		t.Fatalf("app_server_mode = %#v, want daemon", got["app_server_mode"])

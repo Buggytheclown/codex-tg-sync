@@ -9,6 +9,8 @@ import (
 	"github.com/mideco-tech/codex-tg/internal/storage"
 )
 
+const afcProjectMenuLimit = 8
+
 func (s *Service) afcProjectsMenu(ctx context.Context, controlTopicID int64) (*DirectResponse, error) {
 	state, err := s.store.GetAFCState(ctx)
 	if err != nil {
@@ -28,8 +30,8 @@ func (s *Service) afcProjectsMenu(ctx context.Context, controlTopicID int64) (*D
 	if len(workspaces) == 0 {
 		return &DirectResponse{Text: "No cached project workspaces are available."}, nil
 	}
-	if len(workspaces) > afcTopicLimit {
-		workspaces = workspaces[:afcTopicLimit]
+	if len(workspaces) > afcProjectMenuLimit {
+		workspaces = workspaces[:afcProjectMenuLimit]
 	}
 	lines := []string{"AFC · create an empty Codex task", "Select a project. The first prompt is sent later from the ready topic."}
 	buttons := make([][]model.ButtonSpec, 0, len(workspaces))

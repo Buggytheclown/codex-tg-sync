@@ -36,6 +36,7 @@ func TestFromEnvPrefersGoScopedEnvVars(t *testing.T) {
 	t.Setenv("CTR_GO_PROJECTS_PROJECT_PREVIEW_LIMIT", "11")
 	t.Setenv("CTR_GO_PROJECTS_CHAT_PREVIEW_LIMIT", "4")
 	t.Setenv("CTR_GO_CHATS_PAGE_SIZE", "9")
+	t.Setenv("CTR_GO_AFC_INITIAL_TOPIC_LIMIT", "6")
 
 	cfg := config.FromEnv()
 
@@ -93,6 +94,9 @@ func TestFromEnvPrefersGoScopedEnvVars(t *testing.T) {
 	if got, want := cfg.ChatsPageSize, 9; got != want {
 		t.Fatalf("ChatsPageSize = %d, want %d", got, want)
 	}
+	if got, want := cfg.AFCInitialTopicLimit, 6; got != want {
+		t.Fatalf("AFCInitialTopicLimit = %d, want %d", got, want)
+	}
 }
 
 func TestFromEnvProjectChatLimitsClampInvalidValues(t *testing.T) {
@@ -100,6 +104,7 @@ func TestFromEnvProjectChatLimitsClampInvalidValues(t *testing.T) {
 	t.Setenv("CTR_GO_PROJECTS_PROJECT_PREVIEW_LIMIT", "0")
 	t.Setenv("CTR_GO_PROJECTS_CHAT_PREVIEW_LIMIT", "-1")
 	t.Setenv("CTR_GO_CHATS_PAGE_SIZE", "wat")
+	t.Setenv("CTR_GO_AFC_INITIAL_TOPIC_LIMIT", "-2")
 
 	cfg := config.FromEnv()
 
@@ -111,6 +116,9 @@ func TestFromEnvProjectChatLimitsClampInvalidValues(t *testing.T) {
 	}
 	if got, want := cfg.ChatsPageSize, 8; got != want {
 		t.Fatalf("ChatsPageSize = %d, want default %d", got, want)
+	}
+	if got, want := cfg.AFCInitialTopicLimit, 5; got != want {
+		t.Fatalf("AFCInitialTopicLimit = %d, want default %d", got, want)
 	}
 }
 

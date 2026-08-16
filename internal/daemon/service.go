@@ -67,41 +67,43 @@ type Service struct {
 	legacyWriter *appserver.WriterManager[Session]
 	afcWriter    *appserver.WriterManager[Session]
 
-	sessionMu          sync.Mutex
-	legacyMu           sync.Mutex
-	mu                 sync.RWMutex
-	live               Session
-	poll               Session
-	liveEvents         <-chan control.Event
-	liveCancel         context.CancelFunc
-	runCtx             context.Context
-	legacyLeases       map[string]appserver.WriterLease[Session]
-	liveGeneration     uint64
-	pollGeneration     uint64
-	cancel             context.CancelFunc
-	wg                 sync.WaitGroup
-	panelMu            sync.Mutex
-	afcMu              sync.Mutex
-	afcForum           AFCForum
-	afcLeases          map[string]appserver.WriterLease[Session]
-	afcEventProcess    Session
-	afcEventGeneration uint64
-	afcEventCancel     context.CancelFunc
-	sender             Sender
-	logger             *log.Logger
-	diagnosticMu       sync.Mutex
-	diagnosticWin      time.Time
-	diagnosticN        int
-	diagnosticBy       map[string]int
-	diagnosticLast     map[string]time.Time
-	now                func() time.Time
-	started            bool
-	startedAt          time.Time
-	ready              bool
-	phase              string
-	lastError          string
-	liveConnected      bool
-	pollConnected      bool
+	sessionMu                   sync.Mutex
+	legacyMu                    sync.Mutex
+	mu                          sync.RWMutex
+	live                        Session
+	poll                        Session
+	liveEvents                  <-chan control.Event
+	liveCancel                  context.CancelFunc
+	runCtx                      context.Context
+	legacyLeases                map[string]appserver.WriterLease[Session]
+	liveGeneration              uint64
+	pollGeneration              uint64
+	cancel                      context.CancelFunc
+	wg                          sync.WaitGroup
+	panelMu                     sync.Mutex
+	afcMu                       sync.Mutex
+	afcForum                    AFCForum
+	afcLeases                   map[string]appserver.WriterLease[Session]
+	afcEventProcess             Session
+	afcEventGeneration          uint64
+	afcEventCancel              context.CancelFunc
+	afcSubscribedPollGeneration uint64
+	afcSubscribedThreads        map[string]struct{}
+	sender                      Sender
+	logger                      *log.Logger
+	diagnosticMu                sync.Mutex
+	diagnosticWin               time.Time
+	diagnosticN                 int
+	diagnosticBy                map[string]int
+	diagnosticLast              map[string]time.Time
+	now                         func() time.Time
+	started                     bool
+	startedAt                   time.Time
+	ready                       bool
+	phase                       string
+	lastError                   string
+	liveConnected               bool
+	pollConnected               bool
 }
 
 const (
@@ -156,6 +158,7 @@ func New(cfg config.Config) (*Service, error) {
 	})
 	service.legacyLeases = map[string]appserver.WriterLease[Session]{}
 	service.afcLeases = map[string]appserver.WriterLease[Session]{}
+	service.afcSubscribedThreads = map[string]struct{}{}
 	service.poll = service.pollFactory()
 	return service, nil
 }

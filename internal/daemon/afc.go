@@ -13,13 +13,11 @@ import (
 	"unicode/utf8"
 
 	"github.com/mideco-tech/codex-tg/internal/appserver"
+	"github.com/mideco-tech/codex-tg/internal/config"
 	"github.com/mideco-tech/codex-tg/internal/model"
 )
 
-const (
-	afcControlTopicID = int64(1)
-	afcTopicLimit     = 8
-)
+const afcControlTopicID = int64(1)
 
 // AFCForum is deliberately scoped to the configured AFC group. Its
 // implementation must not accept a chat id, so daemon code cannot accidentally
@@ -106,10 +104,12 @@ func (s *Service) handleAFCMessage(ctx context.Context, topicID, messageID, user
 			return s.deactivateAFC(ctx)
 		case len(fields) == 1 && fields[0] == "/status":
 			return s.afcStatus(ctx)
+		case len(fields) == 1 && fields[0] == "/sync":
+			return s.syncAFCCommand(ctx)
 		case len(fields) == 1 && (fields[0] == "/projects" || fields[0] == "/newchat"):
 			return s.afcProjectsMenu(ctx, topicID)
 		default:
-			return &DirectResponse{Text: "AFC Control accepts /afc on, /afc off, /status, /projects, and /newchat. Legacy commands are disabled in this group."}, nil
+			return &DirectResponse{Text: "AFC Control accepts /afc on, /afc off, /status, /sync, /projects, and /newchat. Legacy commands are disabled in this group."}, nil
 		}
 	}
 	topic, err := s.store.GetActiveAFCTopic(ctx, s.cfg.AFCGroupID, topicID)
@@ -278,8 +278,9 @@ func (s *Service) activateAFC(ctx context.Context, userID int64) (*DirectRespons
 		}
 		return filtered[i].UpdatedAt > filtered[j].UpdatedAt
 	})
-	if len(filtered) > afcTopicLimit {
-		filtered = filtered[:afcTopicLimit]
+	limit := afcInitialTopicLimit(s.cfg.AFCInitialTopicLimit)
+	if len(filtered) > limit {
+		filtered = filtered[:limit]
 	}
 	now := time.Now().UTC()
 	sessionID := randomToken()
@@ -386,42 +387,176 @@ func (s *Service) afcStatus(ctx context.Context) (*DirectResponse, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &DirectResponse{Text: fmt.Sprintf("AFC state: %s\nSession: %s\nConnected topics: %d\nReady drafts: %d\nNew task commands: /projects, /newchat\nActivation summary: %s",
-		state.State, state.SessionID, countConnectedAFCTopics(topics), countReadyAFCDrafts(drafts), strings.TrimSpace(state.ActivationSummaryJSON))}, nil
+	return &DirectResponse{Text: fmt.Sprintf("AFC state: %s\nSession: %s\nInitial topic limit: %d\nConnected topics: %d\nReady drafts: %d\nSync command: /sync\nNew task commands: /projects, /newchat\nActivation summary: %s",
+		state.State, state.SessionID, afcInitialTopicLimit(s.cfg.AFCInitialTopicLimit), countConnectedAFCTopics(topics), countReadyAFCDrafts(drafts), strings.TrimSpace(state.ActivationSummaryJSON))}, nil
 }
 
 func (s *Service) syncAFC(ctx context.Context) {
 	s.afcMu.Lock()
 	defer s.afcMu.Unlock()
+	_, _ = s.syncAFCLocked(ctx)
+}
+
+type afcSyncResult struct {
+	Discovered           int
+	DiscoveryFailures    int
+	Connected            int
+	SubscriptionFailures int
+	ReadFailures         int
+}
+
+func (s *Service) syncAFCCommand(ctx context.Context) (*DirectResponse, error) {
+	s.afcMu.Lock()
+	defer s.afcMu.Unlock()
+	result, err := s.syncAFCLocked(ctx)
+	if err != nil {
+		return &DirectResponse{Text: "AFC sync failed: " + err.Error()}, nil
+	}
+	return &DirectResponse{Text: fmt.Sprintf("AFC sync complete. discovered: %d, discovery failures: %d, connected: %d, subscription failures: %d, read failures: %d",
+		result.Discovered, result.DiscoveryFailures, result.Connected, result.SubscriptionFailures, result.ReadFailures)}, nil
+}
+
+func (s *Service) syncAFCLocked(ctx context.Context) (afcSyncResult, error) {
+	var result afcSyncResult
 	state, err := s.store.GetAFCState(ctx)
-	if err != nil || (state.State != model.AFCStateActive && state.State != model.AFCStateDraining) {
-		return
+	if err != nil {
+		return result, err
+	}
+	if state.State != model.AFCStateActive && state.State != model.AFCStateDraining {
+		return result, errors.New("AFC is not active")
 	}
 	forum := s.getAFCForum()
 	if forum == nil {
-		return
+		return result, errors.New("AFC Telegram transport is unavailable")
 	}
 	s.mu.RLock()
-	poll, connected := s.poll, s.pollConnected
+	poll, connected, pollGeneration := s.poll, s.pollConnected, s.pollGeneration
 	s.mu.RUnlock()
 	if !connected || poll == nil {
-		return
+		return result, errors.New("App Server poll session is unavailable")
 	}
 	topics, err := s.store.ListAFCTopics(ctx, state.SessionID)
 	if err != nil {
-		return
+		return result, err
+	}
+	var discoveryErr error
+	if state.State == model.AFCStateActive {
+		discovered, failures, discoverErr := s.discoverAFCThreadsLocked(ctx, state, forum, poll, topics)
+		result.Discovered = discovered
+		result.DiscoveryFailures = failures
+		discoveryErr = discoverErr
+		if discoverErr == nil {
+			topics, err = s.store.ListAFCTopics(ctx, state.SessionID)
+			if err != nil {
+				return result, err
+			}
+		}
 	}
 	for _, topic := range topics {
 		if topic.TelegramState != model.AFCTopicConnected {
 			continue
 		}
+		result.Connected++
+		if !s.subscribeAFCThreadLocked(ctx, poll, pollGeneration, topic.ThreadID) {
+			result.SubscriptionFailures++
+		}
 		payload, readErr := poll.ThreadRead(ctx, topic.ThreadID, true)
 		if readErr != nil || payload == nil {
+			result.ReadFailures++
 			continue
 		}
 		current := appserver.SnapshotFromThreadRead(payload)
 		s.processAFCSnapshotLocked(ctx, state, forum, topic, current, "afc_poll")
 	}
+	return result, discoveryErr
+}
+
+func (s *Service) discoverAFCThreadsLocked(ctx context.Context, state model.AFCState, forum AFCForum, poll Session, topics []model.AFCTopic) (int, int, error) {
+	cutoff := parseTime(state.SnapshotAt)
+	if cutoff.IsZero() {
+		return 0, 0, errors.New("AFC activation cutoff is unavailable")
+	}
+	result, err := poll.ThreadList(ctx, observerRecentThreadLimit, "")
+	if err != nil {
+		return 0, 0, fmt.Errorf("AFC discovery thread/list: %w", err)
+	}
+	bound := make(map[string]struct{}, len(topics))
+	nextRank := 0
+	for _, topic := range topics {
+		bound[topic.ThreadID] = struct{}{}
+		if topic.Rank > nextRank {
+			nextRank = topic.Rank
+		}
+	}
+	drafts, err := s.store.ListAFCTopicDrafts(ctx, state.SessionID)
+	if err != nil {
+		return 0, 0, err
+	}
+	for _, draft := range drafts {
+		if draft.Rank > nextRank {
+			nextRank = draft.Rank
+		}
+	}
+	threads := appserver.ThreadsFromList(result)
+	sort.Slice(threads, func(i, j int) bool {
+		if threads[i].UpdatedAt == threads[j].UpdatedAt {
+			return threads[i].ID < threads[j].ID
+		}
+		return threads[i].UpdatedAt < threads[j].UpdatedAt
+	})
+	discovered, failures := 0, 0
+	for _, thread := range threads {
+		if thread.ID == "" || thread.Archived || thread.IsInternal() || thread.CreatedAt < cutoff.Unix() {
+			continue
+		}
+		if _, ok := bound[thread.ID]; ok {
+			continue
+		}
+		title := afcTopicTitle(thread)
+		topicID, createErr := forum.CreateAFCTopic(ctx, title)
+		if createErr != nil {
+			failures++
+			continue
+		}
+		nextRank++
+		topic := model.AFCTopic{SessionID: state.SessionID, ChatID: state.ChatID, TopicID: topicID,
+			ThreadID: thread.ID, Rank: nextRank, Title: title, TelegramState: model.AFCTopicConnected}
+		if err := s.store.UpsertAFCTopic(ctx, topic); err != nil {
+			_ = forum.DeleteAFCTopic(ctx, topicID)
+			nextRank--
+			failures++
+			continue
+		}
+		bound[thread.ID] = struct{}{}
+		discovered++
+		_ = s.store.UpsertThread(ctx, thread)
+	}
+	return discovered, failures, nil
+}
+
+func (s *Service) subscribeAFCThreadLocked(ctx context.Context, poll Session, pollGeneration uint64, threadID string) bool {
+	if !strings.EqualFold(strings.TrimSpace(s.cfg.AppServerMode), string(appserver.TransportDaemon)) {
+		return true
+	}
+	if s.afcSubscribedThreads == nil || s.afcSubscribedPollGeneration != pollGeneration {
+		s.afcSubscribedThreads = map[string]struct{}{}
+		s.afcSubscribedPollGeneration = pollGeneration
+	}
+	if _, ok := s.afcSubscribedThreads[threadID]; ok {
+		return true
+	}
+	if _, err := poll.ThreadResume(ctx, threadID, ""); err != nil {
+		return false
+	}
+	s.afcSubscribedThreads[threadID] = struct{}{}
+	return true
+}
+
+func afcInitialTopicLimit(value int) int {
+	if value <= 0 {
+		return config.DefaultAFCInitialTopicLimit
+	}
+	return value
 }
 
 func (s *Service) startAFCTelegramOriginHotPoll(ctx context.Context, threadID, turnID string) {

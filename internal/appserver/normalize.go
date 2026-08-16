@@ -95,6 +95,7 @@ func ThreadFromPayload(payload map[string]any) model.Thread {
 		CWD:            cwd,
 		ProjectName:    project,
 		DirectoryName:  directory,
+		CreatedAt:      int64Value(threadPayload["createdAt"]),
 		UpdatedAt:      updatedAt,
 		Status:         status,
 		LastPreview:    preview,

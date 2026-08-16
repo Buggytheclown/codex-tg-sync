@@ -30,8 +30,9 @@ Desktop sees without maintaining a second App Server runtime.
   only `threadId`. CWD and history options are not added to resume.
 - Live events are preferred for presentation and `thread/read` remains the
   durable reconciliation source.
-- AFC reconciliation continuously materializes newly discovered eligible
-  top-level Desktop threads. Activation creates only a bounded recent snapshot;
+- AFC reconciliation continuously materializes newly created eligible
+  top-level Desktop threads, using App Server `createdAt` rather than treating
+  activity in an old thread as a new chat. Activation creates only a bounded recent snapshot;
   `CTR_GO_AFC_INITIAL_TOPIC_LIMIT` defaults to five.
 - Durable `threadId` mapping makes topic creation idempotent. New Telegram chats
   retain the draft-first `thread/start + turn/start` contract from ADR-025.

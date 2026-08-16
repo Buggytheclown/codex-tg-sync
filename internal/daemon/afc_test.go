@@ -146,6 +146,112 @@ func TestAFCPartialActivationOwnsGroupAndDisablesLegacyObserver(t *testing.T) {
 	}
 }
 
+func TestAFCActivationUsesConfiguredInitialTopicLimit(t *testing.T) {
+	service := newTestService(t)
+	service.cfg.AFCGroupID = -1001
+	service.cfg.AFCInitialTopicLimit = 5
+	items := make([]any, 0, 7)
+	for i := 1; i <= 7; i++ {
+		items = append(items, map[string]any{
+			"id": fmt.Sprintf("thread-%d", i), "title": fmt.Sprintf("Thread %d", i), "updatedAt": float64(i),
+		})
+	}
+	service.poll = &stubSession{threadListResult: map[string]any{"data": items}}
+	service.pollConnected = true
+	forum := &fakeAFCForum{nextTopicID: 10}
+	service.SetAFCForum(forum)
+
+	response, err := service.HandleMessage(context.Background(), -1001, 1, 123456789, "/afc on", 0)
+	if err != nil || response == nil {
+		t.Fatalf("response=%#v err=%v", response, err)
+	}
+	if len(forum.creates) != 5 {
+		t.Fatalf("creates=%#v, want five", forum.creates)
+	}
+	if forum.creates[0] != "Thread 7" || forum.creates[4] != "Thread 3" {
+		t.Fatalf("creates=%#v, want five newest in order", forum.creates)
+	}
+}
+
+func TestAFCSyncDiscoversNewDesktopThreadExactlyOnceAndResubscribesAfterReconnect(t *testing.T) {
+	service := activeAFCService(t)
+	service.cfg.AppServerMode = "daemon"
+	ctx := context.Background()
+	state, err := service.store.GetAFCState(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cutoff := parseTime(state.SnapshotAt).Unix()
+	poll := &stubSession{
+		threadListResult: map[string]any{"data": []any{
+			map[string]any{"id": "thread-1", "title": "Existing", "createdAt": float64(cutoff - 1), "updatedAt": float64(cutoff + 2)},
+			map[string]any{"id": "thread-new", "title": "Desktop task", "createdAt": float64(cutoff), "updatedAt": float64(cutoff + 1)},
+			map[string]any{"id": "thread-old", "title": "Old untracked", "createdAt": float64(cutoff - 1), "updatedAt": float64(cutoff + 3)},
+		}},
+		threadReads: map[string]map[string]any{
+			"thread-1":   afcRunningPayload("thread-1", "turn-1"),
+			"thread-2":   afcRunningPayload("thread-2", "turn-2"),
+			"thread-new": afcRunningPayloadWithCommentary("thread-new", "turn-new", "desktop progress"),
+		},
+	}
+	service.mu.Lock()
+	service.poll, service.pollConnected, service.pollGeneration = poll, true, 7
+	service.mu.Unlock()
+	forum := &fakeAFCForum{nextTopicID: 20}
+	service.SetAFCForum(forum)
+
+	service.syncAFC(ctx)
+	service.syncAFC(ctx)
+
+	if len(forum.creates) != 1 || forum.creates[0] != "Desktop task" {
+		t.Fatalf("creates=%#v, want one new Desktop topic", forum.creates)
+	}
+	if topic, err := service.store.GetActiveAFCTopicByThread(ctx, "s", "thread-new"); err != nil || topic == nil || topic.TopicID != 21 {
+		t.Fatalf("topic=%#v err=%v", topic, err)
+	}
+	if topic, err := service.store.GetActiveAFCTopicByThread(ctx, "s", "thread-old"); err != nil || topic != nil {
+		t.Fatalf("old topic=%#v err=%v, want activation cutoff preserved", topic, err)
+	}
+	if len(poll.threadResumeCalls) != 3 {
+		t.Fatalf("resume calls=%#v, want each connected thread once", poll.threadResumeCalls)
+	}
+
+	service.mu.Lock()
+	service.pollGeneration = 8
+	service.mu.Unlock()
+	service.syncAFC(ctx)
+	if len(poll.threadResumeCalls) != 6 {
+		t.Fatalf("resume calls after reconnect=%#v, want one resubscribe per thread", poll.threadResumeCalls)
+	}
+}
+
+func TestAFCSyncControlCommandReportsDiscoveryAndHelpAdvertisesIt(t *testing.T) {
+	service := activeAFCService(t)
+	ctx := context.Background()
+	state, err := service.store.GetAFCState(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cutoff := parseTime(state.SnapshotAt).Unix()
+	service.mu.Lock()
+	service.poll = &stubSession{threadListResult: map[string]any{"data": []any{
+		map[string]any{"id": "thread-new", "title": "Manual sync", "createdAt": float64(cutoff), "updatedAt": float64(cutoff + 1)},
+	}}}
+	service.pollConnected = true
+	service.mu.Unlock()
+	forum := &fakeAFCForum{nextTopicID: 30}
+	service.SetAFCForum(forum)
+
+	response, err := service.HandleMessage(ctx, -1001, 1, 123456789, "/sync", 0)
+	if err != nil || response == nil || !strings.Contains(response.Text, "discovered: 1") {
+		t.Fatalf("response=%#v err=%v", response, err)
+	}
+	help, err := service.HandleMessage(ctx, -1001, 1, 123456789, "/unknown", 0)
+	if err != nil || help == nil || !strings.Contains(help.Text, "/sync") {
+		t.Fatalf("help=%#v err=%v", help, err)
+	}
+}
+
 func TestAFCActivationFailsClosedWhenControlPreparationFails(t *testing.T) {
 	service := newTestService(t)
 	service.cfg.AFCGroupID = -1001

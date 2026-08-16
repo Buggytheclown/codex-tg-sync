@@ -204,6 +204,7 @@ Primary environment variables:
 - `CTR_GO_ALLOWED_USER_IDS`
 - `CTR_GO_ALLOWED_CHAT_IDS`
 - `CTR_GO_AFC_GROUP_ID` (optional exact private forum supergroup for AFC)
+- `CTR_GO_AFC_INITIAL_TOPIC_LIMIT` (`5` by default; initial `/afc on` snapshot only)
 - `CTR_GO_DEFAULT_CWD`
 - `CTR_GO_CODEX_CHATS_ROOT` (`~/Documents/Codex` by default)
 - `CTR_GO_NOTIFY_NEW_RUN` (`true` by default; set `false`/`off`/`0` to send `New run` silently)
@@ -232,7 +233,9 @@ exactly one `CTR_GO_ALLOWED_USER_IDS` value. The group must contain only that
 user and the bot; the bot must be able to manage topics and delete messages.
 Use `/afc on` in the built-in General topic. Activation validates the group and
 idempotently renames that built-in topic to `Control` before creating managed topics for
-up to eight recent Codex threads. Control advertises `/projects` and `/newchat`;
+five recent Codex threads by default. While AFC is active, reconciliation creates one
+topic for each newly discovered Desktop chat; `/sync` triggers the same reconciliation
+immediately. Control advertises `/projects` and `/newchat`;
 either command creates a Telegram draft topic without holding an App Server
 writer. Send its first prompt only after the topic is ready: AFC creates the
 Codex thread and first turn together, then renames the topic from that prompt. `/afc off` never
