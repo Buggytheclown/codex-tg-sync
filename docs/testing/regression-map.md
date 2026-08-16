@@ -37,6 +37,42 @@ Contract notes:
 - `/afc off` must not restore the observer or start/resume an eager legacy
   lifecycle; explicit later legacy work may start its writer lazily.
 
+## Shared Daemon AFC Sync
+
+ADR: `docs/adr/ADR-026-shared-daemon-afc-sync.md`; design:
+`docs/plans/2026-08-16-afc-desktop-sync-mvp-design.md`.
+
+Planned primary tests:
+
+- `internal/config/config_test.go` covers daemon transport selection and the
+  default/configured AFC initial topic limit.
+- `internal/appserver/client_test.go` proves daemon mode builds
+  `app-server proxy`, spawned mode keeps `app-server --listen`, and
+  `thread/resume` contains only `threadId`.
+- `internal/daemon/afc_test.go` proves AFC-active legacy mutations fail before
+  App Server access and explicit post-off legacy work remains lazy.
+- `internal/daemon/afc_test.go` proves initial activation uses the configured
+  limit and active reconciliation creates exactly one topic for a new eligible
+  Desktop thread.
+- `internal/daemon/afc_test.go` proves restart/reconnect restores shared-daemon
+  subscriptions without duplicate topics or prompt replay.
+- `internal/daemon/afc_test.go` proves active topic messages steer the expected
+  turn and stale-active recovery does not create a parallel turn.
+- `internal/daemon/afc_test.go` proves Stop interrupts current Desktop-origin
+  and Telegram-origin turns through guarded authoritative coordinates.
+
+Contract notes:
+
+- Desktop and `codex-tg` share one managed App Server daemon; proxy processes
+  are transport connections, not independent runtimes.
+- Shared-daemon mode is fail-closed and never silently spawns a private server.
+- AFC activation creates five recent topics by default, configurable through
+  `CTR_GO_AFC_INITIAL_TOPIC_LIMIT`, then continuously discovers new chats.
+- Shared-daemon subscription resumes by exact `threadId` only; `thread/read`
+  remains the durable catch-up source.
+- AFC active rejects legacy DM mutations before App Server access. Off does not
+  restore legacy lifecycle; explicit later DM work may start lazily.
+
 ## AFC Forum Group Transport
 
 ADR: `docs/adr/ADR-021-afc-forum-group-surface.md`.
