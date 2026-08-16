@@ -28,6 +28,7 @@ type AFCForum interface {
 	CreateAFCTopic(ctx context.Context, title string) (int64, error)
 	RenameAFCTopic(ctx context.Context, topicID int64, title string) error
 	DeleteAFCTopic(ctx context.Context, topicID int64) error
+	DeleteAFCMessage(ctx context.Context, topicID, messageID int64) error
 	SendAFCMessage(ctx context.Context, topicID int64, text string, silent bool) (int64, error)
 	SendAFCActionMessage(ctx context.Context, topicID int64, text string, buttons [][]model.ButtonSpec) (int64, error)
 	EditAFCMessage(ctx context.Context, topicID, messageID int64, text string) error
@@ -909,6 +910,58 @@ func (s *Service) persistAndDeliverAFCSnapshotLocked(ctx context.Context, forum 
 		}
 	}
 	_ = s.store.UpdateAFCTopicDelivery(ctx, topic.SessionID, topic.TopicID, statusID, statusTurnID, renderFP, finalFP)
+}
+
+func (s *Service) reanchorAFCDirectDelivery(ctx context.Context, chatID, topicID int64, response *DirectResponse) {
+	if response == nil || !s.isAFCGroup(chatID) || isAFCControlTopic(topicID) {
+		return
+	}
+	threadID := strings.TrimSpace(response.ThreadID)
+	turnID := strings.TrimSpace(response.TurnID)
+	if threadID == "" || turnID == "" {
+		return
+	}
+	s.afcMu.Lock()
+	defer s.afcMu.Unlock()
+	state, err := s.store.GetAFCState(ctx)
+	if err != nil || (state.State != model.AFCStateActive && state.State != model.AFCStateDraining) {
+		return
+	}
+	topic, err := s.store.GetActiveAFCTopic(ctx, chatID, topicID)
+	if err != nil || topic == nil || strings.TrimSpace(topic.ThreadID) != threadID {
+		return
+	}
+	forum := s.getAFCForum()
+	if forum == nil {
+		return
+	}
+	if topic.StatusMessageID != 0 && strings.TrimSpace(topic.StatusTurnID) == turnID {
+		oldStatusID := topic.StatusMessageID
+		reset, resetErr := s.store.ResetAFCTopicStatusDelivery(ctx, topic.SessionID, topic.TopicID, oldStatusID, turnID)
+		if resetErr != nil || !reset {
+			return
+		}
+		_ = forum.DeleteAFCMessage(ctx, topic.TopicID, oldStatusID)
+		topic, err = s.store.GetActiveAFCTopic(ctx, chatID, topicID)
+		if err != nil || topic == nil {
+			return
+		}
+	}
+	s.mu.RLock()
+	poll, connected := s.poll, s.pollConnected
+	s.mu.RUnlock()
+	if !connected || poll == nil {
+		return
+	}
+	payload, err := poll.ThreadRead(ctx, threadID, true)
+	if err != nil || payload == nil {
+		return
+	}
+	current := appserver.SnapshotFromThreadRead(payload)
+	if strings.TrimSpace(current.LatestTurnID) != turnID {
+		return
+	}
+	s.processAFCSnapshotLocked(ctx, state, forum, *topic, current, "afc_direct_delivery")
 }
 
 func (s *Service) cleanupAFCTopics(ctx context.Context, sessionID string) {

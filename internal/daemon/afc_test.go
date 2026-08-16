@@ -13,20 +13,22 @@ import (
 )
 
 type fakeAFCForum struct {
-	validateErr error
-	prepareErr  error
-	prepares    int
-	nextTopicID int64
-	createErrAt int
-	renameErr   error
-	creates     []string
-	renames     []fakeAFCRename
-	deletes     []int64
-	sends       []fakeAFCSend
-	edits       []fakeAFCEdit
-	actions     []fakeAFCAction
-	onDelete    func()
-	onCreate    func(string)
+	validateErr      error
+	prepareErr       error
+	prepares         int
+	nextTopicID      int64
+	createErrAt      int
+	renameErr        error
+	messageDeleteErr error
+	creates          []string
+	renames          []fakeAFCRename
+	deletes          []int64
+	messageDeletes   []fakeAFCMessageDelete
+	sends            []fakeAFCSend
+	edits            []fakeAFCEdit
+	actions          []fakeAFCAction
+	onDelete         func()
+	onCreate         func(string)
 }
 
 type fakeAFCSend struct {
@@ -41,6 +43,9 @@ type fakeAFCRename struct {
 type fakeAFCEdit struct {
 	topicID, messageID int64
 	text               string
+}
+type fakeAFCMessageDelete struct {
+	topicID, messageID int64
 }
 type fakeAFCAction struct {
 	topicID, messageID int64
@@ -81,6 +86,10 @@ func (f *fakeAFCForum) DeleteAFCTopic(_ context.Context, topicID int64) error {
 	}
 	f.deletes = append(f.deletes, topicID)
 	return nil
+}
+func (f *fakeAFCForum) DeleteAFCMessage(_ context.Context, topicID, messageID int64) error {
+	f.messageDeletes = append(f.messageDeletes, fakeAFCMessageDelete{topicID: topicID, messageID: messageID})
+	return f.messageDeleteErr
 }
 func (f *fakeAFCForum) SendAFCMessage(_ context.Context, topicID int64, text string, silent bool) (int64, error) {
 	id := int64(100 + len(f.sends))
@@ -393,6 +402,97 @@ func TestAFCPresentationCreatesFreshStatusForEachObservedTurn(t *testing.T) {
 	secondTopic, err := service.store.GetActiveAFCTopic(ctx, -1001, 11)
 	if err != nil || secondTopic == nil || secondTopic.StatusTurnID != "turn-2" || secondTopic.StatusMessageID != forum.sends[1].messageID {
 		t.Fatalf("second turn delivery=%#v err=%v", secondTopic, err)
+	}
+}
+
+func TestAFCDirectDeliveryReanchorsSameTurnStatusAtTopicTail(t *testing.T) {
+	service := activeAFCService(t)
+	ctx := context.Background()
+	poll := &stubSession{threadReads: map[string]map[string]any{
+		"thread-1": afcRunningPayloadWithCommentary("thread-1", "turn-1", "progress"),
+	}}
+	service.mu.Lock()
+	service.poll, service.pollConnected = poll, true
+	service.mu.Unlock()
+	forum := &fakeAFCForum{}
+	service.SetAFCForum(forum)
+
+	service.syncAFC(ctx)
+	if len(forum.sends) != 1 {
+		t.Fatalf("initial sends=%#v, want one status", forum.sends)
+	}
+	oldStatusID := forum.sends[0].messageID
+	if err := service.RegisterDirectDelivery(ctx, -1001, 11, 501, &DirectResponse{
+		Text:     "AFC input steered to active turn: turn-1",
+		ThreadID: "thread-1",
+		TurnID:   "turn-1",
+	}); err != nil {
+		t.Fatalf("RegisterDirectDelivery failed: %v", err)
+	}
+	if len(forum.sends) != 2 {
+		t.Fatalf("sends=%#v, want fresh tail status after direct acknowledgement", forum.sends)
+	}
+	newStatusID := forum.sends[1].messageID
+	if newStatusID == oldStatusID || !strings.Contains(forum.sends[1].text, "progress") {
+		t.Fatalf("new status=%#v, want fresh progress message after %d", forum.sends[1], oldStatusID)
+	}
+	if len(forum.messageDeletes) != 1 || forum.messageDeletes[0].topicID != 11 || forum.messageDeletes[0].messageID != oldStatusID {
+		t.Fatalf("message deletes=%#v, want old live status %d deleted", forum.messageDeletes, oldStatusID)
+	}
+	topic, err := service.store.GetActiveAFCTopic(ctx, -1001, 11)
+	if err != nil || topic == nil || topic.StatusMessageID != newStatusID || topic.StatusTurnID != "turn-1" {
+		t.Fatalf("topic=%#v err=%v, want new status anchor %d", topic, err, newStatusID)
+	}
+}
+
+func TestAFCDirectDeliveryKeepsPreviousTurnStatusHistory(t *testing.T) {
+	service := activeAFCService(t)
+	ctx := context.Background()
+	poll := &stubSession{threadReads: map[string]map[string]any{
+		"thread-1": afcRunningPayloadWithCommentary("thread-1", "turn-1", "first progress"),
+	}}
+	service.mu.Lock()
+	service.poll, service.pollConnected = poll, true
+	service.mu.Unlock()
+	forum := &fakeAFCForum{}
+	service.SetAFCForum(forum)
+	service.syncAFC(ctx)
+	oldStatusID := forum.sends[0].messageID
+
+	poll.threadReads["thread-1"] = afcRunningPayloadWithCommentary("thread-1", "turn-2", "second progress")
+	if err := service.RegisterDirectDelivery(ctx, -1001, 11, 502, &DirectResponse{
+		Text: "AFC turn started: turn-2", ThreadID: "thread-1", TurnID: "turn-2",
+	}); err != nil {
+		t.Fatalf("RegisterDirectDelivery failed: %v", err)
+	}
+	if len(forum.messageDeletes) != 0 {
+		t.Fatalf("previous-turn status was deleted: %#v", forum.messageDeletes)
+	}
+	if len(forum.sends) != 2 || forum.sends[1].messageID == oldStatusID || !strings.Contains(forum.sends[1].text, "second progress") {
+		t.Fatalf("sends=%#v, want retained history and fresh turn-2 status", forum.sends)
+	}
+}
+
+func TestAFCDirectDeliveryDeleteFailureStillCreatesTailStatus(t *testing.T) {
+	service := activeAFCService(t)
+	ctx := context.Background()
+	poll := &stubSession{threadReads: map[string]map[string]any{
+		"thread-1": afcRunningPayloadWithCommentary("thread-1", "turn-1", "progress"),
+	}}
+	service.mu.Lock()
+	service.poll, service.pollConnected = poll, true
+	service.mu.Unlock()
+	forum := &fakeAFCForum{messageDeleteErr: errors.New("delete failed")}
+	service.SetAFCForum(forum)
+	service.syncAFC(ctx)
+
+	if err := service.RegisterDirectDelivery(ctx, -1001, 11, 503, &DirectResponse{
+		Text: "AFC input steered to active turn: turn-1", ThreadID: "thread-1", TurnID: "turn-1",
+	}); err != nil {
+		t.Fatalf("RegisterDirectDelivery failed after best-effort delete: %v", err)
+	}
+	if len(forum.messageDeletes) != 1 || len(forum.sends) != 2 {
+		t.Fatalf("deletes=%#v sends=%#v, want attempted delete and fresh status", forum.messageDeletes, forum.sends)
 	}
 }
 

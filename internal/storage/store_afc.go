@@ -649,6 +649,17 @@ func (s *Store) UpdateAFCTopicDelivery(ctx context.Context, sessionID string, to
 	return err
 }
 
+func (s *Store) ResetAFCTopicStatusDelivery(ctx context.Context, sessionID string, topicID, statusMessageID int64, statusTurnID string) (bool, error) {
+	result, err := s.db.ExecContext(ctx, `UPDATE afc_topics SET status_message_id=0, status_turn_id=NULL, last_render_fp=NULL, updated_at=?
+		WHERE session_id=? AND topic_id=? AND telegram_state=? AND status_message_id=? AND coalesce(status_turn_id,'')=?`,
+		model.NowString(), sessionID, topicID, model.AFCTopicConnected, statusMessageID, statusTurnID)
+	if err != nil {
+		return false, err
+	}
+	changed, err := result.RowsAffected()
+	return changed == 1, err
+}
+
 func (s *Store) UpdateAFCTopicTitle(ctx context.Context, sessionID string, topicID int64, title string) error {
 	result, err := s.db.ExecContext(ctx, `UPDATE afc_topics SET title=?,updated_at=?
 		WHERE session_id=? AND topic_id=? AND telegram_state=?`, title, model.NowString(), sessionID, topicID, model.AFCTopicConnected)

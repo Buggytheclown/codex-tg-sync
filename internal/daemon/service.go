@@ -730,7 +730,7 @@ func (s *Service) RegisterDirectDelivery(ctx context.Context, chatID, topicID, m
 	if response == nil || response.ThreadID == "" {
 		return nil
 	}
-	return s.store.PutMessageRoute(ctx, model.MessageRoute{
+	if err := s.store.PutMessageRoute(ctx, model.MessageRoute{
 		ChatID:    chatID,
 		TopicID:   topicID,
 		MessageID: messageID,
@@ -739,7 +739,11 @@ func (s *Service) RegisterDirectDelivery(ctx context.Context, chatID, topicID, m
 		ItemID:    response.ItemID,
 		EventID:   response.EventID,
 		CreatedAt: model.NowString(),
-	})
+	}); err != nil {
+		return err
+	}
+	s.reanchorAFCDirectDelivery(ctx, chatID, topicID, response)
+	return nil
 }
 
 func (s *Service) RequestRepair(ctx context.Context, reason string) error {

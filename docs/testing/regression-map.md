@@ -518,6 +518,9 @@ Primary tests:
 - `internal/daemon/afc_test.go::TestAFCUnknownTopicAndCallbacksFailClosed`
 - `internal/daemon/afc_test.go::TestAFCPassiveSyncSendsSilentStatusAndNotifyingFinal`
 - `internal/daemon/afc_test.go::TestAFCPresentationCreatesFreshStatusForEachObservedTurn`
+- `internal/daemon/afc_test.go::TestAFCDirectDeliveryReanchorsSameTurnStatusAtTopicTail`
+- `internal/daemon/afc_test.go::TestAFCDirectDeliveryKeepsPreviousTurnStatusHistory`
+- `internal/daemon/afc_test.go::TestAFCDirectDeliveryDeleteFailureStillCreatesTailStatus`
 - `internal/daemon/afc_test.go::TestAFCPresentationIgnoresStalePollTurnWhileAFCWriterIsActive`
 - `internal/daemon/afc_test.go::TestAFCStatusUsesLegacyRunTimingFooter`
 - `internal/daemon/afc_test.go::TestAFCPassiveSyncTicksElapsedFromStableTurnStart`
@@ -535,6 +538,9 @@ Contract notes:
 - Active restart recovery remains passive; interrupted activation becomes cleanup-only.
 - AFC status uses the legacy observed turn timing and duration formatting;
   elapsed-only changes edit the existing active-turn status message.
+- A successful prompt/steer acknowledgement is followed by one reanchored live
+  status at the topic tail; same-turn stale status is removed best-effort while
+  previous-turn history remains intact.
 - Telegram-origin AFC turns use the legacy bounded hot-poll cadence and live
   tool overlay/preservation behavior without creating legacy panels or bindings.
 

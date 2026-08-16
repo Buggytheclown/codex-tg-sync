@@ -33,6 +33,10 @@ created only some topics.
   lifecycle without reusing legacy delivery state. Status renders from the
   compacted snapshot, includes the shared `Run active for` / `Run duration`
   footer, and may edit solely because elapsed time advanced.
+- After a successful AFC topic prompt or steer acknowledgement, the current
+  same-turn live status is best-effort deleted and recreated at the bottom of
+  the topic. Later progress edits that tail message. Status history from older
+  turns is retained.
 - Telegram-origin AFC turns get the same bounded three-second hot-poll cadence
   as legacy turns. Normalized live tool evidence uses the same overlay and
   preservation rules so a lagging `thread/read` cannot immediately erase a

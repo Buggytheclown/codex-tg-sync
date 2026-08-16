@@ -105,6 +105,10 @@ func (b *Bot) DeleteAFCTopic(ctx context.Context, topicID int64) error {
 	return err
 }
 
+func (b *Bot) DeleteAFCMessage(ctx context.Context, topicID, messageID int64) error {
+	return b.DeleteMessage(ctx, b.cfg.AFCGroupID, topicID, messageID)
+}
+
 func (b *Bot) SendAFCMessage(ctx context.Context, topicID int64, text string, silent bool) (int64, error) {
 	message, err := b.client.SendMessage(ctx, b.cfg.AFCGroupID, topicID, text, nil, model.SendOptions{Silent: silent})
 	if err != nil {
