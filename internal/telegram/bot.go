@@ -109,8 +109,8 @@ func (b *Bot) DeleteAFCMessage(ctx context.Context, topicID, messageID int64) er
 	return b.DeleteMessage(ctx, b.cfg.AFCGroupID, topicID, messageID)
 }
 
-func (b *Bot) SendAFCMessage(ctx context.Context, topicID int64, text string, silent bool) (int64, error) {
-	message, err := b.client.SendMessage(ctx, b.cfg.AFCGroupID, topicID, text, nil, model.SendOptions{Silent: silent})
+func (b *Bot) SendAFCMessage(ctx context.Context, topicID int64, rendered model.RenderedMessage, silent bool) (int64, error) {
+	message, err := b.client.SendRenderedMessage(ctx, b.cfg.AFCGroupID, topicID, rendered, nil, model.SendOptions{Silent: silent})
 	if err != nil {
 		return 0, err
 	}
@@ -131,8 +131,8 @@ func (b *Bot) SendAFCActionMessage(ctx context.Context, topicID int64, text stri
 	return message.MessageID, nil
 }
 
-func (b *Bot) EditAFCMessage(ctx context.Context, topicID, messageID int64, text string) error {
-	_, err := b.client.EditMessageText(ctx, b.cfg.AFCGroupID, messageID, text, nil)
+func (b *Bot) EditAFCMessage(ctx context.Context, topicID, messageID int64, rendered model.RenderedMessage) error {
+	_, err := b.client.EditRenderedMessageText(ctx, b.cfg.AFCGroupID, messageID, rendered, nil)
 	return err
 }
 

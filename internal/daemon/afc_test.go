@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -34,6 +35,7 @@ type fakeAFCForum struct {
 type fakeAFCSend struct {
 	topicID, messageID int64
 	text               string
+	message            model.RenderedMessage
 	silent             bool
 }
 type fakeAFCRename struct {
@@ -43,6 +45,7 @@ type fakeAFCRename struct {
 type fakeAFCEdit struct {
 	topicID, messageID int64
 	text               string
+	message            model.RenderedMessage
 }
 type fakeAFCMessageDelete struct {
 	topicID, messageID int64
@@ -91,13 +94,13 @@ func (f *fakeAFCForum) DeleteAFCMessage(_ context.Context, topicID, messageID in
 	f.messageDeletes = append(f.messageDeletes, fakeAFCMessageDelete{topicID: topicID, messageID: messageID})
 	return f.messageDeleteErr
 }
-func (f *fakeAFCForum) SendAFCMessage(_ context.Context, topicID int64, text string, silent bool) (int64, error) {
+func (f *fakeAFCForum) SendAFCMessage(_ context.Context, topicID int64, message model.RenderedMessage, silent bool) (int64, error) {
 	id := int64(100 + len(f.sends))
-	f.sends = append(f.sends, fakeAFCSend{topicID: topicID, messageID: id, text: text, silent: silent})
+	f.sends = append(f.sends, fakeAFCSend{topicID: topicID, messageID: id, text: message.Text, message: message, silent: silent})
 	return id, nil
 }
-func (f *fakeAFCForum) EditAFCMessage(_ context.Context, topicID, messageID int64, text string) error {
-	f.edits = append(f.edits, fakeAFCEdit{topicID: topicID, messageID: messageID, text: text})
+func (f *fakeAFCForum) EditAFCMessage(_ context.Context, topicID, messageID int64, message model.RenderedMessage) error {
+	f.edits = append(f.edits, fakeAFCEdit{topicID: topicID, messageID: messageID, text: message.Text, message: message})
 	return nil
 }
 func (f *fakeAFCForum) SendAFCActionMessage(_ context.Context, topicID int64, text string, buttons [][]model.ButtonSpec) (int64, error) {
@@ -679,23 +682,23 @@ func TestAFCStatusUsesCompactTimingInHeader(t *testing.T) {
 
 	startedAt := time.Date(2026, time.August, 15, 12, 0, 0, 0, time.UTC)
 	active := appserver.ThreadReadSnapshot{
-		Thread:              model.Thread{Status: "inProgress"},
+		Thread:              model.Thread{Status: "inProgress", LastPreview: "must not leak into status"},
 		LatestTurnID:        "turn-1",
 		LatestTurnStatus:    "inProgress",
 		LatestTurnStartedAt: startedAt.Format(time.RFC3339Nano),
 	}
-	if got := renderAFCStatusAt(active, startedAt.Add(8*time.Second)); got != "⏱ [Status] inProgress · 8s" {
+	if got := renderAFCStatusAt(active, startedAt.Add(8*time.Second)).Text; got != "⏱ [Status] inProgress · 8s" {
 		t.Fatalf("active status = %q, want compact elapsed header", got)
 	}
 
 	active.LatestTurnStatus = "completed"
 	active.LatestTurnUpdatedAt = startedAt.Add(2 * time.Minute).Format(time.RFC3339Nano)
-	if got := renderAFCStatusAt(active, startedAt.Add(5*time.Minute)); got != "⏱ [Status] completed · 2m" {
+	if got := renderAFCStatusAt(active, startedAt.Add(5*time.Minute)).Text; got != "⏱ [Status] completed · 2m" {
 		t.Fatalf("terminal status = %q, want compact duration header", got)
 	}
 }
 
-func TestAFCStatusUsesNewestCommentaryBlock(t *testing.T) {
+func TestAFCStatusAggregatesCommentaryBlocksInOneMessage(t *testing.T) {
 	service := activeAFCService(t)
 	ctx := context.Background()
 	poll := &stubSession{threadReads: map[string]map[string]any{
@@ -721,8 +724,112 @@ func TestAFCStatusUsesNewestCommentaryBlock(t *testing.T) {
 	if len(forum.edits) != 1 || forum.edits[0].messageID != statusID {
 		t.Fatalf("new commentary edits=%#v, want existing status %d", forum.edits, statusID)
 	}
-	if !strings.Contains(forum.edits[0].text, "newest block") || strings.Contains(forum.edits[0].text, "first block") {
-		t.Fatalf("updated status=%q, want only newest commentary block", forum.edits[0].text)
+	if !strings.Contains(forum.edits[0].text, "Блок 1 ·") || !strings.Contains(forum.edits[0].text, "first block") ||
+		!strings.Contains(forum.edits[0].text, "Блок 2 ·") || !strings.Contains(forum.edits[0].text, "newest block") {
+		t.Fatalf("updated status=%q, want both commentary blocks in order", forum.edits[0].text)
+	}
+}
+
+func TestAFCStatusUpdatesSameBlockWithoutDuplicatingAndExcludesTools(t *testing.T) {
+	t.Parallel()
+
+	startedAt := time.Date(2026, time.August, 17, 12, 0, 0, 0, time.UTC)
+	snapshot := appserver.ThreadReadSnapshot{
+		Thread:              model.Thread{Status: "inProgress", LastPreview: "stale preview"},
+		LatestTurnID:        "turn-1",
+		LatestTurnStatus:    "inProgress",
+		LatestTurnStartedAt: startedAt.Format(time.RFC3339Nano),
+		DetailItems: []model.DetailItem{
+			{ID: "commentary-1", Kind: model.DetailItemCommentary, Text: "Expanded reasoning", StartedAt: model.TimeString(startedAt.Format(time.RFC3339Nano))},
+			{ID: "tool-1", Kind: model.DetailItemTool, Label: "go test ./...", Status: "running"},
+			{ID: "output-1", Kind: model.DetailItemOutput, Output: "tool output"},
+			{ID: "plan-1", Kind: model.DetailItemPlan, Text: "Updated plan", StartedAt: model.TimeString(startedAt.Add(7 * time.Second).Format(time.RFC3339Nano))},
+		},
+	}
+
+	message := renderAFCStatusAt(snapshot, startedAt.Add(10*time.Second))
+	if strings.Count(message.Text, "Блок 1 ·") != 1 || strings.Count(message.Text, "Expanded reasoning") != 1 {
+		t.Fatalf("status duplicated updated block: %q", message.Text)
+	}
+	if !strings.Contains(message.Text, "Updated plan") || strings.Contains(message.Text, "go test") || strings.Contains(message.Text, "tool output") || strings.Contains(message.Text, "stale preview") {
+		t.Fatalf("status included wrong detail kinds: %q", message.Text)
+	}
+}
+
+func TestAFCStatusBlockDurationsPartitionOverallDuration(t *testing.T) {
+	t.Parallel()
+
+	startedAt := time.Date(2026, time.August, 17, 12, 0, 0, 0, time.UTC)
+	snapshot := appserver.ThreadReadSnapshot{
+		Thread:              model.Thread{Status: "inProgress"},
+		LatestTurnID:        "turn-1",
+		LatestTurnStatus:    "inProgress",
+		LatestTurnStartedAt: startedAt.Format(time.RFC3339Nano),
+		DetailItems: []model.DetailItem{
+			{ID: "block-1", Kind: model.DetailItemCommentary, Text: "one", StartedAt: model.TimeString(startedAt.Format(time.RFC3339Nano))},
+			{ID: "block-2", Kind: model.DetailItemCommentary, Text: "two", StartedAt: model.TimeString(startedAt.Add(10 * time.Second).Format(time.RFC3339Nano))},
+			{ID: "block-3", Kind: model.DetailItemPlan, Text: "three", StartedAt: model.TimeString(startedAt.Add(25 * time.Second).Format(time.RFC3339Nano))},
+		},
+	}
+
+	message := renderAFCStatusAt(snapshot, startedAt.Add(30*time.Second))
+	for _, want := range []string{
+		"⏱ [Status] inProgress · 30s",
+		"Блок 1 · 10s\none",
+		"Блок 2 · 15s\ntwo",
+		"Блок 3 · 5s\nthree",
+	} {
+		if !strings.Contains(message.Text, want) {
+			t.Fatalf("status %q does not contain %q", message.Text, want)
+		}
+	}
+}
+
+func TestAFCCompletedStatusCollapsesBodyAndKeepsHeaderVisible(t *testing.T) {
+	t.Parallel()
+
+	startedAt := time.Date(2026, time.August, 17, 12, 0, 0, 0, time.UTC)
+	snapshot := appserver.ThreadReadSnapshot{
+		Thread:              model.Thread{Status: "completed"},
+		LatestTurnID:        "turn-1",
+		LatestTurnStatus:    "completed",
+		LatestTurnStartedAt: startedAt.Format(time.RFC3339Nano),
+		LatestTurnUpdatedAt: startedAt.Add(10 * time.Second).Format(time.RFC3339Nano),
+		DetailItems: []model.DetailItem{
+			{ID: "block-1", Kind: model.DetailItemCommentary, Text: "finished reasoning", StartedAt: model.TimeString(startedAt.Format(time.RFC3339Nano))},
+		},
+	}
+
+	message := renderAFCStatusAt(snapshot, startedAt.Add(time.Minute))
+	if !strings.HasPrefix(message.Text, "⏱ [Status] completed · 10s\n") || len(message.Entities) != 1 {
+		t.Fatalf("terminal message=%#v", message)
+	}
+	entity := message.Entities[0]
+	wantOffset := afcUTF16Len("⏱ [Status] completed · 10s\n")
+	if entity.Type != "expandable_blockquote" || entity.Offset != wantOffset || entity.Length != afcUTF16Len(message.Text)-wantOffset {
+		t.Fatalf("terminal entity=%#v text=%q", entity, message.Text)
+	}
+}
+
+func TestAFCStatusTrimsOldLinesAndPreservesLatestTail(t *testing.T) {
+	t.Parallel()
+
+	startedAt := time.Date(2026, time.August, 17, 12, 0, 0, 0, time.UTC)
+	snapshot := appserver.ThreadReadSnapshot{
+		Thread:              model.Thread{Status: "inProgress"},
+		LatestTurnID:        "turn-1",
+		LatestTurnStatus:    "inProgress",
+		LatestTurnStartedAt: startedAt.Format(time.RFC3339Nano),
+		DetailItems: []model.DetailItem{
+			{ID: "old", Kind: model.DetailItemCommentary, Text: strings.Repeat("old line\n", 700), StartedAt: model.TimeString(startedAt.Format(time.RFC3339Nano))},
+			{ID: "latest", Kind: model.DetailItemCommentary, Text: "LATEST STATUS TAIL", StartedAt: model.TimeString(startedAt.Add(time.Second).Format(time.RFC3339Nano))},
+		},
+	}
+
+	message := renderAFCStatusAt(snapshot, startedAt.Add(2*time.Second))
+	if afcUTF16Len(message.Text) > 4096 || !strings.HasPrefix(message.Text, "⏱ [Status] inProgress · 2s\n") ||
+		!strings.Contains(message.Text, "… удалено строк:") || !strings.HasSuffix(message.Text, "LATEST STATUS TAIL") {
+		t.Fatalf("trimmed status length=%d text tail=%q", afcUTF16Len(message.Text), afcUTF16Suffix(message.Text, 200))
 	}
 }
 
@@ -784,6 +891,41 @@ func TestAFCPassiveSyncFreezesCompletedDuration(t *testing.T) {
 	}
 }
 
+func TestAFCPassiveSyncRetainsCollapsedAggregateBeforeFinal(t *testing.T) {
+	service := activeAFCService(t)
+	ctx := context.Background()
+	now := time.Date(2026, time.August, 17, 12, 0, 0, 0, time.UTC)
+	service.now = func() time.Time { return now }
+	poll := &stubSession{threadReads: map[string]map[string]any{
+		"thread-1": afcRunningPayloadWithCommentaries("thread-1", "turn-1", "first block", "second block"),
+	}}
+	service.mu.Lock()
+	service.poll, service.pollConnected = poll, true
+	service.mu.Unlock()
+	forum := &fakeAFCForum{}
+	service.SetAFCForum(forum)
+
+	service.syncAFC(ctx)
+	statusID := forum.sends[0].messageID
+	now = now.Add(10 * time.Second)
+	poll.threadReads["thread-1"] = afcCompletedPayloadWithCommentaries("thread-1", "turn-1", "done", "first block", "second block")
+	service.syncAFC(ctx)
+
+	if len(forum.edits) != 1 || forum.edits[0].messageID != statusID || len(forum.edits[0].message.Entities) != 1 {
+		t.Fatalf("terminal status edits=%#v, want retained collapsed status %d", forum.edits, statusID)
+	}
+	if !strings.Contains(forum.edits[0].text, "first block") || !strings.Contains(forum.edits[0].text, "second block") {
+		t.Fatalf("terminal status lost aggregate: %q", forum.edits[0].text)
+	}
+	if len(forum.sends) != 2 || forum.sends[1].text != afcFinalHeader+"\ndone" {
+		t.Fatalf("sends=%#v, want separate final after retained status", forum.sends)
+	}
+	topic, err := service.store.GetActiveAFCTopic(ctx, -1001, 11)
+	if err != nil || topic == nil || topic.StatusMessageID != statusID || topic.LastFinalFP == "" {
+		t.Fatalf("topic=%#v err=%v, want retained status and delivered final", topic, err)
+	}
+}
+
 func TestAFCTelegramOriginHotPollRefreshesAndStopsAtTerminal(t *testing.T) {
 	service := activeAFCService(t)
 	ctx := context.Background()
@@ -825,7 +967,7 @@ func TestAFCTelegramOriginHotPollRefreshesAndStopsAtTerminal(t *testing.T) {
 	}
 }
 
-func TestAFCLiveToolOverlaySurvivesLaggingThreadRead(t *testing.T) {
+func TestAFCLiveToolOverlaySurvivesLaggingThreadReadWithoutEnteringAggregateStatus(t *testing.T) {
 	service := activeAFCService(t)
 	ctx := context.Background()
 	fixedNow := time.Date(2026, time.August, 15, 12, 0, 0, 0, time.UTC)
@@ -855,22 +997,29 @@ func TestAFCLiveToolOverlaySurvivesLaggingThreadRead(t *testing.T) {
 			},
 		},
 	}, service.afcWriter.Snapshot().Generation)
-	if len(forum.sends) != 1 || !strings.Contains(forum.sends[0].text, "sleep 20") {
-		t.Fatalf("live tool was not rendered over lagging read: %#v", forum.sends)
+	if len(forum.sends) != 1 || strings.Contains(forum.sends[0].text, "sleep 20") {
+		t.Fatalf("live tool entered aggregate status: %#v", forum.sends)
+	}
+	stored, err := service.store.GetSnapshot(ctx, "thread-1")
+	if err != nil || stored == nil {
+		t.Fatalf("stored snapshot=%#v err=%v", stored, err)
+	}
+	var compact appserver.ThreadReadSnapshot
+	if err := json.Unmarshal(stored.CompactJSON, &compact); err != nil || compact.LatestToolLabel != "sleep 20" {
+		t.Fatalf("compact snapshot=%#v err=%v, want live tool preserved", compact, err)
 	}
 
 	service.mu.Lock()
 	service.poll, service.pollConnected = &stubSession{threadReads: reads}, true
 	service.mu.Unlock()
 	service.syncAFC(ctx)
-	var rendered string
-	if len(forum.edits) > 0 {
-		rendered = forum.edits[len(forum.edits)-1].text
-	} else {
-		rendered = forum.sends[len(forum.sends)-1].text
+	stored, err = service.store.GetSnapshot(ctx, "thread-1")
+	if err != nil || stored == nil {
+		t.Fatalf("stored snapshot after lagging poll=%#v err=%v", stored, err)
 	}
-	if !strings.Contains(rendered, "sleep 20") {
-		t.Fatalf("lagging poll erased live tool: %q", rendered)
+	compact = appserver.ThreadReadSnapshot{}
+	if err := json.Unmarshal(stored.CompactJSON, &compact); err != nil || compact.LatestToolLabel != "sleep 20" {
+		t.Fatalf("lagging poll erased live tool from compact snapshot: %#v err=%v", compact, err)
 	}
 }
 
@@ -1943,6 +2092,19 @@ func afcInterruptedPayload(threadID, turnID string) map[string]any {
 func afcCompletedPayload(threadID, turnID, finalText string) map[string]any {
 	return map[string]any{"thread": map[string]any{"id": threadID, "status": "completed", "turns": []any{map[string]any{
 		"id": turnID, "status": "completed", "items": []any{map[string]any{"id": "final", "type": "agentMessage", "phase": "final_answer", "text": finalText}},
+	}}}}
+}
+
+func afcCompletedPayloadWithCommentaries(threadID, turnID, finalText string, commentaries ...string) map[string]any {
+	items := make([]any, 0, len(commentaries)+1)
+	for index, commentary := range commentaries {
+		items = append(items, map[string]any{
+			"id": fmt.Sprintf("%s-commentary-%d", turnID, index+1), "type": "agentMessage", "phase": "commentary", "text": commentary,
+		})
+	}
+	items = append(items, map[string]any{"id": "final", "type": "agentMessage", "phase": "final_answer", "text": finalText})
+	return map[string]any{"thread": map[string]any{"id": threadID, "status": "completed", "turns": []any{map[string]any{
+		"id": turnID, "status": "completed", "items": items,
 	}}}}
 }
 

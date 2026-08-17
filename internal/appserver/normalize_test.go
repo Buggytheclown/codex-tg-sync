@@ -201,6 +201,126 @@ func TestCompactSnapshotFreezesTurnUpdatedAtAfterTerminalObservation(t *testing.
 	}
 }
 
+func TestCompactSnapshotDistributesInitiallyObservedStatusBlocks(t *testing.T) {
+	t.Parallel()
+
+	startedAt := time.Date(2026, time.August, 17, 12, 0, 0, 0, time.UTC)
+	observedAt := startedAt.Add(30 * time.Second)
+	current := ThreadReadSnapshot{
+		Thread:              model.Thread{ID: "thread-status-timing", Status: "inProgress"},
+		LatestTurnID:        "turn-status-timing",
+		LatestTurnStatus:    "inProgress",
+		LatestTurnStartedAt: startedAt.Format(time.RFC3339Nano),
+		DetailItems: []model.DetailItem{
+			{ID: "commentary-1", Kind: model.DetailItemCommentary, Text: "First block"},
+			{ID: "plan-1", Kind: model.DetailItemPlan, Text: "Second block"},
+			{ID: "commentary-2", Kind: model.DetailItemCommentary, Text: "Third block"},
+		},
+	}
+
+	state := CompactSnapshot(nil, current, observedAt)
+	compact := unmarshalCompactSnapshot(t, state)
+	wants := []time.Time{startedAt, startedAt.Add(10 * time.Second), startedAt.Add(20 * time.Second)}
+	for index, want := range wants {
+		if got := string(compact.DetailItems[index].StartedAt); got != want.Format(time.RFC3339Nano) {
+			t.Fatalf("DetailItems[%d].StartedAt = %q, want %q", index, got, want.Format(time.RFC3339Nano))
+		}
+	}
+}
+
+func TestCompactSnapshotDistributesNewStatusBlocksSincePreviousPoll(t *testing.T) {
+	t.Parallel()
+
+	startedAt := time.Date(2026, time.August, 17, 12, 0, 0, 0, time.UTC)
+	initial := ThreadReadSnapshot{
+		Thread:              model.Thread{ID: "thread-status-append", Status: "inProgress"},
+		LatestTurnID:        "turn-status-append",
+		LatestTurnStatus:    "inProgress",
+		LatestTurnStartedAt: startedAt.Format(time.RFC3339Nano),
+		DetailItems: []model.DetailItem{
+			{ID: "commentary-1", Kind: model.DetailItemCommentary, Text: "First block"},
+		},
+	}
+	previous := CompactSnapshot(nil, initial, startedAt)
+	current := initial
+	current.DetailItems = append(current.DetailItems,
+		model.DetailItem{ID: "plan-1", Kind: model.DetailItemPlan, Text: "Second block"},
+		model.DetailItem{ID: "commentary-2", Kind: model.DetailItemCommentary, Text: "Third block"},
+	)
+
+	state := CompactSnapshot(&previous, current, startedAt.Add(10*time.Second))
+	compact := unmarshalCompactSnapshot(t, state)
+	wants := []time.Time{startedAt, startedAt.Add(5 * time.Second), startedAt.Add(10 * time.Second)}
+	for index, want := range wants {
+		if got := string(compact.DetailItems[index].StartedAt); got != want.Format(time.RFC3339Nano) {
+			t.Fatalf("DetailItems[%d].StartedAt = %q, want %q", index, got, want.Format(time.RFC3339Nano))
+		}
+	}
+}
+
+func TestCompactSnapshotPreservesStatusBlockStartWhenTextChanges(t *testing.T) {
+	t.Parallel()
+
+	startedAt := time.Date(2026, time.August, 17, 12, 0, 0, 0, time.UTC)
+	initial := ThreadReadSnapshot{
+		Thread:              model.Thread{ID: "thread-status-update", Status: "inProgress"},
+		LatestTurnID:        "turn-status-update",
+		LatestTurnStatus:    "inProgress",
+		LatestTurnStartedAt: startedAt.Format(time.RFC3339Nano),
+		DetailItems: []model.DetailItem{
+			{ID: "commentary-1", Kind: model.DetailItemCommentary, Text: "Draft"},
+		},
+	}
+	previous := CompactSnapshot(nil, initial, startedAt)
+	updated := initial
+	updated.DetailItems[0].Text = "Expanded draft"
+	updated.DetailItems[0].FP = "changed"
+
+	state := CompactSnapshot(&previous, updated, startedAt.Add(20*time.Second))
+	compact := unmarshalCompactSnapshot(t, state)
+	if got := string(compact.DetailItems[0].StartedAt); got != startedAt.Format(time.RFC3339Nano) {
+		t.Fatalf("StartedAt = %q, want preserved %q", got, startedAt.Format(time.RFC3339Nano))
+	}
+}
+
+func TestCompactSnapshotKeepsStatusBlockTimingStableAfterTerminalRestart(t *testing.T) {
+	t.Parallel()
+
+	startedAt := time.Date(2026, time.August, 17, 12, 0, 0, 0, time.UTC)
+	terminalAt := startedAt.Add(30 * time.Second)
+	terminal := ThreadReadSnapshot{
+		Thread:              model.Thread{ID: "thread-status-terminal", Status: "completed"},
+		LatestTurnID:        "turn-status-terminal",
+		LatestTurnStatus:    "completed",
+		LatestTurnStartedAt: startedAt.Format(time.RFC3339Nano),
+		DetailItems: []model.DetailItem{
+			{ID: "commentary-1", Kind: model.DetailItemCommentary, Text: "First block"},
+			{ID: "commentary-2", Kind: model.DetailItemCommentary, Text: "Second block"},
+		},
+	}
+	first := CompactSnapshot(nil, terminal, terminalAt)
+	repeated := CompactSnapshot(&first, terminal, terminalAt.Add(10*time.Minute))
+	firstCompact := unmarshalCompactSnapshot(t, first)
+	repeatedCompact := unmarshalCompactSnapshot(t, repeated)
+	for index := range firstCompact.DetailItems {
+		if repeatedCompact.DetailItems[index].StartedAt != firstCompact.DetailItems[index].StartedAt {
+			t.Fatalf("DetailItems[%d].StartedAt changed from %q to %q", index, firstCompact.DetailItems[index].StartedAt, repeatedCompact.DetailItems[index].StartedAt)
+		}
+	}
+	if repeatedCompact.LatestTurnUpdatedAt != terminalAt.Format(time.RFC3339Nano) {
+		t.Fatalf("LatestTurnUpdatedAt = %q, want frozen %q", repeatedCompact.LatestTurnUpdatedAt, terminalAt.Format(time.RFC3339Nano))
+	}
+}
+
+func unmarshalCompactSnapshot(t *testing.T, state model.ThreadSnapshotState) ThreadReadSnapshot {
+	t.Helper()
+	var compact ThreadReadSnapshot
+	if err := json.Unmarshal(state.CompactJSON, &compact); err != nil {
+		t.Fatalf("unmarshal compact snapshot: %v", err)
+	}
+	return compact
+}
+
 func TestCompactSnapshotPreservesToolTimingWhenUnchanged(t *testing.T) {
 	t.Parallel()
 

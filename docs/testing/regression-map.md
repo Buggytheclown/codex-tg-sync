@@ -525,8 +525,11 @@ Primary tests:
 - `internal/daemon/afc_test.go::TestAFCDirectDeliveryKeepsPreviousTurnStatusHistory`
 - `internal/daemon/afc_test.go::TestAFCDirectDeliveryDeleteFailureStillCreatesTailStatus`
 - `internal/daemon/afc_test.go::TestAFCPresentationIgnoresStalePollTurnWhileAFCWriterIsActive`
-- `internal/daemon/afc_test.go::TestAFCStatusUsesLegacyRunTimingFooter`
-- `internal/daemon/afc_test.go::TestAFCStatusUsesNewestCommentaryBlock`
+- `internal/daemon/afc_test.go::TestAFCStatusAggregatesCommentaryBlocksInOneMessage`
+- `internal/daemon/afc_test.go::TestAFCStatusUpdatesSameBlockWithoutDuplicatingAndExcludesTools`
+- `internal/daemon/afc_test.go::TestAFCStatusBlockDurationsPartitionOverallDuration`
+- `internal/daemon/afc_test.go::TestAFCCompletedStatusCollapsesBodyAndKeepsHeaderVisible`
+- `internal/daemon/afc_test.go::TestAFCStatusTrimsOldLinesAndPreservesLatestTail`
 - `internal/daemon/afc_test.go::TestAFCPassiveSyncMirrorsDesktopUserBeforeStatusExactlyOnce`
 - `internal/daemon/afc_test.go::TestAFCSameTurnDesktopUserReanchorsStatusAfterUser`
 - `internal/daemon/afc_test.go::TestAFCTelegramUserIsNotEchoedByPassiveSync`
@@ -534,11 +537,17 @@ Primary tests:
 - `internal/storage/store_afc_test.go::TestAFCDispatchPersistsPendingTelegramUserFingerprint`
 - `internal/daemon/afc_test.go::TestAFCPassiveSyncTicksElapsedFromStableTurnStart`
 - `internal/daemon/afc_test.go::TestAFCPassiveSyncFreezesCompletedDuration`
+- `internal/daemon/afc_test.go::TestAFCPassiveSyncRetainsCollapsedAggregateBeforeFinal`
 - `internal/daemon/afc_test.go::TestAFCStatusUsesCompactTimingInHeader`
 - `internal/appserver/normalize_test.go::TestCompactSnapshotFreezesTurnUpdatedAtAfterTerminalObservation`
+- `internal/appserver/normalize_test.go::TestCompactSnapshotDistributesInitiallyObservedStatusBlocks`
+- `internal/appserver/normalize_test.go::TestCompactSnapshotDistributesNewStatusBlocksSincePreviousPoll`
+- `internal/appserver/normalize_test.go::TestCompactSnapshotPreservesStatusBlockStartWhenTextChanges`
+- `internal/appserver/normalize_test.go::TestCompactSnapshotKeepsStatusBlockTimingStableAfterTerminalRestart`
 - `internal/daemon/afc_test.go::TestAFCTelegramOriginHotPollRefreshesAndStopsAtTerminal`
-- `internal/daemon/afc_test.go::TestAFCLiveToolOverlaySurvivesLaggingThreadRead`
+- `internal/daemon/afc_test.go::TestAFCLiveToolOverlaySurvivesLaggingThreadReadWithoutEnteringAggregateStatus`
 - `internal/daemon/afc_test.go::TestAFCOffMarksOffBeforeCleanupAndDoesNotRestoreLegacy`
+- `internal/telegram/bot_test.go::TestBotAFCMessagePreservesRenderedEntitiesOnSendAndEdit`
 - `internal/telegram/api_test.go` forum security and typed API failures
 
 Contract notes:
@@ -554,9 +563,16 @@ Contract notes:
   observed end time and do not grow completed duration.
 - AFC User, Status, Final, Approval, and Input messages have stable distinct
   icon-prefixed headers. Legacy direct-message presentation is unchanged.
-- When App Server exposes multiple commentary blocks newest-first, AFC renders
-  the newest block and edits the existing status anchor rather than displaying
-  an older block from the bounded history window.
+- AFC appends every chronological commentary/reasoning and plan block to one
+  status message. A stable item id updates its existing block without resetting
+  timing; tools and outputs never enter the aggregate.
+- The status first line always carries total state and duration. Approximate
+  per-block durations partition that total and persist in the compact snapshot.
+  Completed bodies use an expandable quote while the header remains visible;
+  Final stays a separate later message.
+- Telegram overflow removes oldest body lines, states how many lines were
+  removed, preserves the latest block tail, and includes entity layout in the
+  delivery fingerprint.
 - Desktop-origin user items are mirrored once as silent `[User]` messages;
   same-turn status is reanchored after them. Persisted pending Telegram-input
   fingerprints suppress bot echoes for both new turns and steers, including the
@@ -564,8 +580,9 @@ Contract notes:
 - A successful prompt/steer acknowledgement is followed by one reanchored live
   status at the topic tail; same-turn stale status is removed best-effort while
   previous-turn history remains intact.
-- Telegram-origin AFC turns use the legacy bounded hot-poll cadence and live
-  tool overlay/preservation behavior without creating legacy panels or bindings.
+- Telegram-origin AFC turns use the legacy bounded hot-poll cadence and preserve
+  live tool state internally without putting tool/output items into the aggregate
+  status or creating legacy panels and bindings.
 
 ## AFC Concurrent Managed Turns
 

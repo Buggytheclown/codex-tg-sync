@@ -318,6 +318,7 @@ func DiffSnapshot(previous *model.ThreadSnapshotState, current ThreadReadSnapsho
 
 func CompactSnapshot(previous *model.ThreadSnapshotState, current ThreadReadSnapshot, polledAt time.Time) model.ThreadSnapshotState {
 	applyLatestTurnTiming(previous, &current, polledAt)
+	applyStatusBlockTiming(previous, &current, polledAt)
 	applyLatestToolTiming(previous, &current, polledAt)
 	out := model.ThreadSnapshotState{
 		ThreadUpdatedAt:      current.Thread.UpdatedAt,
@@ -350,6 +351,155 @@ func CompactSnapshot(previous *model.ThreadSnapshotState, current ThreadReadSnap
 	raw, _ := json.Marshal(current)
 	out.CompactJSON = raw
 	return out
+}
+
+func applyStatusBlockTiming(previous *model.ThreadSnapshotState, current *ThreadReadSnapshot, observedAt time.Time) {
+	if current == nil || strings.TrimSpace(current.LatestTurnID) == "" {
+		return
+	}
+	if observedAt.IsZero() {
+		observedAt = time.Now().UTC()
+	} else {
+		observedAt = observedAt.UTC()
+	}
+
+	blockIndexes := make([]int, 0, len(current.DetailItems))
+	for index := range current.DetailItems {
+		if statusBlockTimingKey(current.DetailItems[index]) != "" {
+			blockIndexes = append(blockIndexes, index)
+		}
+	}
+	if len(blockIndexes) == 0 {
+		return
+	}
+
+	turnStart := parseSnapshotTime(current.LatestTurnStartedAt, observedAt)
+	renderEnd := parseSnapshotTime(current.LatestTurnUpdatedAt, observedAt)
+	if renderEnd.Before(turnStart) {
+		renderEnd = turnStart
+	}
+
+	var previousSnapshot ThreadReadSnapshot
+	sameTurn := false
+	if previous != nil && len(previous.CompactJSON) > 0 {
+		_ = json.Unmarshal(previous.CompactJSON, &previousSnapshot)
+		sameTurn = strings.TrimSpace(previousSnapshot.LatestTurnID) == strings.TrimSpace(current.LatestTurnID)
+	}
+	previousStarts := map[string]time.Time{}
+	if sameTurn {
+		for _, item := range previousSnapshot.DetailItems {
+			key := statusBlockTimingKey(item)
+			if key == "" {
+				continue
+			}
+			if startedAt, ok := parseOptionalSnapshotTime(string(item.StartedAt)); ok {
+				previousStarts[key] = startedAt
+			}
+		}
+	}
+
+	starts := make([]time.Time, len(blockIndexes))
+	known := make([]bool, len(blockIndexes))
+	knownCount := 0
+	for blockIndex, itemIndex := range blockIndexes {
+		item := &current.DetailItems[itemIndex]
+		startedAt, ok := parseOptionalSnapshotTime(string(item.StartedAt))
+		if !ok {
+			startedAt, ok = previousStarts[statusBlockTimingKey(*item)]
+		}
+		if !ok {
+			continue
+		}
+		starts[blockIndex] = startedAt
+		known[blockIndex] = true
+		knownCount++
+	}
+
+	if knownCount == 0 {
+		span := renderEnd.Sub(turnStart)
+		for blockIndex := range blockIndexes {
+			starts[blockIndex] = turnStart.Add(time.Duration(int64(span) * int64(blockIndex) / int64(len(blockIndexes))))
+			known[blockIndex] = true
+		}
+	} else {
+		previousPoll := turnStart
+		if sameTurn && previous != nil {
+			previousPoll = parseSnapshotTime(string(previous.LastPollAt), turnStart)
+			if previousPoll.Before(turnStart) {
+				previousPoll = turnStart
+			}
+			if previousPoll.After(renderEnd) {
+				previousPoll = renderEnd
+			}
+		}
+		for runStart := 0; runStart < len(blockIndexes); {
+			if known[runStart] {
+				runStart++
+				continue
+			}
+			runEnd := runStart
+			for runEnd < len(blockIndexes) && !known[runEnd] {
+				runEnd++
+			}
+			left := turnStart
+			if runStart > 0 {
+				left = starts[runStart-1]
+			}
+			right := renderEnd
+			nextKnown := runEnd < len(blockIndexes)
+			if nextKnown {
+				right = starts[runEnd]
+			} else if previousPoll.After(left) {
+				left = previousPoll
+			}
+			if right.Before(left) {
+				left = right
+			}
+			count := runEnd - runStart
+			denominator := count
+			if nextKnown {
+				denominator++
+			}
+			span := right.Sub(left)
+			for offset := 0; offset < count; offset++ {
+				starts[runStart+offset] = left.Add(time.Duration(int64(span) * int64(offset+1) / int64(denominator)))
+				known[runStart+offset] = true
+			}
+			runStart = runEnd
+		}
+	}
+
+	for blockIndex, itemIndex := range blockIndexes {
+		current.DetailItems[itemIndex].StartedAt = model.TimeString(starts[blockIndex].UTC().Format(time.RFC3339Nano))
+	}
+}
+
+func statusBlockTimingKey(item model.DetailItem) string {
+	if item.Kind != model.DetailItemCommentary && item.Kind != model.DetailItemPlan {
+		return ""
+	}
+	if strings.TrimSpace(item.Text) == "" {
+		return ""
+	}
+	if id := strings.TrimSpace(item.ID); id != "" {
+		return item.Kind + ":id:" + id
+	}
+	return fmt.Sprintf("%s:index:%d", item.Kind, item.CommentaryIndex)
+}
+
+func parseSnapshotTime(value string, fallback time.Time) time.Time {
+	if parsed, ok := parseOptionalSnapshotTime(value); ok {
+		return parsed
+	}
+	return fallback.UTC()
+}
+
+func parseOptionalSnapshotTime(value string) (time.Time, bool) {
+	parsed, err := time.Parse(time.RFC3339Nano, strings.TrimSpace(value))
+	if err != nil {
+		return time.Time{}, false
+	}
+	return parsed.UTC(), true
 }
 
 func applyLatestTurnTiming(previous *model.ThreadSnapshotState, current *ThreadReadSnapshot, observedAt time.Time) {

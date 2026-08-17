@@ -133,6 +133,57 @@ func TestBotSendRenderedMessagesFallsBackToPlainEntities(t *testing.T) {
 	}
 }
 
+func TestBotAFCMessagePreservesRenderedEntitiesOnSendAndEdit(t *testing.T) {
+	t.Parallel()
+
+	payloads := make([]map[string]any, 0, 2)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Fatalf("ReadAll failed: %v", err)
+		}
+		var payload map[string]any
+		if err := json.Unmarshal(body, &payload); err != nil {
+			t.Fatalf("json.Unmarshal failed: %v", err)
+		}
+		payload["path"] = r.URL.Path
+		payloads = append(payloads, payload)
+		_, _ = w.Write([]byte(`{"ok":true,"result":{"message_id":81,"chat":{"id":-1001,"type":"supergroup"},"text":"status"}}`))
+	}))
+	defer server.Close()
+
+	client := NewClient("token")
+	client.baseURL = server.URL
+	bot := &Bot{cfg: config.Config{AFCGroupID: -1001}, client: client}
+	rendered := model.RenderedMessage{
+		Text:     "status\nbody",
+		Entities: []model.MessageEntity{{Type: "expandable_blockquote", Offset: 7, Length: 4}},
+	}
+	messageID, err := bot.SendAFCMessage(context.Background(), 11, rendered, true)
+	if err != nil || messageID != 81 {
+		t.Fatalf("SendAFCMessage id=%d err=%v", messageID, err)
+	}
+	if err := bot.EditAFCMessage(context.Background(), 11, messageID, rendered); err != nil {
+		t.Fatalf("EditAFCMessage failed: %v", err)
+	}
+
+	if len(payloads) != 2 || payloads[0]["path"] != "/sendMessage" || payloads[1]["path"] != "/editMessageText" {
+		t.Fatalf("payloads=%#v", payloads)
+	}
+	if payloads[0]["message_thread_id"] != float64(11) || payloads[0]["disable_notification"] != true {
+		t.Fatalf("send payload=%#v", payloads[0])
+	}
+	for index, payload := range payloads {
+		if _, exists := payload["parse_mode"]; exists {
+			t.Fatalf("payload[%d] unexpectedly used parse_mode: %#v", index, payload)
+		}
+		entities, ok := payload["entities"].([]any)
+		if !ok || len(entities) != 1 || entities[0].(map[string]any)["type"] != "expandable_blockquote" {
+			t.Fatalf("payload[%d] entities=%#v", index, payload["entities"])
+		}
+	}
+}
+
 func TestBotSendDocumentReturnsTelegramMessageID(t *testing.T) {
 	t.Parallel()
 

@@ -10,11 +10,13 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode/utf16"
 	"unicode/utf8"
 
 	"github.com/mideco-tech/codex-tg/internal/appserver"
 	"github.com/mideco-tech/codex-tg/internal/config"
 	"github.com/mideco-tech/codex-tg/internal/model"
+	"github.com/mideco-tech/codex-tg/internal/tgformat"
 )
 
 const afcControlTopicID = int64(1)
@@ -29,9 +31,9 @@ type AFCForum interface {
 	RenameAFCTopic(ctx context.Context, topicID int64, title string) error
 	DeleteAFCTopic(ctx context.Context, topicID int64) error
 	DeleteAFCMessage(ctx context.Context, topicID, messageID int64) error
-	SendAFCMessage(ctx context.Context, topicID int64, text string, silent bool) (int64, error)
+	SendAFCMessage(ctx context.Context, topicID int64, message model.RenderedMessage, silent bool) (int64, error)
 	SendAFCActionMessage(ctx context.Context, topicID int64, text string, buttons [][]model.ButtonSpec) (int64, error)
-	EditAFCMessage(ctx context.Context, topicID, messageID int64, text string) error
+	EditAFCMessage(ctx context.Context, topicID, messageID int64, message model.RenderedMessage) error
 }
 
 const (
@@ -918,17 +920,17 @@ func (s *Service) persistAndDeliverAFCSnapshotLocked(ctx context.Context, forum 
 	if !userDeliveryOK {
 		return
 	}
-	statusText := renderAFCStatusAt(observed, observedAt)
-	renderFP := afcFingerprint(statusText)
+	statusMessage := renderAFCStatusAt(observed, observedAt)
+	renderFP := afcFingerprint(tgformat.HashRendered(statusMessage))
 	statusID := topic.StatusMessageID
 	statusTurnID := strings.TrimSpace(topic.StatusTurnID)
 	currentTurnID := strings.TrimSpace(current.LatestTurnID)
 	newObservedTurn := statusTurnID != "" && currentTurnID != "" && statusTurnID != currentTurnID
 	var deliveryErr error
 	if statusID == 0 || newObservedTurn {
-		statusID, deliveryErr = forum.SendAFCMessage(ctx, topic.TopicID, statusText, true)
+		statusID, deliveryErr = forum.SendAFCMessage(ctx, topic.TopicID, statusMessage, true)
 	} else if renderFP != topic.LastRenderFP {
-		deliveryErr = forum.EditAFCMessage(ctx, topic.TopicID, statusID, statusText)
+		deliveryErr = forum.EditAFCMessage(ctx, topic.TopicID, statusID, statusMessage)
 	}
 	if deliveryErr != nil {
 		return
@@ -938,7 +940,7 @@ func (s *Service) persistAndDeliverAFCSnapshotLocked(ctx context.Context, forum 
 	}
 	finalFP := topic.LastFinalFP
 	if strings.TrimSpace(current.LatestFinalFP) != "" && current.LatestFinalFP != topic.LastFinalFP {
-		if _, deliveryErr = forum.SendAFCMessage(ctx, topic.TopicID, afcFinalHeader+"\n"+strings.TrimSpace(current.LatestFinalText), false); deliveryErr == nil {
+		if _, deliveryErr = forum.SendAFCMessage(ctx, topic.TopicID, model.RenderedMessage{Text: afcFinalHeader + "\n" + strings.TrimSpace(current.LatestFinalText)}, false); deliveryErr == nil {
 			finalFP = current.LatestFinalFP
 		}
 	}
@@ -984,7 +986,7 @@ func (s *Service) deliverAFCUserMessageLocked(ctx context.Context, forum AFCForu
 		topic.StatusTurnID = ""
 		topic.LastRenderFP = ""
 	}
-	if _, err := forum.SendAFCMessage(ctx, topic.TopicID, afcUserHeader+"\n"+userText, true); err != nil {
+	if _, err := forum.SendAFCMessage(ctx, topic.TopicID, model.RenderedMessage{Text: afcUserHeader + "\n" + userText}, true); err != nil {
 		return topic, false
 	}
 	if err := s.store.UpdateAFCTopicUserDelivery(ctx, topic.SessionID, topic.TopicID, userFP, "", ""); err != nil {
@@ -1103,7 +1105,7 @@ func afcCodexStatus(thread model.Thread) string {
 	}
 }
 
-func renderAFCStatusAt(snapshot appserver.ThreadReadSnapshot, now time.Time) string {
+func renderAFCStatusAt(snapshot appserver.ThreadReadSnapshot, now time.Time) model.RenderedMessage {
 	status := strings.TrimSpace(snapshot.LatestTurnStatus)
 	if snapshot.WaitingOnApproval || snapshot.WaitingOnReply {
 		status = "waiting"
@@ -1114,22 +1116,144 @@ func renderAFCStatusAt(snapshot appserver.ThreadReadSnapshot, now time.Time) str
 	if status == "" {
 		status = "unknown"
 	}
-	detail := strings.TrimSpace(snapshot.LatestProgressText)
-	if detail == "" && len(snapshot.LatestAgentMessages) > 0 {
-		detail = strings.TrimSpace(snapshot.LatestAgentMessages[0])
-	}
-	if detail == "" {
-		detail = strings.TrimSpace(snapshot.Thread.LastPreview)
-	}
 	header := afcStatusHeader + " " + status
 	if duration, _ := runTimingValue(&snapshot, now); duration != "" {
 		header += " · " + duration
 	}
-	text := header
-	if detail != "" {
-		text += "\n" + detail
+
+	blocks := afcStatusBlocks(snapshot.DetailItems)
+	if len(blocks) == 0 {
+		return model.RenderedMessage{Text: header}
 	}
-	return text
+	body := renderAFCStatusBlocks(snapshot, blocks, now)
+	body = trimAFCStatusBody(header, body)
+	message := model.RenderedMessage{Text: header + "\n" + body}
+	if isTerminalStatus(snapshot.LatestTurnStatus) && body != "" {
+		message.Entities = []model.MessageEntity{{
+			Type:   "expandable_blockquote",
+			Offset: afcUTF16Len(header + "\n"),
+			Length: afcUTF16Len(body),
+		}}
+	}
+	return message
+}
+
+func afcStatusBlocks(items []model.DetailItem) []model.DetailItem {
+	blocks := make([]model.DetailItem, 0, len(items))
+	for _, item := range items {
+		if (item.Kind == model.DetailItemCommentary || item.Kind == model.DetailItemPlan) && strings.TrimSpace(item.Text) != "" {
+			blocks = append(blocks, item)
+		}
+	}
+	return blocks
+}
+
+func renderAFCStatusBlocks(snapshot appserver.ThreadReadSnapshot, blocks []model.DetailItem, now time.Time) string {
+	if now.IsZero() {
+		now = time.Now().UTC()
+	} else {
+		now = now.UTC()
+	}
+	turnStart := parseTime(model.TimeString(snapshot.LatestTurnStartedAt))
+	if turnStart.IsZero() {
+		turnStart = now
+	}
+	turnEnd := now
+	if isTerminalStatus(snapshot.LatestTurnStatus) {
+		if endedAt := parseTime(model.TimeString(snapshot.LatestTurnUpdatedAt)); !endedAt.IsZero() {
+			turnEnd = endedAt
+		}
+	}
+	if turnEnd.Before(turnStart) {
+		turnEnd = turnStart
+	}
+	span := turnEnd.Sub(turnStart)
+	starts := make([]time.Time, len(blocks))
+	for index, block := range blocks {
+		startedAt := parseTime(block.StartedAt)
+		if startedAt.IsZero() {
+			startedAt = turnStart.Add(time.Duration(int64(span) * int64(index) / int64(len(blocks))))
+		}
+		if startedAt.Before(turnStart) {
+			startedAt = turnStart
+		}
+		if index > 0 && startedAt.Before(starts[index-1]) {
+			startedAt = starts[index-1]
+		}
+		if startedAt.After(turnEnd) {
+			startedAt = turnEnd
+		}
+		starts[index] = startedAt
+	}
+
+	parts := make([]string, 0, len(blocks))
+	for index, block := range blocks {
+		endedAt := turnEnd
+		if index+1 < len(starts) {
+			endedAt = starts[index+1]
+		}
+		if endedAt.Before(starts[index]) {
+			endedAt = starts[index]
+		}
+		parts = append(parts, fmt.Sprintf("Блок %d · %s\n%s", index+1, formatToolDuration(endedAt.Sub(starts[index])), strings.TrimSpace(block.Text)))
+	}
+	return strings.Join(parts, "\n\n")
+}
+
+func trimAFCStatusBody(header, body string) string {
+	body = strings.TrimSpace(body)
+	if body == "" {
+		return ""
+	}
+	budget := tgformat.TelegramMessageLimit - afcUTF16Len(header+"\n")
+	if budget <= 0 {
+		return ""
+	}
+	if afcUTF16Len(body) <= budget {
+		return body
+	}
+	lines := strings.Split(body, "\n")
+	for removed := 1; removed < len(lines); removed++ {
+		candidate := fmt.Sprintf("… удалено строк: %d\n%s", removed, strings.Join(lines[removed:], "\n"))
+		if afcUTF16Len(candidate) <= budget {
+			return candidate
+		}
+	}
+	marker := fmt.Sprintf("… удалено строк: %d", len(lines))
+	remaining := budget - afcUTF16Len(marker+"\n")
+	if remaining <= 0 {
+		return afcUTF16Suffix(marker, budget)
+	}
+	tail := afcUTF16Suffix(lines[len(lines)-1], remaining)
+	if tail == "" {
+		return marker
+	}
+	return marker + "\n" + tail
+}
+
+func afcUTF16Len(text string) int {
+	return len(utf16.Encode([]rune(text)))
+}
+
+func afcUTF16Suffix(text string, limit int) string {
+	if limit <= 0 {
+		return ""
+	}
+	runes := []rune(text)
+	units := 0
+	start := len(runes)
+	for start > 0 {
+		width := 1
+		if runes[start-1] > 0xffff {
+			width = 2
+		}
+		if units+width > limit {
+			break
+		}
+		units += width
+		start--
+	}
+	return string(runes[start:])
 }
 
 func afcFingerprint(text string) string {

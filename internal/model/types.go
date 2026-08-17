@@ -377,15 +377,16 @@ type RenderedMessage struct {
 }
 
 type DetailItem struct {
-	ID              string `json:"id,omitempty"`
-	Kind            string `json:"kind"`
-	Phase           string `json:"phase,omitempty"`
-	Text            string `json:"text,omitempty"`
-	Label           string `json:"label,omitempty"`
-	Status          string `json:"status,omitempty"`
-	Output          string `json:"output,omitempty"`
-	FP              string `json:"fp,omitempty"`
-	CommentaryIndex int    `json:"commentary_index,omitempty"`
+	ID              string     `json:"id,omitempty"`
+	Kind            string     `json:"kind"`
+	StartedAt       TimeString `json:"started_at,omitempty"`
+	Phase           string     `json:"phase,omitempty"`
+	Text            string     `json:"text,omitempty"`
+	Label           string     `json:"label,omitempty"`
+	Status          string     `json:"status,omitempty"`
+	Output          string     `json:"output,omitempty"`
+	FP              string     `json:"fp,omitempty"`
+	CommentaryIndex int        `json:"commentary_index,omitempty"`
 }
 
 type DetailsViewState struct {
