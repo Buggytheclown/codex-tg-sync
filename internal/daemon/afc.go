@@ -269,7 +269,7 @@ func (s *Service) dispatchAFCMessage(ctx context.Context, topic model.AFCTopic, 
 		_ = s.store.MarkAFCDispatchFailure(ctx, receipt, model.AFCReceiptUnknown, model.AFCTurnUnknown, lease.Generation)
 		return &DirectResponse{Text: "AFC dispatched the request but could not confirm local ownership; outcome is unknown."}, nil
 	}
-	if err := s.store.MarkAFCDispatchState(ctx, receipt, model.AFCReceiptDispatched, turnID, model.AFCTurnActive, lease.Generation); err != nil {
+	if err := s.store.MarkAFCDispatchStateWithTelegramUser(ctx, receipt, model.AFCReceiptDispatched, turnID, model.AFCTurnActive, lease.Generation, afcUserTextFingerprint(turnID, text)); err != nil {
 		_ = s.afcWriter.MarkUncertain(lease)
 		_ = s.store.MarkAFCDispatchFailure(ctx, receipt, model.AFCReceiptUnknown, model.AFCTurnUnknown, lease.Generation)
 		return &DirectResponse{Text: "AFC dispatched the request but could not persist confirmation; outcome is unknown."}, nil
@@ -303,7 +303,7 @@ func (s *Service) steerManagedAFCTurnLocked(ctx context.Context, topic model.AFC
 		_ = s.store.MarkAFCReceiptState(ctx, receipt, model.AFCReceiptRejected)
 		return &DirectResponse{Text: activeThreadReplyText(&model.Thread{ID: topic.ThreadID, Title: topic.Title, Status: "active", ActiveTurnID: turnID}, err)}, nil
 	}
-	if err := s.store.MarkAFCDispatchState(ctx, receipt, model.AFCReceiptDispatched, turnID, model.AFCTurnActive, lease.Generation); err != nil {
+	if err := s.store.MarkAFCDispatchStateWithTelegramUser(ctx, receipt, model.AFCReceiptDispatched, turnID, model.AFCTurnActive, lease.Generation, afcUserTextFingerprint(turnID, text)); err != nil {
 		_ = s.store.MarkAFCReceiptState(ctx, receipt, model.AFCReceiptUnknown)
 		return &DirectResponse{Text: "AFC steered the turn but could not persist confirmation; outcome is unknown."}, nil
 	}
@@ -905,6 +905,11 @@ func (s *Service) persistAndDeliverAFCSnapshotLocked(ctx context.Context, forum 
 			_ = s.store.UpdateAFCTopicTitle(ctx, topic.SessionID, topic.TopicID, desiredTitle)
 		}
 	}
+	var userDeliveryOK bool
+	topic, userDeliveryOK = s.deliverAFCUserMessageLocked(ctx, forum, topic, observed)
+	if !userDeliveryOK {
+		return
+	}
 	statusText := renderAFCStatusAt(observed, observedAt)
 	renderFP := afcFingerprint(statusText)
 	statusID := topic.StatusMessageID
@@ -930,6 +935,55 @@ func (s *Service) persistAndDeliverAFCSnapshotLocked(ctx context.Context, forum 
 		}
 	}
 	_ = s.store.UpdateAFCTopicDelivery(ctx, topic.SessionID, topic.TopicID, statusID, statusTurnID, renderFP, finalFP)
+}
+
+func (s *Service) deliverAFCUserMessageLocked(ctx context.Context, forum AFCForum, topic model.AFCTopic, current appserver.ThreadReadSnapshot) (model.AFCTopic, bool) {
+	userFP := strings.TrimSpace(current.LatestUserMessageFP)
+	userText := strings.TrimSpace(current.LatestUserMessageText)
+	if userFP == "" || userText == "" || userFP == strings.TrimSpace(topic.LastUserFP) {
+		return topic, true
+	}
+	turnID := strings.TrimSpace(current.LatestTurnID)
+	pendingFP := strings.TrimSpace(topic.PendingTelegramUserFP)
+	pendingTurnID := strings.TrimSpace(topic.PendingTelegramTurnID)
+	if pendingFP != "" {
+		if pendingTurnID == turnID {
+			if afcUserTextFingerprint(turnID, userText) != pendingFP {
+				return topic, false
+			}
+			if err := s.store.UpdateAFCTopicUserDelivery(ctx, topic.SessionID, topic.TopicID, userFP, "", ""); err != nil {
+				return topic, false
+			}
+			topic.LastUserFP = userFP
+			topic.PendingTelegramTurnID = ""
+			topic.PendingTelegramUserFP = ""
+			return topic, true
+		}
+		if err := s.store.UpdateAFCTopicUserDelivery(ctx, topic.SessionID, topic.TopicID, topic.LastUserFP, "", ""); err != nil {
+			return topic, false
+		}
+		topic.PendingTelegramTurnID = ""
+		topic.PendingTelegramUserFP = ""
+	}
+	if topic.StatusMessageID != 0 && strings.TrimSpace(topic.StatusTurnID) == turnID {
+		oldStatusID := topic.StatusMessageID
+		reset, err := s.store.ResetAFCTopicStatusDelivery(ctx, topic.SessionID, topic.TopicID, oldStatusID, turnID)
+		if err != nil || !reset {
+			return topic, false
+		}
+		_ = forum.DeleteAFCMessage(ctx, topic.TopicID, oldStatusID)
+		topic.StatusMessageID = 0
+		topic.StatusTurnID = ""
+		topic.LastRenderFP = ""
+	}
+	if _, err := forum.SendAFCMessage(ctx, topic.TopicID, "[User]\n"+userText, true); err != nil {
+		return topic, false
+	}
+	if err := s.store.UpdateAFCTopicUserDelivery(ctx, topic.SessionID, topic.TopicID, userFP, "", ""); err != nil {
+		return topic, false
+	}
+	topic.LastUserFP = userFP
+	return topic, true
 }
 
 func (s *Service) reanchorAFCDirectDelivery(ctx context.Context, chatID, topicID int64, response *DirectResponse) {
@@ -1072,6 +1126,10 @@ func renderAFCStatusAt(snapshot appserver.ThreadReadSnapshot, now time.Time) str
 func afcFingerprint(text string) string {
 	sum := sha256.Sum256([]byte(text))
 	return hex.EncodeToString(sum[:12])
+}
+
+func afcUserTextFingerprint(turnID, text string) string {
+	return afcFingerprint(strings.TrimSpace(turnID) + "\x00" + strings.TrimSpace(text))
 }
 func countConnectedAFCTopics(topics []model.AFCTopic) int {
 	n := 0

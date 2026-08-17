@@ -197,6 +197,9 @@ func (s *Store) initialize(ctx context.Context) error {
 		status_turn_id TEXT,
 		last_render_fp TEXT,
 		last_final_fp TEXT,
+		last_user_fp TEXT,
+		pending_telegram_user_fp TEXT,
+		pending_telegram_turn_id TEXT,
 		active_turn_id TEXT,
 		active_turn_state TEXT,
 		writer_generation INTEGER NOT NULL DEFAULT 0,
@@ -333,11 +336,29 @@ func (s *Store) initialize(ctx context.Context) error {
 	if err := s.ensureColumn(ctx, "afc_topics", "status_turn_id", `ALTER TABLE afc_topics ADD COLUMN status_turn_id TEXT`); err != nil {
 		return err
 	}
+	if err := s.ensureColumn(ctx, "afc_topics", "last_user_fp", `ALTER TABLE afc_topics ADD COLUMN last_user_fp TEXT`); err != nil {
+		return err
+	}
+	if err := s.ensureColumn(ctx, "afc_topics", "pending_telegram_user_fp", `ALTER TABLE afc_topics ADD COLUMN pending_telegram_user_fp TEXT`); err != nil {
+		return err
+	}
+	if err := s.ensureColumn(ctx, "afc_topics", "pending_telegram_turn_id", `ALTER TABLE afc_topics ADD COLUMN pending_telegram_turn_id TEXT`); err != nil {
+		return err
+	}
 	if _, err := s.db.ExecContext(ctx, `UPDATE afc_topics SET status_turn_id=(
 		SELECT last_seen_turn_id FROM thread_snapshots WHERE thread_snapshots.thread_id=afc_topics.thread_id
 	) WHERE status_message_id<>0 AND coalesce(status_turn_id,'')='' AND EXISTS (
 		SELECT 1 FROM thread_snapshots WHERE thread_snapshots.thread_id=afc_topics.thread_id
 		AND coalesce(thread_snapshots.last_seen_turn_id,'')<>''
+	)`); err != nil {
+		return err
+	}
+	if _, err := s.db.ExecContext(ctx, `UPDATE afc_topics SET last_user_fp=(
+		SELECT coalesce(json_extract(thread_snapshots.snapshot_json, '$.compact_json.LatestUserMessageFP'),'')
+		FROM thread_snapshots WHERE thread_snapshots.thread_id=afc_topics.thread_id
+	) WHERE status_message_id<>0 AND coalesce(last_user_fp,'')='' AND EXISTS (
+		SELECT 1 FROM thread_snapshots WHERE thread_snapshots.thread_id=afc_topics.thread_id
+		AND coalesce(json_extract(thread_snapshots.snapshot_json, '$.compact_json.LatestUserMessageFP'),'')<>''
 	)`); err != nil {
 		return err
 	}

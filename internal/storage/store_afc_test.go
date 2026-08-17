@@ -19,7 +19,10 @@ func TestAFCStatusTurnMigrationAdoptsExistingRenderedTurn(t *testing.T) {
 		_ = store.Close()
 		t.Fatal(err)
 	}
-	if err := store.UpsertSnapshot(ctx, "thread-1", model.ThreadSnapshotState{LastSeenTurnID: "turn-existing"}); err != nil {
+	if err := store.UpsertSnapshot(ctx, "thread-1", model.ThreadSnapshotState{
+		LastSeenTurnID: "turn-existing",
+		CompactJSON:    []byte(`{"LatestUserMessageFP":"user-existing"}`),
+	}); err != nil {
 		_ = store.Close()
 		t.Fatal(err)
 	}
@@ -36,8 +39,47 @@ func TestAFCStatusTurnMigrationAdoptsExistingRenderedTurn(t *testing.T) {
 	if err != nil || len(topics) != 1 {
 		t.Fatalf("topics=%#v err=%v", topics, err)
 	}
-	if topics[0].StatusMessageID != 777 || topics[0].StatusTurnID != "turn-existing" {
+	if topics[0].StatusMessageID != 777 || topics[0].StatusTurnID != "turn-existing" || topics[0].LastUserFP != "user-existing" {
 		t.Fatalf("migrated topic=%#v", topics[0])
+	}
+}
+
+func TestAFCDispatchPersistsPendingTelegramUserFingerprint(t *testing.T) {
+	t.Parallel()
+	store := openTestStore(t)
+	ctx := context.Background()
+	if err := store.BeginAFCActivation(ctx, "session-1", -1001); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.UpsertAFCTopic(ctx, model.AFCTopic{SessionID: "session-1", ChatID: -1001, TopicID: 11, ThreadID: "thread-1", TelegramState: model.AFCTopicConnected}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.FinishAFCActivation(ctx, "session-1", `{}`, true); err != nil {
+		t.Fatal(err)
+	}
+	receipt, _, err := store.AcceptAFCMessage(ctx, -1001, 11, 501)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.MarkAFCStarting(ctx, receipt, 7); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.MarkAFCDispatchStateWithTelegramUser(ctx, receipt, model.AFCReceiptDispatched, "turn-1", model.AFCTurnActive, 7, "pending-user-fp"); err != nil {
+		t.Fatal(err)
+	}
+	topic, err := store.GetActiveAFCTopic(ctx, -1001, 11)
+	if err != nil || topic == nil {
+		t.Fatalf("topic=%#v err=%v", topic, err)
+	}
+	if topic.PendingTelegramTurnID != "turn-1" || topic.PendingTelegramUserFP != "pending-user-fp" {
+		t.Fatalf("pending Telegram user state=%#v", topic)
+	}
+	if err := store.UpdateAFCTopicUserDelivery(ctx, "session-1", 11, "user-item-fp", "", ""); err != nil {
+		t.Fatal(err)
+	}
+	topic, err = store.GetActiveAFCTopic(ctx, -1001, 11)
+	if err != nil || topic == nil || topic.LastUserFP != "user-item-fp" || topic.PendingTelegramTurnID != "" || topic.PendingTelegramUserFP != "" {
+		t.Fatalf("resolved Telegram user state=%#v err=%v", topic, err)
 	}
 }
 

@@ -113,7 +113,7 @@ func (s *Service) startClaimedAFCDraftLocked(ctx context.Context, draft model.AF
 		_ = s.store.MarkAFCDispatchFailure(ctx, receipt, model.AFCReceiptUnknown, model.AFCTurnUnknown, lease.Generation)
 		return &DirectResponse{Text: "AFC dispatched the request but could not confirm local ownership; outcome is unknown."}, nil
 	}
-	if err := s.store.MarkAFCDispatchState(ctx, receipt, model.AFCReceiptDispatched, turnID, model.AFCTurnActive, lease.Generation); err != nil {
+	if err := s.store.MarkAFCDispatchStateWithTelegramUser(ctx, receipt, model.AFCReceiptDispatched, turnID, model.AFCTurnActive, lease.Generation, afcUserTextFingerprint(turnID, text)); err != nil {
 		_ = s.afcWriter.MarkUncertain(lease)
 		_ = s.store.MarkAFCDispatchFailure(ctx, receipt, model.AFCReceiptUnknown, model.AFCTurnUnknown, lease.Generation)
 		return &DirectResponse{Text: "AFC dispatched the request but could not persist confirmation; outcome is unknown."}, nil

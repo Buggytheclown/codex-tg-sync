@@ -405,6 +405,127 @@ func TestAFCPresentationCreatesFreshStatusForEachObservedTurn(t *testing.T) {
 	}
 }
 
+func TestAFCPassiveSyncMirrorsDesktopUserBeforeStatusExactlyOnce(t *testing.T) {
+	service := activeAFCService(t)
+	ctx := context.Background()
+	poll := &stubSession{threadReads: map[string]map[string]any{
+		"thread-1": afcRunningPayloadWithUser("thread-1", "turn-1", "user-1", "Desktop prompt", "working"),
+	}}
+	service.mu.Lock()
+	service.poll, service.pollConnected = poll, true
+	service.mu.Unlock()
+	forum := &fakeAFCForum{}
+	service.SetAFCForum(forum)
+
+	service.syncAFC(ctx)
+	if len(forum.sends) != 2 {
+		t.Fatalf("sends=%#v, want user then status", forum.sends)
+	}
+	if !forum.sends[0].silent || forum.sends[0].text != "[User]\nDesktop prompt" {
+		t.Fatalf("user mirror=%#v", forum.sends[0])
+	}
+	if !forum.sends[1].silent || !strings.HasPrefix(forum.sends[1].text, "[Status]\n") {
+		t.Fatalf("status=%#v", forum.sends[1])
+	}
+	topic, err := service.store.GetActiveAFCTopic(ctx, -1001, 11)
+	if err != nil || topic == nil || topic.LastUserFP == "" || topic.StatusMessageID != forum.sends[1].messageID {
+		t.Fatalf("topic=%#v err=%v", topic, err)
+	}
+
+	service.syncAFC(ctx)
+	if len(forum.sends) != 2 {
+		t.Fatalf("repeat poll duplicated user/status: %#v", forum.sends)
+	}
+}
+
+func TestAFCSameTurnDesktopUserReanchorsStatusAfterUser(t *testing.T) {
+	service := activeAFCService(t)
+	ctx := context.Background()
+	poll := &stubSession{threadReads: map[string]map[string]any{
+		"thread-1": afcRunningPayloadWithUser("thread-1", "turn-1", "user-1", "First prompt", "working"),
+	}}
+	service.mu.Lock()
+	service.poll, service.pollConnected = poll, true
+	service.mu.Unlock()
+	forum := &fakeAFCForum{}
+	service.SetAFCForum(forum)
+
+	service.syncAFC(ctx)
+	oldStatusID := forum.sends[1].messageID
+	poll.threadReads["thread-1"] = afcRunningPayloadWithUsers("thread-1", "turn-1", []afcTestUser{
+		{id: "user-1", text: "First prompt"},
+		{id: "user-2", text: "Desktop follow-up"},
+	}, "updated progress")
+	service.syncAFC(ctx)
+
+	if len(forum.sends) != 4 || forum.sends[2].text != "[User]\nDesktop follow-up" || !strings.HasPrefix(forum.sends[3].text, "[Status]\n") {
+		t.Fatalf("sends=%#v, want follow-up user then reanchored status", forum.sends)
+	}
+	if len(forum.messageDeletes) != 1 || forum.messageDeletes[0].messageID != oldStatusID {
+		t.Fatalf("status deletes=%#v, want old status %d", forum.messageDeletes, oldStatusID)
+	}
+	topic, err := service.store.GetActiveAFCTopic(ctx, -1001, 11)
+	if err != nil || topic == nil || topic.StatusMessageID != forum.sends[3].messageID {
+		t.Fatalf("topic=%#v err=%v", topic, err)
+	}
+}
+
+func TestAFCTelegramUserIsNotEchoedByPassiveSync(t *testing.T) {
+	service := activeAFCService(t)
+	ctx := context.Background()
+	pending := afcUserTextFingerprint("turn-1", "Telegram prompt")
+	if err := service.store.UpdateAFCTopicUserDelivery(ctx, "s", 11, "", "turn-1", pending); err != nil {
+		t.Fatal(err)
+	}
+	poll := &stubSession{threadReads: map[string]map[string]any{
+		"thread-1": afcRunningPayloadWithUser("thread-1", "turn-1", "user-tg", "Telegram prompt", "working"),
+	}}
+	service.mu.Lock()
+	service.poll, service.pollConnected = poll, true
+	service.mu.Unlock()
+	forum := &fakeAFCForum{}
+	service.SetAFCForum(forum)
+
+	service.syncAFC(ctx)
+	if len(forum.sends) != 1 || !strings.HasPrefix(forum.sends[0].text, "[Status]\n") {
+		t.Fatalf("sends=%#v, want status without Telegram user echo", forum.sends)
+	}
+	topic, err := service.store.GetActiveAFCTopic(ctx, -1001, 11)
+	if err != nil || topic == nil || topic.LastUserFP == "" || topic.PendingTelegramUserFP != "" || topic.PendingTelegramTurnID != "" {
+		t.Fatalf("topic=%#v err=%v", topic, err)
+	}
+}
+
+func TestAFCPendingTelegramUserDefersStaleDesktopSnapshot(t *testing.T) {
+	service := activeAFCService(t)
+	ctx := context.Background()
+	pending := afcUserTextFingerprint("turn-1", "Telegram steer")
+	if err := service.store.UpdateAFCTopicUserDelivery(ctx, "s", 11, "old-user-fp", "turn-1", pending); err != nil {
+		t.Fatal(err)
+	}
+	poll := &stubSession{threadReads: map[string]map[string]any{
+		"thread-1": afcRunningPayloadWithUser("thread-1", "turn-1", "user-old", "Old Desktop prompt", "working"),
+	}}
+	service.mu.Lock()
+	service.poll, service.pollConnected = poll, true
+	service.mu.Unlock()
+	forum := &fakeAFCForum{}
+	service.SetAFCForum(forum)
+
+	service.syncAFC(ctx)
+	if len(forum.sends) != 0 {
+		t.Fatalf("stale snapshot delivered while Telegram input pending: %#v", forum.sends)
+	}
+	poll.threadReads["thread-1"] = afcRunningPayloadWithUsers("thread-1", "turn-1", []afcTestUser{
+		{id: "user-old", text: "Old Desktop prompt"},
+		{id: "user-tg", text: "Telegram steer"},
+	}, "working")
+	service.syncAFC(ctx)
+	if len(forum.sends) != 1 || !strings.HasPrefix(forum.sends[0].text, "[Status]\n") {
+		t.Fatalf("resolved pending input sends=%#v, want status only", forum.sends)
+	}
+}
+
 func TestAFCDirectDeliveryReanchorsSameTurnStatusAtTopicTail(t *testing.T) {
 	service := activeAFCService(t)
 	ctx := context.Background()
@@ -959,6 +1080,10 @@ func TestAFCActiveTopicMessageSteersCurrentTelegramTurn(t *testing.T) {
 	}
 	if len(writer.turnStartCalls) != 1 {
 		t.Fatalf("turn starts=%#v, want only initial turn", writer.turnStartCalls)
+	}
+	topic, err := service.store.GetActiveAFCTopic(ctx, -1001, 11)
+	if err != nil || topic == nil || topic.PendingTelegramTurnID != "started-turn" || topic.PendingTelegramUserFP != afcUserTextFingerprint("started-turn", "steer this") {
+		t.Fatalf("pending Telegram user state=%#v err=%v", topic, err)
 	}
 }
 
@@ -1745,6 +1870,28 @@ func afcRunningPayloadWithCommentaries(threadID, turnID string, commentaries ...
 		items = append(items, map[string]any{
 			"id": fmt.Sprintf("%s-commentary-%d", turnID, index+1), "type": "agentMessage", "phase": "commentary", "text": commentary,
 		})
+	}
+	return map[string]any{"thread": map[string]any{"id": threadID, "status": "inProgress", "turns": []any{map[string]any{
+		"id": turnID, "status": "inProgress", "items": items,
+	}}}}
+}
+
+type afcTestUser struct {
+	id   string
+	text string
+}
+
+func afcRunningPayloadWithUser(threadID, turnID, userID, userText, commentary string) map[string]any {
+	return afcRunningPayloadWithUsers(threadID, turnID, []afcTestUser{{id: userID, text: userText}}, commentary)
+}
+
+func afcRunningPayloadWithUsers(threadID, turnID string, users []afcTestUser, commentary string) map[string]any {
+	items := make([]any, 0, len(users)+1)
+	for _, user := range users {
+		items = append(items, map[string]any{"id": user.id, "type": "userMessage", "content": []any{map[string]any{"type": "text", "text": user.text}}})
+	}
+	if commentary != "" {
+		items = append(items, map[string]any{"id": turnID + "-commentary", "type": "agentMessage", "phase": "commentary", "text": commentary})
 	}
 	return map[string]any{"thread": map[string]any{"id": threadID, "status": "inProgress", "turns": []any{map[string]any{
 		"id": turnID, "status": "inProgress", "items": items,

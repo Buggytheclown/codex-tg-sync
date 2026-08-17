@@ -93,15 +93,19 @@ func (s *Store) UpsertAFCTopic(ctx context.Context, topic model.AFCTopic) error 
 		topic.TelegramState = model.AFCTopicConnected
 	}
 	_, err := s.db.ExecContext(ctx, `INSERT INTO afc_topics(session_id, chat_id, topic_id, thread_id, rank, title,
-		telegram_state, status_message_id, status_turn_id, last_render_fp, last_final_fp, active_turn_id, active_turn_state,
+		telegram_state, status_message_id, status_turn_id, last_render_fp, last_final_fp, last_user_fp,
+		pending_telegram_user_fp, pending_telegram_turn_id, active_turn_id, active_turn_state,
 		writer_generation, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(session_id, topic_id) DO UPDATE SET thread_id=excluded.thread_id, rank=excluded.rank,
 		title=excluded.title, telegram_state=excluded.telegram_state, status_message_id=excluded.status_message_id,
 		status_turn_id=excluded.status_turn_id, last_render_fp=excluded.last_render_fp,
-		last_final_fp=excluded.last_final_fp, updated_at=excluded.updated_at`,
+		last_final_fp=excluded.last_final_fp, last_user_fp=excluded.last_user_fp,
+		pending_telegram_user_fp=excluded.pending_telegram_user_fp,
+		pending_telegram_turn_id=excluded.pending_telegram_turn_id, updated_at=excluded.updated_at`,
 		topic.SessionID, topic.ChatID, topic.TopicID, topic.ThreadID, topic.Rank, topic.Title,
 		topic.TelegramState, topic.StatusMessageID, nullable(topic.StatusTurnID), nullable(topic.LastRenderFP), nullable(topic.LastFinalFP),
+		nullable(topic.LastUserFP), nullable(topic.PendingTelegramUserFP), nullable(topic.PendingTelegramTurnID),
 		nullable(topic.ActiveTurnID), nullable(topic.ActiveTurnState), topic.WriterGeneration, now, now)
 	return err
 }
@@ -400,7 +404,8 @@ func (s *Store) FinishAFCActivation(ctx context.Context, sessionID, summaryJSON 
 
 func (s *Store) ListAFCTopics(ctx context.Context, sessionID string) ([]model.AFCTopic, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT session_id, chat_id, topic_id, thread_id, rank, title, telegram_state,
-		status_message_id, coalesce(status_turn_id,''), coalesce(last_render_fp,''), coalesce(last_final_fp,''), coalesce(active_turn_id,''),
+		status_message_id, coalesce(status_turn_id,''), coalesce(last_render_fp,''), coalesce(last_final_fp,''),
+		coalesce(last_user_fp,''), coalesce(pending_telegram_user_fp,''), coalesce(pending_telegram_turn_id,''), coalesce(active_turn_id,''),
 		coalesce(active_turn_state,''), writer_generation, created_at, updated_at
 		FROM afc_topics WHERE session_id=? ORDER BY rank, thread_id`, sessionID)
 	if err != nil {
@@ -412,6 +417,7 @@ func (s *Store) ListAFCTopics(ctx context.Context, sessionID string) ([]model.AF
 		var topic model.AFCTopic
 		if err := rows.Scan(&topic.SessionID, &topic.ChatID, &topic.TopicID, &topic.ThreadID, &topic.Rank,
 			&topic.Title, &topic.TelegramState, &topic.StatusMessageID, &topic.StatusTurnID, &topic.LastRenderFP, &topic.LastFinalFP,
+			&topic.LastUserFP, &topic.PendingTelegramUserFP, &topic.PendingTelegramTurnID,
 			&topic.ActiveTurnID, &topic.ActiveTurnState, &topic.WriterGeneration, &topic.CreatedAt, &topic.UpdatedAt); err != nil {
 			return nil, err
 		}
@@ -476,6 +482,17 @@ func (s *Store) AcceptAFCMessage(ctx context.Context, chatID, topicID, messageID
 }
 
 func (s *Store) MarkAFCDispatchState(ctx context.Context, receipt model.AFCMessageReceipt, receiptState, turnID, turnState string, generation uint64) error {
+	return s.markAFCDispatchState(ctx, receipt, receiptState, turnID, turnState, generation, "")
+}
+
+func (s *Store) MarkAFCDispatchStateWithTelegramUser(ctx context.Context, receipt model.AFCMessageReceipt, receiptState, turnID, turnState string, generation uint64, pendingUserFP string) error {
+	if strings.TrimSpace(pendingUserFP) == "" {
+		return errors.New("pending Telegram user fingerprint is required")
+	}
+	return s.markAFCDispatchState(ctx, receipt, receiptState, turnID, turnState, generation, pendingUserFP)
+}
+
+func (s *Store) markAFCDispatchState(ctx context.Context, receipt model.AFCMessageReceipt, receiptState, turnID, turnState string, generation uint64, pendingUserFP string) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -492,9 +509,16 @@ func (s *Store) MarkAFCDispatchState(ctx context.Context, receipt model.AFCMessa
 	if changed != 1 {
 		return errors.New("AFC receipt transition is stale")
 	}
-	result, err = tx.ExecContext(ctx, `UPDATE afc_topics SET active_turn_id=?, active_turn_state=?, writer_generation=?, updated_at=?
-		WHERE session_id=? AND topic_id=? AND thread_id=? AND telegram_state=?`, nullable(turnID), nullable(turnState), generation, now,
-		receipt.SessionID, receipt.TopicID, receipt.ThreadID, model.AFCTopicConnected)
+	if strings.TrimSpace(pendingUserFP) == "" {
+		result, err = tx.ExecContext(ctx, `UPDATE afc_topics SET active_turn_id=?, active_turn_state=?, writer_generation=?, updated_at=?
+			WHERE session_id=? AND topic_id=? AND thread_id=? AND telegram_state=?`, nullable(turnID), nullable(turnState), generation, now,
+			receipt.SessionID, receipt.TopicID, receipt.ThreadID, model.AFCTopicConnected)
+	} else {
+		result, err = tx.ExecContext(ctx, `UPDATE afc_topics SET active_turn_id=?, active_turn_state=?, writer_generation=?,
+			pending_telegram_user_fp=?, pending_telegram_turn_id=?, updated_at=?
+			WHERE session_id=? AND topic_id=? AND thread_id=? AND telegram_state=?`, nullable(turnID), nullable(turnState), generation,
+			nullable(pendingUserFP), nullable(turnID), now, receipt.SessionID, receipt.TopicID, receipt.ThreadID, model.AFCTopicConnected)
+	}
 	if err != nil {
 		return err
 	}
@@ -503,6 +527,21 @@ func (s *Store) MarkAFCDispatchState(ctx context.Context, receipt model.AFCMessa
 		return errors.New("AFC topic dispatch transition is stale")
 	}
 	return tx.Commit()
+}
+
+func (s *Store) UpdateAFCTopicUserDelivery(ctx context.Context, sessionID string, topicID int64, lastUserFP, pendingTurnID, pendingUserFP string) error {
+	result, err := s.db.ExecContext(ctx, `UPDATE afc_topics SET last_user_fp=?, pending_telegram_turn_id=?,
+		pending_telegram_user_fp=?, updated_at=? WHERE session_id=? AND topic_id=? AND telegram_state=?`,
+		nullable(lastUserFP), nullable(pendingTurnID), nullable(pendingUserFP), model.NowString(),
+		sessionID, topicID, model.AFCTopicConnected)
+	if err != nil {
+		return err
+	}
+	changed, _ := result.RowsAffected()
+	if changed != 1 {
+		return errors.New("AFC user delivery update is stale")
+	}
+	return nil
 }
 
 func (s *Store) MarkAFCStarting(ctx context.Context, receipt model.AFCMessageReceipt, generation uint64) error {

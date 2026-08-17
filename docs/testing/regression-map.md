@@ -527,6 +527,11 @@ Primary tests:
 - `internal/daemon/afc_test.go::TestAFCPresentationIgnoresStalePollTurnWhileAFCWriterIsActive`
 - `internal/daemon/afc_test.go::TestAFCStatusUsesLegacyRunTimingFooter`
 - `internal/daemon/afc_test.go::TestAFCStatusUsesNewestCommentaryBlock`
+- `internal/daemon/afc_test.go::TestAFCPassiveSyncMirrorsDesktopUserBeforeStatusExactlyOnce`
+- `internal/daemon/afc_test.go::TestAFCSameTurnDesktopUserReanchorsStatusAfterUser`
+- `internal/daemon/afc_test.go::TestAFCTelegramUserIsNotEchoedByPassiveSync`
+- `internal/daemon/afc_test.go::TestAFCPendingTelegramUserDefersStaleDesktopSnapshot`
+- `internal/storage/store_afc_test.go::TestAFCDispatchPersistsPendingTelegramUserFingerprint`
 - `internal/daemon/afc_test.go::TestAFCPassiveSyncTicksElapsedFromStableTurnStart`
 - `internal/daemon/afc_test.go::TestAFCTelegramOriginHotPollRefreshesAndStopsAtTerminal`
 - `internal/daemon/afc_test.go::TestAFCLiveToolOverlaySurvivesLaggingThreadRead`
@@ -545,6 +550,10 @@ Contract notes:
 - When App Server exposes multiple commentary blocks newest-first, AFC renders
   the newest block and edits the existing status anchor rather than displaying
   an older block from the bounded history window.
+- Desktop-origin user items are mirrored once as silent `[User]` messages;
+  same-turn status is reanchored after them. Persisted pending Telegram-input
+  fingerprints suppress bot echoes for both new turns and steers, including the
+  passive-poll window before ACK delivery.
 - A successful prompt/steer acknowledgement is followed by one reanchored live
   status at the topic tail; same-turn stale status is removed best-effort while
   previous-turn history remains intact.

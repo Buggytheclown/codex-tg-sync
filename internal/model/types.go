@@ -81,22 +81,25 @@ type AFCState struct {
 }
 
 type AFCTopic struct {
-	SessionID        string
-	ChatID           int64
-	TopicID          int64
-	ThreadID         string
-	Rank             int
-	Title            string
-	TelegramState    string
-	StatusMessageID  int64
-	StatusTurnID     string
-	LastRenderFP     string
-	LastFinalFP      string
-	ActiveTurnID     string
-	ActiveTurnState  string
-	WriterGeneration uint64
-	CreatedAt        TimeString
-	UpdatedAt        TimeString
+	SessionID             string
+	ChatID                int64
+	TopicID               int64
+	ThreadID              string
+	Rank                  int
+	Title                 string
+	TelegramState         string
+	StatusMessageID       int64
+	StatusTurnID          string
+	LastRenderFP          string
+	LastFinalFP           string
+	LastUserFP            string
+	PendingTelegramUserFP string
+	PendingTelegramTurnID string
+	ActiveTurnID          string
+	ActiveTurnState       string
+	WriterGeneration      uint64
+	CreatedAt             TimeString
+	UpdatedAt             TimeString
 }
 
 type AFCTopicDraft struct {
