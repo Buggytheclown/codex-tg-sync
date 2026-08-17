@@ -191,7 +191,7 @@ func (s *Service) handleAFCPendingRequestLocked(ctx context.Context, topic model
 	if forum == nil {
 		return
 	}
-	text := "[Approval]\n" + strings.TrimSpace(approval.Question)
+	text := afcApprovalHeader + "\n" + strings.TrimSpace(approval.Question)
 	var routes []model.CallbackRoute
 	var buttons [][]model.ButtonSpec
 	if approval.PromptKind == "approval" {
@@ -202,7 +202,7 @@ func (s *Service) handleAFCPendingRequestLocked(ctx context.Context, topic model
 		}
 		buttons = append(buttons, row[:2], row[2:])
 	} else {
-		text = "[Input]\n" + strings.TrimSpace(approval.Question)
+		text = afcInputHeader + "\n" + strings.TrimSpace(approval.Question)
 		for _, choice := range afcUserInputChoices(approval.PayloadJSON) {
 			route, button := s.newAFCCallbackRoute(ctx, topic, approval, "afc_user_input", map[string]any{"response": choice.Response})
 			routes, buttons = append(routes, route), append(buttons, []model.ButtonSpec{button})

@@ -352,7 +352,7 @@ func TestAFCPassiveSyncSendsSilentStatusAndNotifyingFinal(t *testing.T) {
 	if len(forum.sends) != 2 || !forum.sends[0].silent || forum.sends[1].silent {
 		t.Fatalf("sends = %#v", forum.sends)
 	}
-	if !strings.Contains(forum.sends[1].text, "done") {
+	if !strings.HasPrefix(forum.sends[1].text, afcFinalHeader+"\n") || !strings.Contains(forum.sends[1].text, "done") {
 		t.Fatalf("final = %q", forum.sends[1].text)
 	}
 	if len(poll.threadResumeCalls) != 0 || len(poll.turnStartCalls) != 0 {
@@ -421,10 +421,10 @@ func TestAFCPassiveSyncMirrorsDesktopUserBeforeStatusExactlyOnce(t *testing.T) {
 	if len(forum.sends) != 2 {
 		t.Fatalf("sends=%#v, want user then status", forum.sends)
 	}
-	if !forum.sends[0].silent || forum.sends[0].text != "[User]\nDesktop prompt" {
+	if !forum.sends[0].silent || forum.sends[0].text != afcUserHeader+"\nDesktop prompt" {
 		t.Fatalf("user mirror=%#v", forum.sends[0])
 	}
-	if !forum.sends[1].silent || !strings.HasPrefix(forum.sends[1].text, "[Status]\n") {
+	if !forum.sends[1].silent || !strings.HasPrefix(forum.sends[1].text, afcStatusHeader+" ") {
 		t.Fatalf("status=%#v", forum.sends[1])
 	}
 	topic, err := service.store.GetActiveAFCTopic(ctx, -1001, 11)
@@ -458,7 +458,7 @@ func TestAFCSameTurnDesktopUserReanchorsStatusAfterUser(t *testing.T) {
 	}, "updated progress")
 	service.syncAFC(ctx)
 
-	if len(forum.sends) != 4 || forum.sends[2].text != "[User]\nDesktop follow-up" || !strings.HasPrefix(forum.sends[3].text, "[Status]\n") {
+	if len(forum.sends) != 4 || forum.sends[2].text != afcUserHeader+"\nDesktop follow-up" || !strings.HasPrefix(forum.sends[3].text, afcStatusHeader+" ") {
 		t.Fatalf("sends=%#v, want follow-up user then reanchored status", forum.sends)
 	}
 	if len(forum.messageDeletes) != 1 || forum.messageDeletes[0].messageID != oldStatusID {
@@ -487,7 +487,7 @@ func TestAFCTelegramUserIsNotEchoedByPassiveSync(t *testing.T) {
 	service.SetAFCForum(forum)
 
 	service.syncAFC(ctx)
-	if len(forum.sends) != 1 || !strings.HasPrefix(forum.sends[0].text, "[Status]\n") {
+	if len(forum.sends) != 1 || !strings.HasPrefix(forum.sends[0].text, afcStatusHeader+" ") {
 		t.Fatalf("sends=%#v, want status without Telegram user echo", forum.sends)
 	}
 	topic, err := service.store.GetActiveAFCTopic(ctx, -1001, 11)
@@ -521,7 +521,7 @@ func TestAFCPendingTelegramUserDefersStaleDesktopSnapshot(t *testing.T) {
 		{id: "user-tg", text: "Telegram steer"},
 	}, "working")
 	service.syncAFC(ctx)
-	if len(forum.sends) != 1 || !strings.HasPrefix(forum.sends[0].text, "[Status]\n") {
+	if len(forum.sends) != 1 || !strings.HasPrefix(forum.sends[0].text, afcStatusHeader+" ") {
 		t.Fatalf("resolved pending input sends=%#v, want status only", forum.sends)
 	}
 }
@@ -674,7 +674,7 @@ func TestAFCPresentationIgnoresStalePollTurnWhileAFCWriterIsActive(t *testing.T)
 	}
 }
 
-func TestAFCStatusUsesLegacyRunTimingFooter(t *testing.T) {
+func TestAFCStatusUsesCompactTimingInHeader(t *testing.T) {
 	t.Parallel()
 
 	startedAt := time.Date(2026, time.August, 15, 12, 0, 0, 0, time.UTC)
@@ -684,14 +684,14 @@ func TestAFCStatusUsesLegacyRunTimingFooter(t *testing.T) {
 		LatestTurnStatus:    "inProgress",
 		LatestTurnStartedAt: startedAt.Format(time.RFC3339Nano),
 	}
-	if got := renderAFCStatusAt(active, startedAt.Add(8*time.Second)); !strings.Contains(got, "Run active for: 8s") {
-		t.Fatalf("active status = %q, want legacy elapsed footer", got)
+	if got := renderAFCStatusAt(active, startedAt.Add(8*time.Second)); got != "⏱ [Status] inProgress · 8s" {
+		t.Fatalf("active status = %q, want compact elapsed header", got)
 	}
 
 	active.LatestTurnStatus = "completed"
 	active.LatestTurnUpdatedAt = startedAt.Add(2 * time.Minute).Format(time.RFC3339Nano)
-	if got := renderAFCStatusAt(active, startedAt.Add(5*time.Minute)); !strings.Contains(got, "Run duration: 2m") {
-		t.Fatalf("terminal status = %q, want legacy duration footer", got)
+	if got := renderAFCStatusAt(active, startedAt.Add(5*time.Minute)); got != "⏱ [Status] completed · 2m" {
+		t.Fatalf("terminal status = %q, want compact duration header", got)
 	}
 }
 
@@ -741,14 +741,46 @@ func TestAFCPassiveSyncTicksElapsedFromStableTurnStart(t *testing.T) {
 	service.SetAFCForum(forum)
 
 	service.syncAFC(ctx)
-	if len(forum.sends) != 1 || !strings.Contains(forum.sends[0].text, "Run active for: 0s") {
-		t.Fatalf("initial status=%#v, want observed start footer", forum.sends)
+	if len(forum.sends) != 1 || !strings.HasPrefix(forum.sends[0].text, afcStatusHeader+" inProgress · 0s") {
+		t.Fatalf("initial status=%#v, want observed start in compact header", forum.sends)
 	}
 
 	now = now.Add(5 * time.Second)
 	service.syncAFC(ctx)
-	if len(forum.edits) != 1 || !strings.Contains(forum.edits[0].text, "Run active for: 5s") {
+	if len(forum.edits) != 1 || !strings.HasPrefix(forum.edits[0].text, afcStatusHeader+" inProgress · 5s") {
 		t.Fatalf("elapsed edits=%#v, want elapsed-only edit from stable start", forum.edits)
+	}
+}
+
+func TestAFCPassiveSyncFreezesCompletedDuration(t *testing.T) {
+	service := activeAFCService(t)
+	ctx := context.Background()
+	now := time.Date(2026, time.August, 17, 12, 0, 0, 0, time.UTC)
+	service.now = func() time.Time { return now }
+	poll := &stubSession{threadReads: map[string]map[string]any{
+		"thread-1": afcRunningPayloadWithCommentary("thread-1", "turn-1", "working"),
+	}}
+	service.mu.Lock()
+	service.poll, service.pollConnected = poll, true
+	service.mu.Unlock()
+	forum := &fakeAFCForum{}
+	service.SetAFCForum(forum)
+
+	service.syncAFC(ctx)
+	now = now.Add(10 * time.Second)
+	poll.threadReads["thread-1"] = afcCompletedPayload("thread-1", "turn-1", "done")
+	service.syncAFC(ctx)
+	if len(forum.edits) != 1 || !strings.HasPrefix(forum.edits[0].text, afcStatusHeader+" completed · 10s") {
+		t.Fatalf("terminal edits=%#v, want compact frozen duration", forum.edits)
+	}
+	if strings.Contains(forum.edits[0].text, "Run duration:") {
+		t.Fatalf("terminal status retained verbose footer: %q", forum.edits[0].text)
+	}
+
+	now = now.Add(5 * time.Minute)
+	service.syncAFC(ctx)
+	if len(forum.edits) != 1 {
+		t.Fatalf("repeated terminal poll changed frozen status: %#v", forum.edits)
 	}
 }
 
@@ -1376,6 +1408,9 @@ func TestAFCApprovalCallbackIsGuardedByTopicTurnAndGeneration(t *testing.T) {
 	if len(forum.actions) != 1 || forum.actions[0].topicID != 11 || len(forum.actions[0].buttons) != 2 {
 		t.Fatalf("actions=%#v", forum.actions)
 	}
+	if !strings.HasPrefix(forum.actions[0].text, afcApprovalHeader+"\n") {
+		t.Fatalf("approval text=%q, want icon header", forum.actions[0].text)
+	}
 	token := forum.actions[0].buttons[0][0].CallbackData
 	stale, err := service.HandleCallback(ctx, -1001, 12, forum.actions[0].messageID, 123456789, token)
 	if err != nil || stale == nil || !strings.Contains(stale.CallbackText, "stale") {
@@ -1425,6 +1460,9 @@ func TestAFCStructuredUserInputCallbackReturnsGuardedAnswers(t *testing.T) {
 	service.handleAFCWriterEvent(ctx, writer, event, service.afcWriter.Snapshot().Generation)
 	if len(forum.actions) != 1 || len(forum.actions[0].buttons) != 2 {
 		t.Fatalf("actions=%#v", forum.actions)
+	}
+	if !strings.HasPrefix(forum.actions[0].text, afcInputHeader+"\n") {
+		t.Fatalf("input text=%q, want icon header", forum.actions[0].text)
 	}
 	token := forum.actions[0].buttons[0][0].CallbackData
 	response, err := service.HandleCallback(ctx, -1001, 11, forum.actions[0].messageID, 123456789, token)

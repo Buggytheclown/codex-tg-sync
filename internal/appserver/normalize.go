@@ -376,7 +376,14 @@ func applyLatestTurnTiming(previous *model.ThreadSnapshotState, current *ThreadR
 		}
 	}
 	if strings.TrimSpace(current.LatestTurnUpdatedAt) == "" {
-		current.LatestTurnUpdatedAt = observedText
+		if sameTurn &&
+			terminalTurnStatus(current.LatestTurnStatus) &&
+			terminalTurnStatus(previousSnapshot.LatestTurnStatus) &&
+			strings.TrimSpace(previousSnapshot.LatestTurnUpdatedAt) != "" {
+			current.LatestTurnUpdatedAt = previousSnapshot.LatestTurnUpdatedAt
+		} else {
+			current.LatestTurnUpdatedAt = observedText
+		}
 	}
 }
 

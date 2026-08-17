@@ -34,6 +34,14 @@ type AFCForum interface {
 	EditAFCMessage(ctx context.Context, topicID, messageID int64, text string) error
 }
 
+const (
+	afcUserHeader     = "👤 [User]"
+	afcStatusHeader   = "⏱ [Status]"
+	afcFinalHeader    = "✅ [Final]"
+	afcApprovalHeader = "🔐 [Approval]"
+	afcInputHeader    = "❓ [Input]"
+)
+
 type AFCForumFailureKind string
 
 const (
@@ -930,7 +938,7 @@ func (s *Service) persistAndDeliverAFCSnapshotLocked(ctx context.Context, forum 
 	}
 	finalFP := topic.LastFinalFP
 	if strings.TrimSpace(current.LatestFinalFP) != "" && current.LatestFinalFP != topic.LastFinalFP {
-		if _, deliveryErr = forum.SendAFCMessage(ctx, topic.TopicID, "[Final]\n"+strings.TrimSpace(current.LatestFinalText), false); deliveryErr == nil {
+		if _, deliveryErr = forum.SendAFCMessage(ctx, topic.TopicID, afcFinalHeader+"\n"+strings.TrimSpace(current.LatestFinalText), false); deliveryErr == nil {
 			finalFP = current.LatestFinalFP
 		}
 	}
@@ -976,7 +984,7 @@ func (s *Service) deliverAFCUserMessageLocked(ctx context.Context, forum AFCForu
 		topic.StatusTurnID = ""
 		topic.LastRenderFP = ""
 	}
-	if _, err := forum.SendAFCMessage(ctx, topic.TopicID, "[User]\n"+userText, true); err != nil {
+	if _, err := forum.SendAFCMessage(ctx, topic.TopicID, afcUserHeader+"\n"+userText, true); err != nil {
 		return topic, false
 	}
 	if err := s.store.UpdateAFCTopicUserDelivery(ctx, topic.SessionID, topic.TopicID, userFP, "", ""); err != nil {
@@ -1113,12 +1121,13 @@ func renderAFCStatusAt(snapshot appserver.ThreadReadSnapshot, now time.Time) str
 	if detail == "" {
 		detail = strings.TrimSpace(snapshot.Thread.LastPreview)
 	}
-	text := "[Status]\n" + status
+	header := afcStatusHeader + " " + status
+	if duration, _ := runTimingValue(&snapshot, now); duration != "" {
+		header += " · " + duration
+	}
+	text := header
 	if detail != "" {
 		text += "\n" + detail
-	}
-	if line := runTimingFooter(&snapshot, now); line != "" {
-		text += "\n\n" + line
 	}
 	return text
 }

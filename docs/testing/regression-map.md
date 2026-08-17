@@ -533,6 +533,9 @@ Primary tests:
 - `internal/daemon/afc_test.go::TestAFCPendingTelegramUserDefersStaleDesktopSnapshot`
 - `internal/storage/store_afc_test.go::TestAFCDispatchPersistsPendingTelegramUserFingerprint`
 - `internal/daemon/afc_test.go::TestAFCPassiveSyncTicksElapsedFromStableTurnStart`
+- `internal/daemon/afc_test.go::TestAFCPassiveSyncFreezesCompletedDuration`
+- `internal/daemon/afc_test.go::TestAFCStatusUsesCompactTimingInHeader`
+- `internal/appserver/normalize_test.go::TestCompactSnapshotFreezesTurnUpdatedAtAfterTerminalObservation`
 - `internal/daemon/afc_test.go::TestAFCTelegramOriginHotPollRefreshesAndStopsAtTerminal`
 - `internal/daemon/afc_test.go::TestAFCLiveToolOverlaySurvivesLaggingThreadRead`
 - `internal/daemon/afc_test.go::TestAFCOffMarksOffBeforeCleanupAndDoesNotRestoreLegacy`
@@ -545,8 +548,12 @@ Contract notes:
 - Partial activation is active when at least one topic was persisted; only that transition disables the global observer.
 - Logical off precedes cleanup, and off never restores the legacy observer or writer lifecycle.
 - Active restart recovery remains passive; interrupted activation becomes cleanup-only.
-- AFC status uses the legacy observed turn timing and duration formatting;
-  elapsed-only changes edit the existing active-turn status message.
+- AFC status uses the legacy observed turn timing but renders only the compact
+  value on its icon-prefixed first line; elapsed-only changes edit the existing
+  active-turn status message, while repeated terminal polls preserve the first
+  observed end time and do not grow completed duration.
+- AFC User, Status, Final, Approval, and Input messages have stable distinct
+  icon-prefixed headers. Legacy direct-message presentation is unchanged.
 - When App Server exposes multiple commentary blocks newest-first, AFC renders
   the newest block and edits the existing status anchor rather than displaying
   an older block from the bounded history window.

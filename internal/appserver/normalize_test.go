@@ -166,6 +166,41 @@ func TestCompactSnapshotPreservesTurnStartedAtWhenToolIsMissing(t *testing.T) {
 	}
 }
 
+func TestCompactSnapshotFreezesTurnUpdatedAtAfterTerminalObservation(t *testing.T) {
+	t.Parallel()
+
+	startedAt := time.Date(2026, time.August, 17, 12, 0, 0, 0, time.UTC)
+	terminalAt := startedAt.Add(2 * time.Minute)
+	later := terminalAt.Add(10 * time.Minute)
+	running := ThreadReadSnapshot{
+		Thread:              model.Thread{ID: "thread-terminal-timing", Status: "inProgress"},
+		LatestTurnID:        "turn-terminal-timing",
+		LatestTurnStatus:    "inProgress",
+		LatestTurnStartedAt: startedAt.Format(time.RFC3339Nano),
+	}
+	activeState := CompactSnapshot(nil, running, startedAt)
+	terminal := running
+	terminal.Thread.Status = "completed"
+	terminal.LatestTurnStatus = "completed"
+	terminalState := CompactSnapshot(&activeState, terminal, terminalAt)
+	repeatedState := CompactSnapshot(&terminalState, terminal, later)
+
+	var firstTerminal, repeatedTerminal ThreadReadSnapshot
+	if err := json.Unmarshal(terminalState.CompactJSON, &firstTerminal); err != nil {
+		t.Fatalf("unmarshal first terminal snapshot: %v", err)
+	}
+	if err := json.Unmarshal(repeatedState.CompactJSON, &repeatedTerminal); err != nil {
+		t.Fatalf("unmarshal repeated terminal snapshot: %v", err)
+	}
+	want := terminalAt.Format(time.RFC3339Nano)
+	if firstTerminal.LatestTurnUpdatedAt != want {
+		t.Fatalf("first terminal LatestTurnUpdatedAt = %q, want %q", firstTerminal.LatestTurnUpdatedAt, want)
+	}
+	if repeatedTerminal.LatestTurnUpdatedAt != want {
+		t.Fatalf("repeated terminal LatestTurnUpdatedAt = %q, want frozen %q", repeatedTerminal.LatestTurnUpdatedAt, want)
+	}
+}
+
 func TestCompactSnapshotPreservesToolTimingWhenUnchanged(t *testing.T) {
 	t.Parallel()
 

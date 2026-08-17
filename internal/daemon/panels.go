@@ -891,12 +891,23 @@ func (s *Service) currentTelegramOriginTool(ctx context.Context, thread model.Th
 }
 
 func runTimingFooter(snapshot *appserver.ThreadReadSnapshot, now time.Time) string {
-	if snapshot == nil {
+	duration, terminal := runTimingValue(snapshot, now)
+	if duration == "" {
 		return ""
+	}
+	if terminal {
+		return "Run duration: " + duration
+	}
+	return "Run active for: " + duration
+}
+
+func runTimingValue(snapshot *appserver.ThreadReadSnapshot, now time.Time) (string, bool) {
+	if snapshot == nil {
+		return "", false
 	}
 	startedAt := parseTime(model.TimeString(snapshot.LatestTurnStartedAt))
 	if startedAt.IsZero() {
-		return ""
+		return "", false
 	}
 	if now.IsZero() {
 		now = time.Now().UTC()
@@ -908,9 +919,9 @@ func runTimingFooter(snapshot *appserver.ThreadReadSnapshot, now time.Time) stri
 		if endedAt.IsZero() {
 			endedAt = now
 		}
-		return fmt.Sprintf("Run duration: %s", formatToolDuration(endedAt.Sub(startedAt)))
+		return formatToolDuration(endedAt.Sub(startedAt)), true
 	}
-	return fmt.Sprintf("Run active for: %s", formatToolDuration(now.Sub(startedAt)))
+	return formatToolDuration(now.Sub(startedAt)), false
 }
 
 func formatToolDuration(duration time.Duration) string {
