@@ -75,6 +75,11 @@ Planned primary tests:
   proves a healthy shared-daemon startup emits no warning.
 - `internal/daemon/afc_test.go` proves Stop interrupts current Desktop-origin
   and Telegram-origin turns through guarded authoritative coordinates.
+- `internal/daemon/afc_test.go::TestAFCLongFinalSplitsWithinTelegramLimit`
+  proves long Finals are delivered as ordered UTF-16-safe chunks and committed
+  only after all chunks succeed.
+- `internal/daemon/afc_test.go::TestAFCLongFinalFailureKeepsFingerprintPending`
+  proves a failed continuation remains pending for reconciliation retry.
 
 Contract notes:
 
@@ -89,6 +94,8 @@ Contract notes:
   session, and requires a manual `/afc on`; it does not interrupt Codex work.
 - AFC active rejects legacy DM mutations before App Server access. Off does not
   restore legacy lifecycle; explicit later DM work may start lazily.
+- Long AFC Finals are split at Telegram's UTF-16 message boundary. The first
+  chunk carries the Final header; continuation chunks do not repeat it.
 
 ## AFC Forum Group Transport
 

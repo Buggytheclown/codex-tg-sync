@@ -33,6 +33,9 @@ Desktop sees without maintaining a second App Server runtime.
   only `threadId`. CWD and history options are not added to resume.
 - Live events are preferred for presentation and `thread/read` remains the
   durable reconciliation source.
+- AFC Finals that exceed Telegram's message limit are split into ordered
+  UTF-16-safe chunks. The Final delivery fingerprint advances only after every
+  chunk is accepted; reconciliation retries an incomplete delivery.
 - AFC reconciliation continuously materializes newly created eligible
   top-level Desktop threads, using App Server `createdAt` rather than treating
   activity in an old thread as a new chat. Activation creates only a bounded recent snapshot;
@@ -58,6 +61,8 @@ Desktop sees without maintaining a second App Server runtime.
 ## Consequences
 
 - Desktop and Telegram observe and mutate the same in-memory thread state.
+- A failed Final chunk leaves delivery pending and emits a sanitized diagnostic
+  instead of silently losing the answer.
 - Multiple client connections may remain separate without recreating the
   cross-process writer problem.
 - ADR-020 process-generation claims remain valid inside spawned-stdio mode and
