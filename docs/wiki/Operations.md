@@ -47,7 +47,14 @@ written directly into the LaunchAgent plist.
 
 ## Restart Safety
 
-Avoid forced daemon restarts while a Telegram-originated run is active. The daemon owns the local App Server stdio session used by that run; killing the daemon closes that transport and can make the active turn appear as `interrupted`.
+In spawned mode, avoid forced bridge restarts while a Telegram-originated run
+is active. The bridge owns that App Server stdio session, so killing the bridge
+closes the transport and can make the turn appear `interrupted`.
+
+In shared-daemon AFC mode, Codex Desktop and `codex-tg` use the same managed App
+Server. Restarting only `codex-tg` does not interrupt the authoritative Codex
+turn, but it intentionally resets AFC to `off` and cleans the previous Telegram
+topics. Run `/afc on` after the bridge reconnects.
 
 Until a safe restart command exists, prefer this order:
 

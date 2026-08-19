@@ -1780,6 +1780,83 @@ func TestAFCRestartUnknownOwnershipBlocksSafeAndForceCleanup(t *testing.T) {
 	}
 }
 
+func TestAFCStartupResetsSessionCleansTopicsAndWarnsOnceWhenDaemonUnavailable(t *testing.T) {
+	service := activeAFCService(t)
+	service.cfg.AppServerMode = string(appserver.TransportDaemon)
+	service.cfg.RequestTimeout = 25 * time.Millisecond
+	service.cfg.IndexRefreshInterval = time.Hour
+	service.cfg.ObserverPollInterval = time.Hour
+	failedPoll := &stubSession{startErr: errors.New("shared daemon unavailable")}
+	service.poll = failedPoll
+	service.pollFactory = func() Session { return failedPoll }
+	forum := &fakeAFCForum{}
+	service.SetAFCForum(forum)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := service.store.SetState(ctx, "appserver.poll_connected", "true"); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.store.SetState(ctx, "appserver.live_connected", "true"); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := service.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	service.FinishStartup(ctx)
+	service.FinishStartup(ctx)
+	select {
+	case <-service.startupDone:
+	case <-time.After(time.Second):
+		t.Fatal("startup finalization did not finish")
+	}
+
+	state, err := service.store.GetAFCState(ctx)
+	if err != nil || state.State != model.AFCStateOff {
+		t.Fatalf("state=%#v err=%v", state, err)
+	}
+	if len(forum.deletes) != 2 || forum.deletes[0] != 11 || forum.deletes[1] != 12 {
+		t.Fatalf("deletes=%v", forum.deletes)
+	}
+	if len(forum.sends) != 1 || forum.sends[0].topicID != afcControlTopicID ||
+		!strings.Contains(forum.sends[0].text, "Shared Codex App Server is unavailable") ||
+		!strings.Contains(forum.sends[0].text, "/afc on") {
+		t.Fatalf("startup warnings=%#v", forum.sends)
+	}
+	if value, _ := service.store.GetState(ctx, "appserver.poll_connected"); value != "false" {
+		t.Fatalf("poll_connected=%q", value)
+	}
+	if value, _ := service.store.GetState(ctx, "appserver.live_connected"); value != "false" {
+		t.Fatalf("live_connected=%q", value)
+	}
+}
+
+func TestAFCStartupDoesNotWarnWhenSharedDaemonConnects(t *testing.T) {
+	service := activeAFCService(t)
+	service.cfg.AppServerMode = string(appserver.TransportDaemon)
+	service.cfg.IndexRefreshInterval = time.Hour
+	service.cfg.ObserverPollInterval = time.Hour
+	service.poll = &stubSession{}
+	forum := &fakeAFCForum{}
+	service.SetAFCForum(forum)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	if err := service.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	service.FinishStartup(ctx)
+	select {
+	case <-service.startupDone:
+	case <-time.After(time.Second):
+		t.Fatal("startup finalization did not finish")
+	}
+
+	if len(forum.sends) != 0 {
+		t.Fatalf("unexpected startup warning=%#v", forum.sends)
+	}
+}
+
 func TestAFCProjectPickerCreatesThreadThenTopicThenDurableBinding(t *testing.T) {
 	service := activeAFCService(t)
 	writer := &stubSession{threadStartResult: map[string]any{"thread": map[string]any{"id": "new-thread", "title": "New task", "cwd": "/tmp/project", "updatedAt": float64(100)}}}

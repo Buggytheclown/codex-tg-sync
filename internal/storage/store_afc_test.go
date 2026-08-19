@@ -238,6 +238,62 @@ func TestRecoverAFCStateMakesInterruptedActivationCleanupOnly(t *testing.T) {
 	}
 }
 
+func TestResetAFCOnStartupMakesSessionCleanupOnlyAndPreservesOtherState(t *testing.T) {
+	t.Parallel()
+	store := openTestStore(t)
+	ctx := context.Background()
+	if err := store.SetState(ctx, "test.non_afc_state", "preserved"); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.BeginAFCActivation(ctx, "session-1", -1001); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.UpsertAFCTopic(ctx, model.AFCTopic{SessionID: "session-1", ChatID: -1001, TopicID: 11,
+		ThreadID: "thread-1", TelegramState: model.AFCTopicConnected}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.FinishAFCActivation(ctx, "session-1", `{}`, true); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.CreateAFCTopicDraft(ctx, model.AFCTopicDraft{SessionID: "session-1", ChatID: -1001,
+		TopicID: 12, Title: "New task", CWD: "/tmp/project"}); err != nil {
+		t.Fatal(err)
+	}
+	receipt, _, err := store.AcceptAFCMessage(ctx, -1001, 11, 501)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.MarkAFCStarting(ctx, receipt, 7); err != nil {
+		t.Fatal(err)
+	}
+
+	sessionID, err := store.ResetAFCOnStartup(ctx)
+	if err != nil || sessionID != "session-1" {
+		t.Fatalf("sessionID=%q err=%v", sessionID, err)
+	}
+	state, err := store.GetAFCState(ctx)
+	if err != nil || state.State != model.AFCStateOff {
+		t.Fatalf("state=%#v err=%v", state, err)
+	}
+	topics, err := store.ListAFCTopics(ctx, sessionID)
+	if err != nil || len(topics) != 1 || topics[0].TelegramState != model.AFCTopicCleanup ||
+		topics[0].ActiveTurnID != "" || topics[0].ActiveTurnState != model.AFCTurnTerminal || topics[0].WriterGeneration != 0 {
+		t.Fatalf("topics=%#v err=%v", topics, err)
+	}
+	drafts, err := store.ListAFCTopicDrafts(ctx, sessionID)
+	if err != nil || len(drafts) != 1 || drafts[0].State != model.AFCDraftCleanup {
+		t.Fatalf("drafts=%#v err=%v", drafts, err)
+	}
+	storedReceipt, err := store.GetAFCReceipt(ctx, 11, 501)
+	if err != nil || storedReceipt == nil || storedReceipt.State != model.AFCReceiptUnknown {
+		t.Fatalf("receipt=%#v err=%v", storedReceipt, err)
+	}
+	value, err := store.GetState(ctx, "test.non_afc_state")
+	if err != nil || value != "preserved" {
+		t.Fatalf("non-AFC state=%q err=%v", value, err)
+	}
+}
+
 func TestAFCMessageReceiptIsUniqueAndCarriesNoPromptBody(t *testing.T) {
 	t.Parallel()
 	store := openTestStore(t)

@@ -1058,10 +1058,58 @@ func (s *Service) cleanupAFCTopics(ctx context.Context, sessionID string) {
 	}
 	topics, _ := s.store.ListAFCCleanupTargets(ctx, sessionID)
 	for _, topic := range topics {
+		if isAFCControlTopic(topic.TopicID) {
+			continue
+		}
 		if topic.TelegramState == model.AFCTopicCleanup && forum.DeleteAFCTopic(ctx, topic.TopicID) == nil {
 			_ = s.store.DeleteAFCTopic(ctx, sessionID, topic.TopicID)
 		}
 	}
+}
+
+// FinishStartup runs after the Telegram bot is ready. It cleans the previous
+// AFC session and reports a missing shared daemon once for this process start.
+func (s *Service) FinishStartup(ctx context.Context) {
+	s.mu.Lock()
+	if s.startupFinished {
+		s.mu.Unlock()
+		return
+	}
+	s.startupFinished = true
+	cleanupSessionID := s.startupCleanupSessionID
+	s.startupCleanupSessionID = ""
+	done := s.startupDone
+	s.mu.Unlock()
+	s.spawn(ctx, func(ctx context.Context) {
+		defer close(done)
+		s.finishStartup(ctx, cleanupSessionID)
+	})
+}
+
+func (s *Service) finishStartup(ctx context.Context, cleanupSessionID string) {
+	s.cleanupAFCTopics(ctx, cleanupSessionID)
+	s.ensurePollSession(ctx)
+
+	s.mu.RLock()
+	connected := s.pollConnected
+	forum := s.afcForum
+	s.mu.RUnlock()
+	if connected || forum == nil || s.cfg.AFCGroupID == 0 ||
+		!strings.EqualFold(strings.TrimSpace(s.cfg.AppServerMode), string(appserver.TransportDaemon)) {
+		return
+	}
+
+	message := model.RenderedMessage{Text: "⚠️ Shared Codex App Server is unavailable.\n\n" +
+		"AFC was reset to off.\n\n" +
+		"Fix:\n" +
+		"1. Start the managed daemon: codex app-server daemon start\n" +
+		"2. Restart Codex Desktop in local-daemon mode.\n" +
+		"3. Restart codex-tg, then run /afc on in Control."}
+	if _, err := forum.SendAFCMessage(ctx, afcControlTopicID, message, false); err != nil {
+		s.logLifecycle("afc_startup_warning_failed", lifecycleFields{"error": err})
+		return
+	}
+	s.logLifecycle("afc_startup_warning_sent", nil)
 }
 
 func (s *Service) getAFCForum() AFCForum { s.mu.RLock(); defer s.mu.RUnlock(); return s.afcForum }

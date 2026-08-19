@@ -87,6 +87,50 @@ func (s *Store) RecoverAFCWriterState(ctx context.Context) error {
 	return tx.Commit()
 }
 
+// ResetAFCOnStartup makes the previous AFC session cleanup-only without
+// touching non-AFC control-plane state. Unfinished receipts remain durable and
+// non-replayable for audit purposes.
+func (s *Store) ResetAFCOnStartup(ctx context.Context) (string, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return "", err
+	}
+	defer rollback(tx)
+
+	var sessionID string
+	err = tx.QueryRowContext(ctx, `SELECT session_id FROM afc_state WHERE id=1`).Scan(&sessionID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", tx.Commit()
+	}
+	if err != nil {
+		return "", err
+	}
+
+	now := model.NowString()
+	if _, err := tx.ExecContext(ctx, `UPDATE afc_state SET state=?, ended_at=? WHERE id=1`,
+		model.AFCStateOff, now); err != nil {
+		return "", err
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE afc_message_receipts SET state=?, updated_at=?
+		WHERE session_id=? AND state=?`, model.AFCReceiptUnknown, now, sessionID, model.AFCReceiptAccepted); err != nil {
+		return "", err
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE afc_topics SET telegram_state=?, active_turn_id=NULL,
+		active_turn_state=?, writer_generation=0, pending_telegram_user_fp=NULL,
+		pending_telegram_turn_id=NULL, updated_at=? WHERE session_id=?`,
+		model.AFCTopicCleanup, model.AFCTurnTerminal, now, sessionID); err != nil {
+		return "", err
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE afc_topic_drafts SET state=?, updated_at=? WHERE session_id=?`,
+		model.AFCDraftCleanup, now, sessionID); err != nil {
+		return "", err
+	}
+	if err := tx.Commit(); err != nil {
+		return "", err
+	}
+	return sessionID, nil
+}
+
 func (s *Store) UpsertAFCTopic(ctx context.Context, topic model.AFCTopic) error {
 	now := string(model.NowString())
 	if strings.TrimSpace(topic.TelegramState) == "" {

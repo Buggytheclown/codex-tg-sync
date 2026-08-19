@@ -114,6 +114,7 @@ func runDaemon(cfg config.Config) error {
 	if err := bot.Start(ctx); err != nil {
 		return err
 	}
+	service.FinishStartup(ctx)
 	logger.Printf("ctr-go daemon running with %s", bot.String())
 	return bot.Run(ctx)
 }

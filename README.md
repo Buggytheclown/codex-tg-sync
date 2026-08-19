@@ -246,6 +246,34 @@ started it. While AFC is active, legacy DM mutations are disabled; `/help` and
 restores the legacy observer automatically. Use `/afc off --force` only when AFC
 turns must be interrupted and drained.
 
+### Shared App Server startup on macOS
+
+AFC daemon mode requires Codex Desktop and `codex-tg` to connect to the same
+managed App Server. Start that runtime before starting the bridge:
+
+```bash
+/Applications/ChatGPT.app/Contents/Resources/codex app-server daemon start
+launchctl setenv CODEX_APP_SERVER_USE_LOCAL_DAEMON 1
+```
+
+Then fully quit and reopen Codex Desktop, and restart the bridge:
+
+```bash
+ctr-go service restart
+/Applications/ChatGPT.app/Contents/Resources/codex app-server daemon version
+ctr-go status
+```
+
+The `launchctl` environment override applies to subsequently launched GUI apps
+and may need to be repeated after login or reboot. Shared-daemon mode is
+fail-closed: if the configured Unix socket is unavailable, `codex-tg` does not
+spawn a private App Server and sends one startup warning to Control when
+possible.
+
+Every `codex-tg` restart intentionally resets AFC to `off` for the MVP. Existing
+Codex work continues in the shared runtime, but the old Telegram topics are
+cleaned up. Run `/afc on` in Control after the shared connection is healthy.
+
 ## Verification
 
 ```powershell

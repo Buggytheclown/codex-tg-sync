@@ -4909,6 +4909,7 @@ func (s *startCountingSession) StartCalls() int {
 
 type stubSession struct {
 	startCalls             int
+	startErr               error
 	closeCalls             int
 	threadReads            map[string]map[string]any
 	threadListResult       map[string]any
@@ -4963,7 +4964,7 @@ type respondRequestCall struct {
 
 func (s *stubSession) Start(ctx context.Context) error {
 	s.startCalls++
-	return nil
+	return s.startErr
 }
 func (s *stubSession) Close() error {
 	s.closeCalls++

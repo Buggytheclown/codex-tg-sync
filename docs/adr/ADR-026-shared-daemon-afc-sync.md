@@ -1,8 +1,8 @@
 # ADR-026: Shared Daemon AFC Sync
 
-- Status: accepted
+- Status: accepted; bridge-restart recovery amended by ADR-027
 - Amends: ADR-019, ADR-020, ADR-022, ADR-023, ADR-024
-- Related: ADR-025, `docs/plans/2026-08-16-afc-desktop-sync-mvp-design.md`
+- Related: ADR-025, ADR-027, `docs/plans/2026-08-16-afc-desktop-sync-mvp-design.md`
 
 ## Context
 
@@ -49,7 +49,9 @@ Desktop sees without maintaining a second App Server runtime.
   non-replayable, but a new Telegram message may reconcile it from an
   authoritative shared-daemon `thread/read`. The old receipt stays unchanged;
   the new message steers the confirmed active turn or starts only after
-  confirmed idle. Spawned mode stays fail-closed.
+  confirmed idle. Spawned mode stays fail-closed. ADR-027 supersedes this
+  bridge-restart continuation behavior for the MVP by resetting AFC to `off`;
+  the reconciliation rule still applies to in-process connection repair.
 - AFC active and legacy DM mutation are mutually exclusive. Legacy code remains
   lazy and compatible; `/afc off` does not restore it automatically.
 

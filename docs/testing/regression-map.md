@@ -42,6 +42,9 @@ Contract notes:
 ADR: `docs/adr/ADR-026-shared-daemon-afc-sync.md`; design:
 `docs/plans/2026-08-16-afc-desktop-sync-mvp-design.md`.
 
+Restart boundary: `docs/adr/ADR-027-afc-reset-on-start-mvp.md`; design:
+`docs/plans/2026-08-19-afc-reset-on-start-mvp-design.md`.
+
 Planned primary tests:
 
 - `internal/config/config_test.go` covers daemon transport selection and the
@@ -62,6 +65,14 @@ Planned primary tests:
 - `internal/daemon/afc_test.go::TestAFCSharedDaemonRestartUnknownReconcilesBeforeSteer`
   proves bridge restart recovery adopts the authoritative active turn without
   replaying the old receipt or starting a parallel turn.
+- `internal/storage/store_afc_test.go::TestResetAFCOnStartupMakesSessionCleanupOnlyAndPreservesOtherState`
+  proves process startup resets only AFC state, makes old topics/drafts
+  cleanup-only, and keeps receipts non-replayable.
+- `internal/daemon/afc_test.go::TestAFCStartupResetsSessionCleansTopicsAndWarnsOnceWhenDaemonUnavailable`
+  proves startup cleans old topics, resets persisted connection flags, and
+  warns Control once when the configured shared daemon is unavailable.
+- `internal/daemon/afc_test.go::TestAFCStartupDoesNotWarnWhenSharedDaemonConnects`
+  proves a healthy shared-daemon startup emits no warning.
 - `internal/daemon/afc_test.go` proves Stop interrupts current Desktop-origin
   and Telegram-origin turns through guarded authoritative coordinates.
 
@@ -74,6 +85,8 @@ Contract notes:
   `CTR_GO_AFC_INITIAL_TOPIC_LIMIT`, then continuously discovers new chats.
 - Shared-daemon subscription resumes by exact `threadId` only; `thread/read`
   remains the durable catch-up source.
+- A `codex-tg` process restart resets AFC to `off`, cleans the previous Telegram
+  session, and requires a manual `/afc on`; it does not interrupt Codex work.
 - AFC active rejects legacy DM mutations before App Server access. Off does not
   restore legacy lifecycle; explicit later DM work may start lazily.
 

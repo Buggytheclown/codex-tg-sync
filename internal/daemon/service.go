@@ -104,6 +104,9 @@ type Service struct {
 	lastError                   string
 	liveConnected               bool
 	pollConnected               bool
+	startupCleanupSessionID     string
+	startupFinished             bool
+	startupDone                 chan struct{}
 }
 
 const (
@@ -241,14 +244,36 @@ func (s *Service) Start(ctx context.Context) error {
 	s.lastError = ""
 	s.liveConnected = false
 	s.pollConnected = false
+	s.startupCleanupSessionID = ""
+	s.startupFinished = false
+	s.startupDone = make(chan struct{})
 	s.mu.Unlock()
 
 	_ = s.store.SetState(runCtx, "daemon.phase", "ready")
 	_ = s.store.SetState(runCtx, "daemon.ready", "true")
 	_ = s.store.SetState(runCtx, "daemon.started_at", s.startedAt.Format(time.RFC3339Nano))
 	_ = s.store.SetState(runCtx, "daemon.last_error", "")
-	_ = s.store.RecoverAFCState(runCtx)
-	_ = s.store.RecoverAFCWriterState(runCtx)
+	_ = s.store.SetState(runCtx, "appserver.live_connected", "false")
+	_ = s.store.SetState(runCtx, "appserver.poll_connected", "false")
+	cleanupSessionID, err := s.store.ResetAFCOnStartup(runCtx)
+	if err != nil {
+		cancel()
+		s.mu.Lock()
+		s.started = false
+		s.cancel = nil
+		s.runCtx = nil
+		s.ready = false
+		s.phase = "startup_failed"
+		s.lastError = sanitizeDiagnosticString(err.Error())
+		s.mu.Unlock()
+		_ = s.store.SetState(context.Background(), "daemon.phase", "startup_failed")
+		_ = s.store.SetState(context.Background(), "daemon.ready", "false")
+		_ = s.store.SetState(context.Background(), "daemon.last_error", sanitizeDiagnosticString(err.Error()))
+		return fmt.Errorf("reset AFC on startup: %w", err)
+	}
+	s.mu.Lock()
+	s.startupCleanupSessionID = cleanupSessionID
+	s.mu.Unlock()
 	s.cleanupTempArtifacts(runCtx)
 
 	s.spawn(runCtx, s.ensureSessions)
