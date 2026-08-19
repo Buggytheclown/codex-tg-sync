@@ -249,26 +249,49 @@ turns must be interrupted and drained.
 ### Shared App Server startup on macOS
 
 AFC daemon mode requires Codex Desktop and `codex-tg` to connect to the same
-managed App Server. Start that runtime before starting the bridge:
+managed App Server. The startup order matters.
+
+#### After every reboot
+
+**Do not open Codex Desktop first.** The `launchctl` environment override and a
+manually started managed daemon do not survive a reboot. Use this order:
+
+1. Start the managed App Server daemon.
+2. Set local-daemon mode for GUI apps launched afterward.
+3. Open Codex Desktop.
+4. Start or restart `codex-tg`, verify the shared connection, then run `/afc on`
+   in Control.
+
+Run steps 1 and 2 before opening Desktop:
 
 ```bash
 /Applications/ChatGPT.app/Contents/Resources/codex app-server daemon start
 launchctl setenv CODEX_APP_SERVER_USE_LOCAL_DAEMON 1
 ```
 
-Then fully quit and reopen Codex Desktop, and restart the bridge:
+After opening Desktop, verify and restart the bridge if needed:
 
 ```bash
-ctr-go service restart
 /Applications/ChatGPT.app/Contents/Resources/codex app-server daemon version
+ctr-go service restart
 ctr-go status
 ```
 
-The `launchctl` environment override applies to subsequently launched GUI apps
-and may need to be repeated after login or reboot. Shared-daemon mode is
-fail-closed: if the configured Unix socket is unavailable, `codex-tg` does not
-spawn a private App Server and sends one startup warning to Control when
-possible.
+When installed with `--start-at-login`, `codex-tg` may start automatically
+before the managed daemon. In that case it stays fail-closed, resets AFC to
+`off`, and sends one warning to Control. It does not spawn a private App Server.
+Start the managed daemon, restart Desktop in local-daemon mode, and then run
+`/afc on`.
+
+#### If Codex Desktop was opened first
+
+Desktop probably started a private App Server. Recover with this exact order:
+
+1. Fully quit Codex Desktop with **Cmd+Q**; closing its window is not enough.
+2. Run the two daemon and `launchctl` commands above.
+3. Reopen Codex Desktop.
+4. Run `ctr-go service restart`, verify `ctr-go status`, and send `/afc on` in
+   Control.
 
 Every `codex-tg` restart intentionally resets AFC to `off` for the MVP. Existing
 Codex work continues in the shared runtime, but the old Telegram topics are
