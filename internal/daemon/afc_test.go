@@ -1,16 +1,19 @@
 package daemon
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/mideco-tech/codex-tg/internal/appserver"
 	"github.com/mideco-tech/codex-tg/internal/model"
+	"github.com/mideco-tech/codex-tg/internal/tgformat"
 )
 
 type fakeAFCForum struct {
@@ -19,6 +22,9 @@ type fakeAFCForum struct {
 	prepares         int
 	nextTopicID      int64
 	createErrAt      int
+	sendErrAt        int
+	sendErr          error
+	rejectOversize   bool
 	renameErr        error
 	messageDeleteErr error
 	creates          []string
@@ -97,6 +103,15 @@ func (f *fakeAFCForum) DeleteAFCMessage(_ context.Context, topicID, messageID in
 func (f *fakeAFCForum) SendAFCMessage(_ context.Context, topicID int64, message model.RenderedMessage, silent bool) (int64, error) {
 	id := int64(100 + len(f.sends))
 	f.sends = append(f.sends, fakeAFCSend{topicID: topicID, messageID: id, text: message.Text, message: message, silent: silent})
+	if f.rejectOversize && afcUTF16Len(message.Text) > tgformat.TelegramMessageLimit {
+		return 0, errors.New("message is too long")
+	}
+	if f.sendErrAt > 0 && len(f.sends) == f.sendErrAt {
+		if f.sendErr != nil {
+			return 0, f.sendErr
+		}
+		return 0, errors.New("send failed")
+	}
 	return id, nil
 }
 func (f *fakeAFCForum) EditAFCMessage(_ context.Context, topicID, messageID int64, message model.RenderedMessage) error {
@@ -360,6 +375,76 @@ func TestAFCPassiveSyncSendsSilentStatusAndNotifyingFinal(t *testing.T) {
 	}
 	if len(poll.threadResumeCalls) != 0 || len(poll.turnStartCalls) != 0 {
 		t.Fatal("passive sync attempted a mutation")
+	}
+}
+
+func TestAFCLongFinalSplitsWithinTelegramLimit(t *testing.T) {
+	service := activeAFCService(t)
+	ctx := context.Background()
+	finalText := strings.Repeat("🙂", tgformat.TelegramMessageLimit/2+600)
+	poll := &stubSession{threadReads: map[string]map[string]any{
+		"thread-1": afcCompletedPayload("thread-1", "turn-1", finalText),
+	}}
+	service.mu.Lock()
+	service.poll, service.pollConnected = poll, true
+	service.mu.Unlock()
+	forum := &fakeAFCForum{rejectOversize: true}
+	service.SetAFCForum(forum)
+
+	service.syncAFC(ctx)
+	if len(forum.sends) < 3 {
+		t.Fatalf("sends=%d, want status and multiple Final chunks", len(forum.sends))
+	}
+	finalSends := forum.sends[1:]
+	var delivered strings.Builder
+	for index, send := range finalSends {
+		if got := afcUTF16Len(send.text); got > tgformat.TelegramMessageLimit {
+			t.Fatalf("chunk %d UTF-16 length=%d, want <=%d", index+1, got, tgformat.TelegramMessageLimit)
+		}
+		if index > 0 && strings.HasPrefix(send.text, afcFinalHeader) {
+			t.Fatalf("continuation chunk %d repeated Final header", index+1)
+		}
+		delivered.WriteString(send.text)
+	}
+	if got, want := delivered.String(), afcFinalHeader+"\n"+finalText; got != want {
+		t.Fatalf("delivered Final length=%d, want exact length=%d", len(got), len(want))
+	}
+	topic, err := service.store.GetActiveAFCTopic(ctx, -1001, 11)
+	if err != nil || topic == nil || topic.LastFinalFP == "" {
+		t.Fatalf("topic=%#v err=%v, want committed Final fingerprint", topic, err)
+	}
+	deliveredCount := len(forum.sends)
+	service.syncAFC(ctx)
+	if len(forum.sends) != deliveredCount {
+		t.Fatalf("sends=%d after retry, want deduped count=%d", len(forum.sends), deliveredCount)
+	}
+}
+
+func TestAFCLongFinalFailureKeepsFingerprintPending(t *testing.T) {
+	service := activeAFCService(t)
+	ctx := context.Background()
+	finalText := strings.Repeat("x", tgformat.TelegramMessageLimit+1200)
+	poll := &stubSession{threadReads: map[string]map[string]any{
+		"thread-1": afcCompletedPayload("thread-1", "turn-1", finalText),
+	}}
+	service.mu.Lock()
+	service.poll, service.pollConnected = poll, true
+	service.mu.Unlock()
+	forum := &fakeAFCForum{sendErrAt: 3, sendErr: errors.New("temporary Telegram failure")}
+	service.SetAFCForum(forum)
+	var logs bytes.Buffer
+	service.SetLogger(log.New(&logs, "", 0))
+
+	service.syncAFC(ctx)
+	topic, err := service.store.GetActiveAFCTopic(ctx, -1001, 11)
+	if err != nil || topic == nil {
+		t.Fatalf("topic=%#v err=%v", topic, err)
+	}
+	if topic.LastFinalFP != "" {
+		t.Fatalf("last_final_fp=%q, want pending after failed continuation", topic.LastFinalFP)
+	}
+	if got := logs.String(); !strings.Contains(got, "afc_final_delivery_failed") || !strings.Contains(got, `"chunk_index":2`) {
+		t.Fatalf("logs=%q, want chunk delivery diagnostic", got)
 	}
 }
 

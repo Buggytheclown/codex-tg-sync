@@ -940,11 +940,34 @@ func (s *Service) persistAndDeliverAFCSnapshotLocked(ctx context.Context, forum 
 	}
 	finalFP := topic.LastFinalFP
 	if strings.TrimSpace(current.LatestFinalFP) != "" && current.LatestFinalFP != topic.LastFinalFP {
-		if _, deliveryErr = forum.SendAFCMessage(ctx, topic.TopicID, model.RenderedMessage{Text: afcFinalHeader + "\n" + strings.TrimSpace(current.LatestFinalText)}, false); deliveryErr == nil {
+		finalMessages := renderAFCFinal(current.LatestFinalText)
+		for index, message := range finalMessages {
+			if _, deliveryErr = forum.SendAFCMessage(ctx, topic.TopicID, message, false); deliveryErr != nil {
+				logKey := strings.Join([]string{"afc_final_delivery_failed", topic.ThreadID, current.LatestTurnID, current.LatestFinalFP}, ":")
+				if s.allowDiagnosticRepeat(logKey, diagnosticRepeatWindow) {
+					s.logLifecycle("afc_final_delivery_failed", lifecycleFields{
+						"thread_id":   topic.ThreadID,
+						"turn_id":     current.LatestTurnID,
+						"topic_id":    topic.TopicID,
+						"chunk_index": index + 1,
+						"chunk_count": len(finalMessages),
+						"error":       deliveryErr,
+					})
+				}
+				break
+			}
+		}
+		if deliveryErr == nil {
 			finalFP = current.LatestFinalFP
 		}
 	}
 	_ = s.store.UpdateAFCTopicDelivery(ctx, topic.SessionID, topic.TopicID, statusID, statusTurnID, renderFP, finalFP)
+}
+
+func renderAFCFinal(finalText string) []model.RenderedMessage {
+	return tgformat.RenderSegments([]tgformat.Segment{
+		tgformat.Plain(afcFinalHeader + "\n" + strings.TrimSpace(finalText)),
+	}, tgformat.TelegramMessageLimit)
 }
 
 func (s *Service) deliverAFCUserMessageLocked(ctx context.Context, forum AFCForum, topic model.AFCTopic, current appserver.ThreadReadSnapshot) (model.AFCTopic, bool) {
