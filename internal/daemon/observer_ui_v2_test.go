@@ -39,9 +39,13 @@ type recordingSender struct {
 	edits     []recordedMessage
 	deletes   []recordedMessage
 	editErr   error
+	sendErr   error
 }
 
 func (s *recordingSender) SendMessage(ctx context.Context, chatID, topicID int64, text string, buttons [][]model.ButtonSpec, options model.SendOptions) (int64, error) {
+	if s.sendErr != nil {
+		return 0, s.sendErr
+	}
 	messageID := int64(len(s.messages) + 1)
 	s.messages = append(s.messages, recordedMessage{chatID: chatID, topicID: topicID, messageID: messageID, text: text, buttons: buttons, options: options})
 	return messageID, nil

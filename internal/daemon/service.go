@@ -81,6 +81,7 @@ type Service struct {
 	cancel                      context.CancelFunc
 	wg                          sync.WaitGroup
 	panelMu                     sync.Mutex
+	externalRequestMu           sync.Mutex
 	afcMu                       sync.Mutex
 	afcForum                    AFCForum
 	afcLeases                   map[string]appserver.WriterLease[Session]
@@ -639,6 +640,13 @@ func (s *Service) HandleMessageWithID(ctx context.Context, chatID, topicID, mess
 func (s *Service) HandleCallback(ctx context.Context, chatID, topicID, messageID, userID int64, token string) (*DirectResponse, error) {
 	if !s.IsAllowed(userID, chatID) {
 		return nil, nil
+	}
+	externalRoute, err := s.store.GetCallbackRoute(ctx, token)
+	if err != nil {
+		return nil, err
+	}
+	if externalRoute != nil && strings.HasPrefix(externalRoute.Action, "external_launch_") {
+		return s.handleExternalLaunchCallback(ctx, chatID, topicID, messageID, externalRoute)
 	}
 	if s.isAFCGroup(chatID) {
 		return s.handleAFCCallback(ctx, topicID, messageID, token)
@@ -1278,6 +1286,7 @@ func (s *Service) deliveryLoop(ctx context.Context) {
 	ticker := time.NewTicker(1 * time.Second)
 	defer ticker.Stop()
 	for {
+		s.processExternalLaunchRequests(ctx)
 		s.processDeliveryBatch(ctx)
 		select {
 		case <-ctx.Done():

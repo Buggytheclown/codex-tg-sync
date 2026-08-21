@@ -60,3 +60,63 @@ func TestIngestExternalLaunchRequestsRejectsInvalidBatchWithoutCursorAdvance(t *
 		t.Fatalf("cursor advanced to %d after invalid batch, want 5", cursor)
 	}
 }
+
+func TestExternalLaunchRequestTransitionsAreConditional(t *testing.T) {
+	t.Parallel()
+	store := openTestStore(t)
+	ctx := context.Background()
+	request := testExternalLaunchRequest("test:chat:20")
+	if _, err := store.IngestExternalLaunchRequests(ctx, "test", 20, []model.ExternalLaunchRequest{request}); err != nil {
+		t.Fatal(err)
+	}
+
+	claimed, err := store.ClaimExternalLaunchRequest(ctx, request.ID)
+	if err != nil || !claimed {
+		t.Fatalf("first claim=%t err=%v", claimed, err)
+	}
+	claimed, err = store.ClaimExternalLaunchRequest(ctx, request.ID)
+	if err != nil || claimed {
+		t.Fatalf("duplicate claim=%t err=%v, want false", claimed, err)
+	}
+	dismissed, err := store.DismissExternalLaunchRequest(ctx, request.ID)
+	if err != nil || dismissed {
+		t.Fatalf("dismiss after claim=%t err=%v, want false", dismissed, err)
+	}
+}
+
+func TestExternalLaunchRequestTelegramDeliveryRemainsRetryable(t *testing.T) {
+	t.Parallel()
+	store := openTestStore(t)
+	ctx := context.Background()
+	request := testExternalLaunchRequest("test:chat:21")
+	if _, err := store.IngestExternalLaunchRequests(ctx, "test", 21, []model.ExternalLaunchRequest{request}); err != nil {
+		t.Fatal(err)
+	}
+	pending, err := store.ListExternalLaunchRequestsForTelegram(ctx, 10)
+	if err != nil || len(pending) != 1 {
+		t.Fatalf("pending=%#v err=%v", pending, err)
+	}
+	if err := store.MarkExternalLaunchRequestTelegramSent(ctx, request.ID, 501, model.ExternalLaunchPendingApproval); err != nil {
+		t.Fatal(err)
+	}
+	pending, err = store.ListExternalLaunchRequestsForTelegram(ctx, 10)
+	if err != nil || len(pending) != 0 {
+		t.Fatalf("delivered request remained pending: %#v err=%v", pending, err)
+	}
+	if _, err := store.DismissExternalLaunchRequest(ctx, request.ID); err != nil {
+		t.Fatal(err)
+	}
+	pending, err = store.ListExternalLaunchRequestsForTelegram(ctx, 10)
+	if err != nil || len(pending) != 1 || pending[0].TelegramMessageID != 501 {
+		t.Fatalf("status edit work=%#v err=%v", pending, err)
+	}
+}
+
+func testExternalLaunchRequest(id string) model.ExternalLaunchRequest {
+	now := model.NowString()
+	return model.ExternalLaunchRequest{
+		ID: id, Source: "test", ExternalID: id, Sender: "alice", Title: "Request from alice",
+		SafePreview: "do work", Prompt: "do work", CWD: "/project", Status: model.ExternalLaunchPendingApproval,
+		TelegramTopicID: 77, CreatedAt: now, UpdatedAt: now,
+	}
+}

@@ -123,3 +123,96 @@ func (s *Store) GetExternalLaunchRequest(ctx context.Context, id string) (*model
 	}
 	return &request, nil
 }
+
+func (s *Store) ListExternalLaunchRequestsForTelegram(ctx context.Context, limit int) ([]model.ExternalLaunchRequest, error) {
+	if limit <= 0 {
+		limit = 20
+	}
+	rows, err := s.db.QueryContext(ctx, `
+	SELECT id, source, external_id, sender, title, coalesce(safe_preview,''), coalesce(source_url,''), prompt, coalesce(cwd,''), status,
+		telegram_topic_id, telegram_message_id, coalesce(telegram_rendered_status,''), coalesce(thread_id,''), coalesce(turn_id,''),
+		coalesce(error_type,''), coalesce(error_summary,''), created_at, updated_at
+	FROM external_launch_requests
+	WHERE telegram_message_id=0 OR coalesce(telegram_rendered_status,'') != status
+	ORDER BY created_at, id
+	LIMIT ?`, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	requests := make([]model.ExternalLaunchRequest, 0)
+	for rows.Next() {
+		var request model.ExternalLaunchRequest
+		if err := rows.Scan(&request.ID, &request.Source, &request.ExternalID, &request.Sender, &request.Title, &request.SafePreview,
+			&request.SourceURL, &request.Prompt, &request.CWD, &request.Status, &request.TelegramTopicID, &request.TelegramMessageID,
+			&request.TelegramRenderedStatus, &request.ThreadID, &request.TurnID, &request.ErrorType, &request.ErrorSummary,
+			&request.CreatedAt, &request.UpdatedAt); err != nil {
+			return nil, err
+		}
+		requests = append(requests, request)
+	}
+	return requests, rows.Err()
+}
+
+func (s *Store) MarkExternalLaunchRequestTelegramSent(ctx context.Context, id string, messageID int64, renderedStatus string) error {
+	if messageID == 0 || strings.TrimSpace(renderedStatus) == "" {
+		return errors.New("telegram message id and rendered status are required")
+	}
+	result, err := s.db.ExecContext(ctx, `
+	UPDATE external_launch_requests
+	SET telegram_message_id=?, telegram_rendered_status=?, updated_at=?
+	WHERE id=? AND telegram_message_id=0 AND status=?`, messageID, renderedStatus, model.NowString(), id, renderedStatus)
+	if err != nil {
+		return err
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if rows != 1 {
+		return errors.New("external launch request changed before Telegram send was recorded")
+	}
+	return nil
+}
+
+func (s *Store) MarkExternalLaunchRequestTelegramRendered(ctx context.Context, id string, messageID int64, status string) error {
+	result, err := s.db.ExecContext(ctx, `
+	UPDATE external_launch_requests
+	SET telegram_rendered_status=?, updated_at=?
+	WHERE id=? AND telegram_message_id=? AND status=?`, status, model.NowString(), id, messageID, status)
+	if err != nil {
+		return err
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if rows != 1 {
+		return errors.New("external launch request changed before Telegram edit was recorded")
+	}
+	return nil
+}
+
+func (s *Store) ClaimExternalLaunchRequest(ctx context.Context, id string) (bool, error) {
+	return s.transitionExternalLaunchRequest(ctx, id, model.ExternalLaunchPendingApproval, model.ExternalLaunchStarting)
+}
+
+func (s *Store) DismissExternalLaunchRequest(ctx context.Context, id string) (bool, error) {
+	return s.transitionExternalLaunchRequest(ctx, id, model.ExternalLaunchPendingApproval, model.ExternalLaunchDismissed)
+}
+
+func (s *Store) transitionExternalLaunchRequest(ctx context.Context, id, from, to string) (bool, error) {
+	result, err := s.db.ExecContext(ctx, `UPDATE external_launch_requests SET status=?, updated_at=? WHERE id=? AND status=?`,
+		to, model.NowString(), id, from)
+	if err != nil {
+		return false, err
+	}
+	rows, err := result.RowsAffected()
+	return rows == 1, err
+}
+
+func (s *Store) ExpireExternalLaunchCallbackRoutes(ctx context.Context, requestID string) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE callback_routes SET status=? WHERE action LIKE 'external_launch_%' AND request_id=?`,
+		model.CallbackStatusExpired, requestID)
+	return err
+}
