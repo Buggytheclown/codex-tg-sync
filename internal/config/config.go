@@ -56,6 +56,7 @@ type Config struct {
 	YMessengerOAuthTeamToken    string
 	YMessengerAllowedSenders    []string
 	YMessengerPollInterval      time.Duration
+	YMessengerRequireApproval   bool
 	ExternalRequestsTopicID     int64
 	ExternalRequestDefaultCWD   string
 	TelegramBotToken            string
@@ -159,6 +160,7 @@ func fromSource(source envSource) Config {
 		YMessengerOAuthTeamToken:    source.get("CTR_GO_YMESSENGER_OAUTH_TEAM_TOKEN"),
 		YMessengerAllowedSenders:    parseStringList(source.get("CTR_GO_YMESSENGER_ALLOWED_SENDERS")),
 		YMessengerPollInterval:      source.durationSeconds("CTR_GO_YMESSENGER_POLL_SECONDS", 2*time.Second),
+		YMessengerRequireApproval:   source.bool("CTR_GO_YMESSENGER_REQUIRE_APPROVAL", true),
 		ExternalRequestsTopicID:     parseInt64(source.get("CTR_GO_EXTERNAL_REQUESTS_TOPIC_ID")),
 		ExternalRequestDefaultCWD:   source.path("CTR_GO_EXTERNAL_REQUEST_DEFAULT_CWD", defaultCWD),
 		TelegramBotToken:            source.first("CTR_GO_TELEGRAM_BOT_TOKEN", "CTR_TELEGRAM_BOT_TOKEN"),
@@ -196,6 +198,7 @@ func (c Config) MarshalJSON() ([]byte, error) {
 		YMessengerEnabled           bool    `json:"ymessenger_enabled"`
 		YMessengerConfigured        bool    `json:"ymessenger_configured"`
 		YMessengerPollSeconds       float64 `json:"ymessenger_poll_seconds"`
+		YMessengerRequireApproval   bool    `json:"ymessenger_require_approval"`
 		ExternalRequestsTopicID     int64   `json:"external_requests_topic_id,omitempty"`
 		ExternalRequestDefaultCWD   string  `json:"external_request_default_cwd,omitempty"`
 		HasTelegramToken            bool    `json:"telegram_configured"`
@@ -227,6 +230,7 @@ func (c Config) MarshalJSON() ([]byte, error) {
 		YMessengerEnabled:           c.YMessengerEnabled,
 		YMessengerConfigured:        strings.TrimSpace(c.YMessengerOAuthTeamToken) != "",
 		YMessengerPollSeconds:       c.YMessengerPollInterval.Seconds(),
+		YMessengerRequireApproval:   c.YMessengerRequireApproval,
 		ExternalRequestsTopicID:     c.ExternalRequestsTopicID,
 		ExternalRequestDefaultCWD:   c.ExternalRequestDefaultCWD,
 		HasTelegramToken:            c.TelegramBotToken != "",
@@ -276,7 +280,7 @@ func (c Config) ValidateYMessenger() error {
 	if c.AFCGroupID == 0 {
 		return fmt.Errorf("CTR_GO_AFC_GROUP_ID is required when YMessenger is enabled")
 	}
-	if c.ExternalRequestsTopicID == 0 {
+	if c.YMessengerRequireApproval && c.ExternalRequestsTopicID == 0 {
 		return fmt.Errorf("CTR_GO_EXTERNAL_REQUESTS_TOPIC_ID is required when YMessenger is enabled")
 	}
 	return nil

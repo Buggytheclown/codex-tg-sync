@@ -19,6 +19,10 @@ Add one optional Yandex Messenger adapter to the existing `codex-tg` daemon:
 - create a normal Codex thread and first turn through the existing App Server
   and AFC lifecycle after approval;
 - keep the normal AFC topic as the surface for all later Codex activity.
+- include one direct replied-to message or one cached thread root as context;
+- return the terminal Codex final as a Bot API reply to the invoking message;
+- allow configured explicit mentions to skip Telegram approval while keeping
+  approval required by default.
 
 The existing `ctr-go` start path remains the only process lifecycle the
 operator manages.
@@ -33,6 +37,7 @@ operator manages.
 - Automatic creation, rename, deletion, or repair of the permanent approval
   topic.
 - Multiple Telegram approval topics or multiple operators.
+- Full thread history, History API, or user OAuth tokens.
 
 ## UX
 
@@ -68,12 +73,15 @@ LaunchRequestSink -> SQLite external_launch_requests
 ```
 
 - `internal/ymessenger` owns Bot API transport, update parsing, filtering,
-  polling, and its source cursor.
+  polling, context prompt construction, and its source cursor.
 - The launch-request domain owns durable state, idempotency, Telegram delivery
   metadata, and dispatch outcome.
 - Telegram owns callback delivery and message rendering, but does not interpret
   Yandex Messenger updates.
 - App Server remains authoritative for thread and turn state.
+- The daemon correlates the external request to the exact App Server thread and
+  turn, queues its final answer durably, and delegates only Bot API transport
+  to `internal/ymessenger`.
 
 ## Source Filtering
 
@@ -99,6 +107,10 @@ authorization filter.
   is never replayed automatically.
 - Telegram send/edit failures do not roll back request or Codex state; delivery
   is reconciled from SQLite.
+- Top-level source messages, accepted requests, and the update cursor are
+  committed atomically. Thread root lookup therefore survives restarts.
+- Final replies use a durable pending/sending/sent/dead lifecycle with bounded
+  retries. Duplicate terminal events cannot queue a second reply.
 
 ## Configuration
 
@@ -111,6 +123,9 @@ override precedence. The adapter is disabled by default. Enabling it requires:
 - poll interval;
 - permanent approval topic id;
 - default Codex cwd.
+
+`CTR_GO_YMESSENGER_REQUIRE_APPROVAL` defaults to `true`. The permanent approval
+topic is required only in that mode.
 
 Secret values must be redacted from config JSON, status output, diagnostics,
 and errors.
@@ -132,5 +147,11 @@ and errors.
 - [x] The permanent approval topic is never registered for AFC cleanup.
 - [x] Ambiguous dispatch is visible and non-replayable.
 - [x] Unit/integration tests pass.
+- [x] Approval can be disabled without bypassing sender/mention authorization.
+- [x] Direct reply and cached thread-root context are clearly separated from
+      the invoking user request.
+- [x] A terminal final is durably returned as a reply to the invoking message.
+- [x] Reply backlog and lifecycle failures are observable without exposing
+      message contents or tokens.
 - [ ] Live Telegram/YMessenger validation is recorded when credentials and a
       live contour are available.

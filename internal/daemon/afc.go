@@ -872,6 +872,7 @@ func (s *Service) processAFCSnapshotLocked(ctx context.Context, state model.AFCS
 		}
 		s.preserveTelegramOriginLiveCurrentTool(ctx, &current, previous)
 	}
+	s.queueExternalReplyFromSnapshot(ctx, current)
 	if forum != nil {
 		s.persistAndDeliverAFCSnapshotLocked(ctx, forum, topic, current)
 	}

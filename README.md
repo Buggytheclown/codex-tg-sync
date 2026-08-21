@@ -210,6 +210,7 @@ Primary environment variables:
 - `CTR_GO_YMESSENGER_OAUTH_TEAM_TOKEN` (required secret robot token)
 - `CTR_GO_YMESSENGER_ALLOWED_SENDERS` (comma-separated sender login allowlist)
 - `CTR_GO_YMESSENGER_POLL_SECONDS` (`2` by default)
+- `CTR_GO_YMESSENGER_REQUIRE_APPROVAL` (`true` by default; set `false` to start allowed explicit mentions automatically)
 - `CTR_GO_EXTERNAL_REQUESTS_TOPIC_ID` (permanent Telegram approval topic id)
 - `CTR_GO_EXTERNAL_REQUEST_DEFAULT_CWD` (falls back to `CTR_GO_DEFAULT_CWD`)
 - `CTR_GO_DEFAULT_CWD`
@@ -256,27 +257,43 @@ turns must be interrupted and drained.
 ### Yandex Messenger launch requests
 
 The optional Yandex Messenger adapter runs inside the same `codex-tg` daemon;
-the normal one-command startup does not change. Create a permanent `Requests`
-topic manually in the configured AFC forum group, put its topic id in
-`CTR_GO_EXTERNAL_REQUESTS_TOPIC_ID`, and enable the adapter settings shown in
-`.env.example`. Do not create the topic through `/projects` or `/newchat`:
-those topics are AFC-owned and may be cleaned up, while `Requests` is never
-registered as an AFC topic or draft.
+the normal one-command startup does not change. Approval is secure by default.
+When it is enabled, create a permanent `Requests` topic manually in the
+configured AFC forum group and put its topic id in
+`CTR_GO_EXTERNAL_REQUESTS_TOPIC_ID`. Set
+`CTR_GO_YMESSENGER_REQUIRE_APPROVAL=false` to start allowed explicit mentions
+automatically; the permanent approval topic is then optional.
 
 The poller accepts a message only when `from.login` is in
 `CTR_GO_YMESSENGER_ALLOWED_SENDERS` and the configured robot is present in
 `mentioned_users`. Source `chat_id` is deliberately not filtered. Accepted
-messages appear in `Requests` with `Start` and `Dismiss`; either action edits
-that same Telegram message. `Start` requires AFC to be active, creates one
-normal AFC session topic, then uses the existing AFC writer to perform
-`thread/start` and the first `turn/start`.
+messages either appear in `Requests` with `Start` and `Dismiss`, or are claimed
+automatically when approval is disabled. Dispatch requires AFC to be active,
+creates one normal AFC session topic, then uses the existing AFC writer to
+perform `thread/start` and the first `turn/start`.
+
+For direct replies, the nested `reply_to_message` is included as untrusted
+context. For thread messages, the adapter uses the Bot API invariant that
+`chat.thread_id` equals the root message id and resolves that root from a
+durable cache of top-level updates already observed by the robot. Old roots
+that the robot never observed, or that have fallen outside the bounded cache,
+are reported explicitly as unavailable; no user token or History API is used.
+
+The existing App Server subscription and authoritative `thread/read` snapshot
+remain the only source of the Codex final answer. A terminal final is queued in
+SQLite and sent through Bot API `sendText` with the source `chat_id`, invoking
+`message_id` as `reply_message_id`, and source `thread_id`. Only the final
+answer is returned to Messenger; commentary and tool output remain in the
+normal AFC topic.
 
 The update cursor and normalized request are committed in one SQLite
 transaction. Duplicate source messages and button presses are ignored. A
 daemon restart after a dispatch claim, or an ambiguous App Server response,
 marks the outcome unknown and never replays it automatically. Telegram
-send/edit failures remain pending for reconciliation. OAuthTeam and Telegram
-tokens stay only in the private config and are omitted from status/doctor JSON.
+send/edit failures remain pending for reconciliation. Messenger reply state is
+visible in `doctor` as `external_reply_backlog` and delivery transitions are
+written as structured lifecycle events. OAuthTeam and Telegram tokens stay
+only in the private config and are omitted from status/doctor JSON.
 
 ### Shared App Server startup on macOS
 

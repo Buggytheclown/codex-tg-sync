@@ -14,7 +14,8 @@ type UpdatesClient interface {
 
 type RequestSink interface {
 	ExternalSourceCursor(ctx context.Context, source string) (int64, error)
-	IngestExternalRequests(ctx context.Context, source string, cursor int64, requests []model.ExternalLaunchRequest) (int, error)
+	ExternalSourceMessage(ctx context.Context, source, chatID string, messageID int64) (*model.ExternalSourceMessage, error)
+	IngestExternalBatch(ctx context.Context, source string, cursor int64, messages []model.ExternalSourceMessage, requests []model.ExternalLaunchRequest) (int, error)
 }
 
 type Poller struct {
@@ -55,7 +56,28 @@ func (p *Poller) PollOnce(ctx context.Context) error {
 	if maxUpdateID == cursor {
 		return nil
 	}
-	_, err = p.sink.IngestExternalRequests(ctx, Source, maxUpdateID, RequestsFromUpdates(updates, p.filter))
+	messages := RootMessagesFromUpdates(updates)
+	roots := make(map[string]model.ExternalSourceMessage, len(messages))
+	for _, message := range messages {
+		roots[SourceMessageKey(message.ChatID, message.MessageID)] = message
+	}
+	for _, update := range updates {
+		if update.Chat.ThreadID == 0 {
+			continue
+		}
+		key := SourceMessageKey(update.Chat.ID, update.Chat.ThreadID)
+		if _, ok := roots[key]; ok {
+			continue
+		}
+		message, lookupErr := p.sink.ExternalSourceMessage(ctx, Source, update.Chat.ID, update.Chat.ThreadID)
+		if lookupErr != nil {
+			return lookupErr
+		}
+		if message != nil {
+			roots[key] = *message
+		}
+	}
+	_, err = p.sink.IngestExternalBatch(ctx, Source, maxUpdateID, messages, RequestsFromUpdatesWithRoots(updates, p.filter, roots))
 	return err
 }
 

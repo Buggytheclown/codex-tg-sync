@@ -2,9 +2,12 @@ package daemon
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 
+	"github.com/mideco-tech/codex-tg/internal/appserver"
 	"github.com/mideco-tech/codex-tg/internal/model"
 	"github.com/mideco-tech/codex-tg/internal/storage"
 )
@@ -17,24 +20,132 @@ func (s *Service) ExternalSourceCursor(ctx context.Context, source string) (int6
 }
 
 func (s *Service) IngestExternalRequests(ctx context.Context, source string, cursor int64, requests []model.ExternalLaunchRequest) (int, error) {
-	return s.store.IngestExternalRequests(ctx, source, cursor, requests)
+	created, err := s.store.IngestExternalRequests(ctx, source, cursor, requests)
+	if err == nil && created > 0 {
+		s.processExternalLaunchRequests(ctx)
+	}
+	return created, err
+}
+
+func (s *Service) ExternalSourceMessage(ctx context.Context, source, chatID string, messageID int64) (*model.ExternalSourceMessage, error) {
+	return s.store.ExternalSourceMessage(ctx, source, chatID, messageID)
+}
+
+func (s *Service) IngestExternalBatch(ctx context.Context, source string, cursor int64, messages []model.ExternalSourceMessage, requests []model.ExternalLaunchRequest) (int, error) {
+	created, err := s.store.IngestExternalBatch(ctx, source, cursor, messages, requests)
+	if err == nil && created > 0 {
+		for _, request := range requests {
+			if strings.Contains(request.Prompt, "Unavailable: the robot did not observe the thread root message.") {
+				s.logLifecycle("external_context_missing", lifecycleFields{"request_id": request.ID, "source": request.Source, "context": "thread_root"})
+			}
+		}
+		s.processExternalLaunchRequests(ctx)
+	}
+	return created, err
 }
 
 func (s *Service) processExternalLaunchRequests(ctx context.Context) {
 	s.externalRequestMu.Lock()
-	defer s.externalRequestMu.Unlock()
+	requestIDs := make([]string, 0)
+	state, stateErr := s.store.GetAFCState(ctx)
+	if stateErr != nil {
+		s.logLifecycle("external_launch_state_read_failed", lifecycleFields{"error": stateErr})
+	}
+	if state.State == model.AFCStateActive {
+		autoRequests, listErr := s.store.ListExternalLaunchRequestsForAutoStart(ctx, 20)
+		if listErr != nil {
+			s.logLifecycle("external_launch_auto_list_failed", lifecycleFields{"error": listErr})
+		}
+		for _, request := range autoRequests {
+			claimed, err := s.store.ClaimExternalLaunchRequest(ctx, request.ID)
+			if err != nil {
+				s.logLifecycle("external_launch_auto_claim_failed", lifecycleFields{"request_id": request.ID, "source": request.Source, "error": err})
+			} else if claimed {
+				requestIDs = append(requestIDs, request.ID)
+				s.logLifecycle("external_launch_auto_started", lifecycleFields{"request_id": request.ID, "source": request.Source})
+			}
+		}
+	}
 	s.mu.RLock()
 	sender := s.sender
 	s.mu.RUnlock()
-	if sender == nil || s.cfg.AFCGroupID == 0 {
+	if sender != nil && s.cfg.AFCGroupID != 0 {
+		requests, err := s.store.ListExternalLaunchRequestsForTelegram(ctx, 20)
+		if err != nil {
+			s.logLifecycle("external_launch_telegram_list_failed", lifecycleFields{"error": err})
+		} else {
+			for _, request := range requests {
+				if err := s.renderExternalLaunchRequest(ctx, sender, request); err != nil {
+					s.logLifecycle("external_launch_telegram_render_failed", lifecycleFields{"request_id": request.ID, "source": request.Source, "error": err})
+				}
+			}
+		}
+	}
+	s.externalRequestMu.Unlock()
+	for _, requestID := range requestIDs {
+		s.startExternalLaunchDispatch(requestID)
+	}
+}
+
+func (s *Service) queueExternalReplyFromSnapshot(ctx context.Context, snapshot appserver.ThreadReadSnapshot) {
+	if !isTerminalStatus(snapshot.LatestTurnStatus) || strings.TrimSpace(snapshot.LatestTurnID) == "" || strings.TrimSpace(snapshot.LatestFinalText) == "" {
 		return
 	}
-	requests, err := s.store.ListExternalLaunchRequestsForTelegram(ctx, 20)
+	queued, err := s.store.QueueExternalReply(ctx, snapshot.Thread.ID, snapshot.LatestTurnID, snapshot.LatestFinalText)
 	if err != nil {
+		s.logLifecycle("external_reply_queue_failed", lifecycleFields{"thread_id": snapshot.Thread.ID, "turn_id": snapshot.LatestTurnID, "error": err})
 		return
+	}
+	if queued {
+		s.logLifecycle("external_reply_queued", lifecycleFields{"thread_id": snapshot.Thread.ID, "turn_id": snapshot.LatestTurnID})
+	}
+}
+
+func (s *Service) queueExternalReplyFromStoredSnapshot(ctx context.Context, threadID string) {
+	stored, err := s.store.GetSnapshot(ctx, strings.TrimSpace(threadID))
+	if err != nil || stored == nil || len(stored.CompactJSON) == 0 {
+		return
+	}
+	var snapshot appserver.ThreadReadSnapshot
+	if json.Unmarshal(stored.CompactJSON, &snapshot) == nil {
+		s.queueExternalReplyFromSnapshot(ctx, snapshot)
+	}
+}
+
+func (s *Service) processExternalReplyBatch(ctx context.Context) {
+	s.mu.RLock()
+	sender := s.externalReplySender
+	s.mu.RUnlock()
+	if sender == nil {
+		return
+	}
+	requests, err := s.store.ClaimExternalReplyBatch(ctx, 10)
+	if err != nil {
+		s.logLifecycle("external_reply_claim_failed", lifecycleFields{"error": err})
+		return
+	}
+	maxAttempts := s.cfg.DeliveryMaxAttempts
+	if maxAttempts <= 0 {
+		maxAttempts = 5
+	}
+	baseDelay := s.cfg.DeliveryRetryBase
+	if baseDelay <= 0 {
+		baseDelay = 5 * time.Second
 	}
 	for _, request := range requests {
-		_ = s.renderExternalLaunchRequest(ctx, sender, request)
+		messageID, sendErr := sender.SendExternalReply(ctx, request.SourceChatID, request.SourceMessageID, request.SourceThreadID, request.ReplyText)
+		if sendErr == nil {
+			sendErr = s.store.CompleteExternalReply(ctx, request.ID, messageID)
+		}
+		if sendErr == nil {
+			s.logLifecycle("external_reply_sent", lifecycleFields{"request_id": request.ID, "source": request.Source, "thread_id": request.ThreadID, "turn_id": request.TurnID})
+			continue
+		}
+		attempt := request.ReplyAttempts + 1
+		dead := attempt >= maxAttempts
+		backoff := baseDelay * time.Duration(1<<min(attempt-1, 4))
+		_ = s.store.FailExternalReply(ctx, request.ID, attempt, time.Now().UTC().Add(backoff), sendErr.Error(), dead)
+		s.logLifecycle("external_reply_failed", lifecycleFields{"request_id": request.ID, "source": request.Source, "attempt": attempt, "dead": dead, "error": sendErr})
 	}
 }
 

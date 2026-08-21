@@ -103,6 +103,9 @@ func runDaemon(cfg config.Config) error {
 	}
 	defer service.Close()
 	service.SetLogger(diagnosticLogger(cfg, logger))
+	if cfg.YMessengerEnabled {
+		service.SetExternalReplySender(ymessenger.NewClient(cfg.YMessengerOAuthTeamToken))
+	}
 
 	bot, err := telegram.NewBot(cfg, service, logger)
 	if err != nil {
@@ -134,6 +137,7 @@ func startYMessengerPoller(ctx context.Context, cfg config.Config, sink ymesseng
 		AllowedSenders:  cfg.YMessengerAllowedSenders,
 		DefaultCWD:      cfg.ExternalRequestDefaultCWD,
 		TelegramTopicID: cfg.ExternalRequestsTopicID,
+		RequireApproval: cfg.YMessengerRequireApproval,
 	})
 	go poller.Run(ctx, cfg.YMessengerPollInterval, func(err error) {
 		if logger != nil {
@@ -205,6 +209,7 @@ func runStatus(cfg config.Config, out io.Writer) error {
 		fmt.Sprintf("Control API: %s", formatOptional(cfg.ControlAPIListen, "off")),
 		fmt.Sprintf("Telegram configured: %t", strings.TrimSpace(cfg.TelegramBotToken) != ""),
 		fmt.Sprintf("YMessenger launch requests: %s", map[bool]string{true: "enabled", false: "off"}[cfg.YMessengerEnabled]),
+		fmt.Sprintf("YMessenger approval required: %t", cfg.YMessengerRequireApproval),
 		fmt.Sprintf("Allowed users: %s", formatIDs(cfg.AllowedUserIDs)),
 		fmt.Sprintf("Allowed chats: %s", formatIDs(cfg.AllowedChatIDs)),
 		fmt.Sprintf("Default cwd: %s", cfg.DefaultCWD),

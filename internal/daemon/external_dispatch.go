@@ -20,14 +20,22 @@ func (s *Service) dispatchExternalLaunchRequest(ctx context.Context, requestID s
 		return
 	}
 	if state.State != model.AFCStateActive || state.ChatID != s.cfg.AFCGroupID {
-		_, _ = s.store.ResetExternalLaunchRequestPending(ctx, request.ID, "afc_inactive", "AFC is inactive; enable AFC and press Start again.")
-		s.processExternalLaunchRequests(ctx)
+		summary := "AFC is inactive; enable AFC and press Start again."
+		if request.AutoStart {
+			summary = "AFC is inactive; the request will start automatically after AFC is enabled."
+		}
+		_, _ = s.store.ResetExternalLaunchRequestPending(ctx, request.ID, "afc_inactive", summary)
+		s.finishExternalLaunchDispatch(ctx, request.AutoStart)
 		return
 	}
 	forum := s.getAFCForum()
 	if forum == nil {
-		_, _ = s.store.ResetExternalLaunchRequestPending(ctx, request.ID, "telegram_unavailable", "Telegram transport is unavailable; press Start to retry.")
-		s.processExternalLaunchRequests(ctx)
+		summary := "Telegram transport is unavailable; press Start to retry."
+		if request.AutoStart {
+			summary = "Telegram transport is unavailable; the request will retry automatically."
+		}
+		_, _ = s.store.ResetExternalLaunchRequestPending(ctx, request.ID, "telegram_unavailable", summary)
+		s.finishExternalLaunchDispatch(ctx, request.AutoStart)
 		return
 	}
 
@@ -35,7 +43,7 @@ func (s *Service) dispatchExternalLaunchRequest(ctx context.Context, requestID s
 	topicID, err := forum.CreateAFCTopic(ctx, title)
 	if err != nil {
 		_, _ = s.store.CompleteExternalLaunchRequest(ctx, request.ID, model.ExternalLaunchFailed, "", "", "telegram_topic", "Telegram could not create the session topic.")
-		s.processExternalLaunchRequests(ctx)
+		s.finishExternalLaunchDispatch(ctx, request.AutoStart)
 		return
 	}
 	topics, _ := s.store.ListAFCTopics(ctx, state.SessionID)
@@ -48,7 +56,7 @@ func (s *Service) dispatchExternalLaunchRequest(ctx context.Context, requestID s
 	if err := s.store.CreateAFCTopicDraft(ctx, draft); err != nil {
 		_ = forum.DeleteAFCTopic(ctx, topicID)
 		_, _ = s.store.CompleteExternalLaunchRequest(ctx, request.ID, model.ExternalLaunchFailed, "", "", "afc_draft", "AFC could not persist the new session topic.")
-		s.processExternalLaunchRequests(ctx)
+		s.finishExternalLaunchDispatch(ctx, request.AutoStart)
 		return
 	}
 	sourceMessageID, err := forum.SendAFCMessage(ctx, topicID, model.RenderedMessage{Text: afcUserHeader + "\n" + request.Prompt}, true)
@@ -56,7 +64,7 @@ func (s *Service) dispatchExternalLaunchRequest(ctx context.Context, requestID s
 		_ = forum.DeleteAFCTopic(ctx, topicID)
 		_ = s.store.DeleteAFCTopic(ctx, state.SessionID, topicID)
 		_, _ = s.store.CompleteExternalLaunchRequest(ctx, request.ID, model.ExternalLaunchFailed, "", "", "telegram_prompt", "Telegram could not write the initial request into the session topic.")
-		s.processExternalLaunchRequests(ctx)
+		s.finishExternalLaunchDispatch(ctx, request.AutoStart)
 		return
 	}
 	claimed, receipt, created, err := s.store.ClaimAFCTopicDraftMessage(ctx, state.ChatID, topicID, sourceMessageID)
@@ -64,7 +72,7 @@ func (s *Service) dispatchExternalLaunchRequest(ctx context.Context, requestID s
 		_ = forum.DeleteAFCTopic(ctx, topicID)
 		_ = s.store.DeleteAFCTopic(ctx, state.SessionID, topicID)
 		_, _ = s.store.CompleteExternalLaunchRequest(ctx, request.ID, model.ExternalLaunchFailed, "", "", "afc_claim", "AFC could not claim the new session topic.")
-		s.processExternalLaunchRequests(ctx)
+		s.finishExternalLaunchDispatch(ctx, request.AutoStart)
 		return
 	}
 	response, dispatchErr := s.startClaimedAFCDraftLocked(ctx, claimed, receipt, request.Prompt)
@@ -72,7 +80,8 @@ func (s *Service) dispatchExternalLaunchRequest(ctx context.Context, requestID s
 	if response != nil && strings.TrimSpace(response.ThreadID) != "" && strings.TrimSpace(response.TurnID) != "" && dispatchErr == nil {
 		_, _ = s.store.CompleteExternalLaunchRequest(ctx, request.ID, model.ExternalLaunchSessionStarted,
 			response.ThreadID, response.TurnID, "", "")
-		s.processExternalLaunchRequests(ctx)
+		s.queueExternalReplyFromStoredSnapshot(ctx, response.ThreadID)
+		s.finishExternalLaunchDispatch(ctx, request.AutoStart)
 		return
 	}
 
@@ -93,5 +102,11 @@ func (s *Service) dispatchExternalLaunchRequest(ctx context.Context, requestID s
 		_ = forum.DeleteAFCTopic(ctx, topicID)
 		_ = s.store.DeleteAFCTopic(ctx, state.SessionID, topicID)
 	}
-	s.processExternalLaunchRequests(ctx)
+	s.finishExternalLaunchDispatch(ctx, request.AutoStart)
+}
+
+func (s *Service) finishExternalLaunchDispatch(ctx context.Context, autoStart bool) {
+	if !autoStart {
+		s.processExternalLaunchRequests(ctx)
+	}
 }

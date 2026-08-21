@@ -55,6 +55,7 @@ func TestFromEnvReadsYMessengerLaunchRequestConfig(t *testing.T) {
 	t.Setenv("CTR_GO_YMESSENGER_OAUTH_TEAM_TOKEN", "private-oauth-token")
 	t.Setenv("CTR_GO_YMESSENGER_ALLOWED_SENDERS", "alice,bob")
 	t.Setenv("CTR_GO_YMESSENGER_POLL_SECONDS", "2.5")
+	t.Setenv("CTR_GO_YMESSENGER_REQUIRE_APPROVAL", "false")
 	t.Setenv("CTR_GO_EXTERNAL_REQUESTS_TOPIC_ID", "77")
 	t.Setenv("CTR_GO_EXTERNAL_REQUEST_DEFAULT_CWD", filepath.Join(t.TempDir(), "project"))
 
@@ -69,8 +70,19 @@ func TestFromEnvReadsYMessengerLaunchRequestConfig(t *testing.T) {
 	if cfg.YMessengerPollInterval != 2500*time.Millisecond {
 		t.Fatalf("YMessengerPollInterval = %s, want 2.5s", cfg.YMessengerPollInterval)
 	}
+	if cfg.YMessengerRequireApproval {
+		t.Fatal("YMessengerRequireApproval = true, want false from env")
+	}
 	if cfg.ExternalRequestsTopicID != 77 || cfg.ExternalRequestDefaultCWD == "" {
 		t.Fatalf("external request config = topic %d cwd %q", cfg.ExternalRequestsTopicID, cfg.ExternalRequestDefaultCWD)
+	}
+}
+
+func TestYMessengerApprovalDefaultsToRequired(t *testing.T) {
+	t.Parallel()
+	cfg := fromSource(envSource{lookup: func(string) (string, bool) { return "", false }})
+	if !cfg.YMessengerRequireApproval {
+		t.Fatal("YMessengerRequireApproval = false, want secure default true")
 	}
 }
 
@@ -88,6 +100,18 @@ func TestValidateYMessengerRequiresEnabledFields(t *testing.T) {
 	cfg.ExternalRequestDefaultCWD = t.TempDir()
 	if err := cfg.ValidateYMessenger(); err != nil {
 		t.Fatalf("ValidateYMessenger(valid) failed: %v", err)
+	}
+}
+
+func TestValidateYMessengerDoesNotRequireApprovalTopicWhenApprovalDisabled(t *testing.T) {
+	t.Parallel()
+	cfg := Config{
+		YMessengerEnabled: true, YMessengerRobotLogin: "robot-example", YMessengerOAuthTeamToken: "token",
+		YMessengerAllowedSenders: []string{"alice"}, YMessengerPollInterval: 2 * time.Second,
+		YMessengerRequireApproval: false, AFCGroupID: -1001, ExternalRequestDefaultCWD: t.TempDir(),
+	}
+	if err := cfg.ValidateYMessenger(); err != nil {
+		t.Fatalf("ValidateYMessenger failed without approval topic: %v", err)
 	}
 }
 

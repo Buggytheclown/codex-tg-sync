@@ -189,11 +189,33 @@ func (s *Store) initialize(ctx context.Context) error {
 		telegram_rendered_status TEXT,
 		thread_id TEXT,
 		turn_id TEXT,
+		auto_start INTEGER NOT NULL DEFAULT 0,
+		source_chat_id TEXT,
+		source_message_id INTEGER NOT NULL DEFAULT 0,
+		source_thread_id INTEGER NOT NULL DEFAULT 0,
+		reply_status TEXT,
+		reply_text TEXT,
+		reply_message_id INTEGER NOT NULL DEFAULT 0,
+		reply_attempts INTEGER NOT NULL DEFAULT 0,
+		reply_available_at TEXT,
+		reply_error TEXT,
 		error_type TEXT,
 		error_summary TEXT,
 		created_at TEXT NOT NULL,
 		updated_at TEXT NOT NULL,
 		UNIQUE(source, external_id)
+	);
+
+	CREATE TABLE IF NOT EXISTS external_source_messages (
+		source TEXT NOT NULL,
+		chat_id TEXT NOT NULL,
+		message_id INTEGER NOT NULL,
+		sender TEXT,
+		timestamp INTEGER NOT NULL DEFAULT 0,
+		text TEXT NOT NULL,
+		created_at TEXT NOT NULL,
+		updated_at TEXT NOT NULL,
+		PRIMARY KEY(source, chat_id, message_id)
 	);
 
 	CREATE TABLE IF NOT EXISTS afc_state (
@@ -309,6 +331,7 @@ func (s *Store) initialize(ctx context.Context) error {
 	CREATE INDEX IF NOT EXISTS idx_delivery_queue_status_available_at ON delivery_queue(status, available_at);
 	CREATE INDEX IF NOT EXISTS idx_pending_approvals_status_updated_at ON pending_approvals(status, updated_at DESC);
 	CREATE INDEX IF NOT EXISTS idx_external_launch_status_updated_at ON external_launch_requests(status, updated_at);
+	CREATE INDEX IF NOT EXISTS idx_external_source_messages_updated ON external_source_messages(source, updated_at DESC);
 	CREATE INDEX IF NOT EXISTS idx_thread_panels_thread_current ON thread_panels(chat_id, topic_id, thread_id, is_current, updated_at DESC);
 	CREATE INDEX IF NOT EXISTS idx_chat_steer_expires_at ON chat_steer_state(expires_at);
 	CREATE INDEX IF NOT EXISTS idx_afc_topics_session_state ON afc_topics(session_id, telegram_state, rank);
@@ -367,6 +390,32 @@ func (s *Store) initialize(ctx context.Context) error {
 		return err
 	}
 	if err := s.ensureColumn(ctx, "afc_topics", "pending_telegram_turn_id", `ALTER TABLE afc_topics ADD COLUMN pending_telegram_turn_id TEXT`); err != nil {
+		return err
+	}
+	externalColumns := []struct {
+		name string
+		sql  string
+	}{
+		{"auto_start", `ALTER TABLE external_launch_requests ADD COLUMN auto_start INTEGER NOT NULL DEFAULT 0`},
+		{"source_chat_id", `ALTER TABLE external_launch_requests ADD COLUMN source_chat_id TEXT`},
+		{"source_message_id", `ALTER TABLE external_launch_requests ADD COLUMN source_message_id INTEGER NOT NULL DEFAULT 0`},
+		{"source_thread_id", `ALTER TABLE external_launch_requests ADD COLUMN source_thread_id INTEGER NOT NULL DEFAULT 0`},
+		{"reply_status", `ALTER TABLE external_launch_requests ADD COLUMN reply_status TEXT`},
+		{"reply_text", `ALTER TABLE external_launch_requests ADD COLUMN reply_text TEXT`},
+		{"reply_message_id", `ALTER TABLE external_launch_requests ADD COLUMN reply_message_id INTEGER NOT NULL DEFAULT 0`},
+		{"reply_attempts", `ALTER TABLE external_launch_requests ADD COLUMN reply_attempts INTEGER NOT NULL DEFAULT 0`},
+		{"reply_available_at", `ALTER TABLE external_launch_requests ADD COLUMN reply_available_at TEXT`},
+		{"reply_error", `ALTER TABLE external_launch_requests ADD COLUMN reply_error TEXT`},
+	}
+	for _, column := range externalColumns {
+		if err := s.ensureColumn(ctx, "external_launch_requests", column.name, column.sql); err != nil {
+			return err
+		}
+	}
+	if _, err := s.db.ExecContext(ctx, `CREATE INDEX IF NOT EXISTS idx_external_launch_auto_start ON external_launch_requests(auto_start, status, updated_at)`); err != nil {
+		return err
+	}
+	if _, err := s.db.ExecContext(ctx, `CREATE INDEX IF NOT EXISTS idx_external_reply_status_available ON external_launch_requests(reply_status, reply_available_at)`); err != nil {
 		return err
 	}
 	if _, err := s.db.ExecContext(ctx, `UPDATE afc_topics SET status_turn_id=(

@@ -32,6 +32,10 @@ type Sender interface {
 	SendDocumentData(ctx context.Context, chatID, topicID int64, fileName string, data []byte, caption string, options model.SendOptions) (int64, error)
 }
 
+type ExternalReplySender interface {
+	SendExternalReply(ctx context.Context, chatID string, replyMessageID, threadID int64, text string) (int64, error)
+}
+
 type DirectResponse struct {
 	Text         string
 	CallbackText string
@@ -91,6 +95,7 @@ type Service struct {
 	afcSubscribedPollGeneration uint64
 	afcSubscribedThreads        map[string]struct{}
 	sender                      Sender
+	externalReplySender         ExternalReplySender
 	logger                      *log.Logger
 	diagnosticMu                sync.Mutex
 	diagnosticWin               time.Time
@@ -223,6 +228,12 @@ func (s *Service) SetSender(sender Sender) {
 	s.sender = sender
 }
 
+func (s *Service) SetExternalReplySender(sender ExternalReplySender) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.externalReplySender = sender
+}
+
 func (s *Service) SetAFCForum(forum AFCForum) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -257,8 +268,9 @@ func (s *Service) Start(ctx context.Context) error {
 	_ = s.store.SetState(runCtx, "appserver.live_connected", "false")
 	_ = s.store.SetState(runCtx, "appserver.poll_connected", "false")
 	_, recoveryErr := s.store.RecoverStartingExternalLaunchRequests(runCtx)
+	_, replyRecoveryErr := s.store.RecoverSendingExternalReplies(runCtx)
 	cleanupSessionID, resetErr := s.store.ResetAFCOnStartup(runCtx)
-	err := errors.Join(recoveryErr, resetErr)
+	err := errors.Join(recoveryErr, replyRecoveryErr, resetErr)
 	if err != nil {
 		cancel()
 		s.mu.Lock()
@@ -289,11 +301,15 @@ func (s *Service) Start(ctx context.Context) error {
 
 func (s *Service) Doctor(ctx context.Context) (map[string]any, error) {
 	backlog, _ := s.store.DeliveryQueueBacklog(ctx)
+	externalReplyBacklog, _ := s.store.ExternalReplyBacklog(ctx)
+	externalSourceMessages, _ := s.store.ExternalSourceMessageCount(ctx, "yandex_messenger")
 	state, _ := s.store.ListState(ctx)
 	return map[string]any{
-		"config":           s.cfg,
-		"delivery_backlog": backlog,
-		"daemon_state":     state,
+		"config":                   s.cfg,
+		"delivery_backlog":         backlog,
+		"external_reply_backlog":   externalReplyBacklog,
+		"external_source_messages": externalSourceMessages,
+		"daemon_state":             state,
 	}, nil
 }
 
@@ -1289,6 +1305,7 @@ func (s *Service) deliveryLoop(ctx context.Context) {
 	defer ticker.Stop()
 	for {
 		s.processExternalLaunchRequests(ctx)
+		s.processExternalReplyBatch(ctx)
 		s.processDeliveryBatch(ctx)
 		select {
 		case <-ctx.Done():

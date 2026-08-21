@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/mideco-tech/codex-tg/internal/model"
 )
@@ -42,6 +43,78 @@ func TestIngestExternalLaunchRequestsCommitsRequestsAndCursorTogether(t *testing
 	cursor, _ = store.GetExternalSourceCursor(ctx, "yandex_messenger")
 	if cursor != 13 {
 		t.Fatalf("duplicate cursor = %d, want 13", cursor)
+	}
+}
+
+func TestIngestExternalBatchPersistsThreadRootAndRequestWithCursor(t *testing.T) {
+	t.Parallel()
+	store := openTestStore(t)
+	ctx := context.Background()
+	now := model.NowString()
+	message := model.ExternalSourceMessage{Source: "yandex_messenger", ChatID: "chat", MessageID: 9, Sender: "alert-robot", Timestamp: 123, Text: "Root alert", CreatedAt: now, UpdatedAt: now}
+	request := model.ExternalLaunchRequest{
+		ID: "yandex_messenger:chat:10", Source: "yandex_messenger", ExternalID: "chat:10", Sender: "alice", Title: "Request from alice",
+		Prompt: "inspect", CWD: "/project", Status: model.ExternalLaunchPendingApproval, AutoStart: true,
+		SourceChatID: "chat", SourceMessageID: 10, SourceThreadID: 9, CreatedAt: now, UpdatedAt: now,
+	}
+	created, err := store.IngestExternalBatch(ctx, "yandex_messenger", 5, []model.ExternalSourceMessage{message}, []model.ExternalLaunchRequest{request})
+	if err != nil || created != 1 {
+		t.Fatalf("IngestExternalBatch created=%d err=%v", created, err)
+	}
+	root, err := store.ExternalSourceMessage(ctx, "yandex_messenger", "chat", 9)
+	if err != nil || root == nil || root.Text != "Root alert" {
+		t.Fatalf("root=%#v err=%v", root, err)
+	}
+	stored, err := store.GetExternalLaunchRequest(ctx, request.ID)
+	if err != nil || stored == nil || !stored.AutoStart || stored.SourceMessageID != 10 || stored.SourceThreadID != 9 {
+		t.Fatalf("request=%#v err=%v", stored, err)
+	}
+	cursor, _ := store.GetExternalSourceCursor(ctx, "yandex_messenger")
+	if cursor != 5 {
+		t.Fatalf("cursor=%d, want 5", cursor)
+	}
+}
+
+func TestExternalReplyQueueIsIdempotentAndRetryable(t *testing.T) {
+	t.Parallel()
+	store := openTestStore(t)
+	ctx := context.Background()
+	request := testExternalLaunchRequest("test:chat:reply")
+	request.SourceChatID = "chat"
+	request.SourceMessageID = 42
+	if _, err := store.IngestExternalLaunchRequests(ctx, "test", 1, []model.ExternalLaunchRequest{request}); err != nil {
+		t.Fatal(err)
+	}
+	if claimed, err := store.ClaimExternalLaunchRequest(ctx, request.ID); err != nil || !claimed {
+		t.Fatalf("claim=%t err=%v", claimed, err)
+	}
+	if changed, err := store.CompleteExternalLaunchRequest(ctx, request.ID, model.ExternalLaunchSessionStarted, "thread", "turn", "", ""); err != nil || !changed {
+		t.Fatalf("complete=%t err=%v", changed, err)
+	}
+	queued, err := store.QueueExternalReply(ctx, "thread", "turn", "Final answer")
+	if err != nil || !queued {
+		t.Fatalf("queue=%t err=%v", queued, err)
+	}
+	if queued, err = store.QueueExternalReply(ctx, "thread", "turn", "Duplicate"); err != nil || queued {
+		t.Fatalf("duplicate queue=%t err=%v", queued, err)
+	}
+	batch, err := store.ClaimExternalReplyBatch(ctx, 10)
+	if err != nil || len(batch) != 1 || batch[0].ReplyStatus != model.ExternalReplySending || batch[0].ReplyText != "Final answer" {
+		t.Fatalf("batch=%#v err=%v", batch, err)
+	}
+	if err := store.FailExternalReply(ctx, request.ID, 1, time.Now().UTC().Add(-time.Second), "temporary", false); err != nil {
+		t.Fatal(err)
+	}
+	batch, err = store.ClaimExternalReplyBatch(ctx, 10)
+	if err != nil || len(batch) != 1 || batch[0].ReplyAttempts != 1 {
+		t.Fatalf("retry batch=%#v err=%v", batch, err)
+	}
+	if err := store.CompleteExternalReply(ctx, request.ID, 99); err != nil {
+		t.Fatal(err)
+	}
+	stored, _ := store.GetExternalLaunchRequest(ctx, request.ID)
+	if stored.ReplyStatus != model.ExternalReplySent || stored.ReplyMessageID != 99 {
+		t.Fatalf("stored=%#v", stored)
 	}
 }
 

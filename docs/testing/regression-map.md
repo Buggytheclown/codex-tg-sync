@@ -160,16 +160,26 @@ Primary tests:
 - `internal/config/config_test.go::TestFromEnvReadsYMessengerLaunchRequestConfig`
 - `internal/config/config_test.go::TestValidateYMessengerRequiresEnabledFields`
 - `internal/config/config_test.go::TestMarshalJSONRedactsYMessengerToken`
+- `internal/config/config_test.go::TestYMessengerApprovalDefaultsToRequired`
+- `internal/config/config_test.go::TestValidateYMessengerDoesNotRequireApprovalTopicWhenApprovalDisabled`
 - `internal/ymessenger/client_test.go::TestClientGetUpdatesUsesOAuthTeamAndDecodesWireFormat`
+- `internal/ymessenger/client_test.go::TestClientSendExternalReplyTargetsInvocation`
 - `internal/ymessenger/filter_test.go::TestRequestsFromUpdatesAcceptsAllowedMentionFromAnyChat`
+- `internal/ymessenger/filter_test.go::TestRequestsFromUpdatesBuildsExplicitReplyContextAndReplyTarget`
+- `internal/ymessenger/filter_test.go::TestRequestsFromUpdatesUsesCachedThreadRootAndCanAutoStart`
 - `internal/ymessenger/filter_test.go::TestRequestsFromUpdatesRejectsUnauthorizedMissingMentionAndRobotSender`
 - `internal/ymessenger/poller_test.go::TestPollOnceUsesPersistedCursorAndAdvancesPastIgnoredUpdates`
 - `internal/ymessenger/poller_test.go::TestPollOnceFailureDoesNotAdvanceCursorAndNextCallRetriesSameOffset`
+- `internal/ymessenger/poller_test.go::TestPollOnceResolvesThreadRootFromDurableCache`
 - `internal/storage/store_external_requests_test.go::TestIngestExternalLaunchRequestsCommitsRequestsAndCursorTogether`
+- `internal/storage/store_external_requests_test.go::TestIngestExternalBatchPersistsThreadRootAndRequestWithCursor`
+- `internal/storage/store_external_requests_test.go::TestExternalReplyQueueIsIdempotentAndRetryable`
 - `internal/storage/store_external_requests_test.go::TestExternalLaunchRequestTransitionsAreConditional`
 - `internal/storage/store_external_requests_test.go::TestRecoverStartingExternalLaunchRequestsMarksOutcomeUnknown`
 - `internal/daemon/external_requests_test.go::TestExternalLaunchApprovalRendersOnceAndDismissEditsSameMessage`
 - `internal/daemon/external_requests_test.go::TestExternalLaunchApprovalCallbackFailsClosedAndStartClaimsOnce`
+- `internal/daemon/external_requests_test.go::TestExternalLaunchAutoStartSkipsApprovalAndClaimsDurably`
+- `internal/daemon/external_requests_test.go::TestExternalFinalQueuesAndDeliversReplyToInvocation`
 - `internal/daemon/external_requests_test.go::TestDispatchExternalLaunchRequestCreatesAFCThreadTurnAndTopic`
 - `internal/daemon/external_requests_test.go::TestDispatchExternalLaunchRequestDoesNotReplayAmbiguousThreadStart`
 - `internal/daemon/external_requests_test.go::TestDispatchExternalLaunchRequestLeavesPendingWhileAFCInactive`
@@ -181,7 +191,11 @@ Contract notes:
 - Yandex Messenger accepts configured senders in any source chat only when the
   configured robot is explicitly mentioned.
 - The permanent approval topic is configured, never AFC-owned, and never
-  deleted by AFC cleanup.
+  deleted by AFC cleanup when approval is enabled.
+- Auto-start is opt-in; sender allowlisting and explicit robot mention remain
+  mandatory in both modes.
+- Messenger receives only the exact terminal final, replied to the invoking
+  source message through durable delivery state.
 - Duplicate updates and callbacks are safe; ambiguous App Server dispatch is
   visible and non-replayable.
 

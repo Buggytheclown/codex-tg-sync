@@ -3,6 +3,7 @@ package ymessenger
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -23,6 +24,7 @@ func (f *fakeUpdatesClient) GetUpdates(_ context.Context, offset int64, _ int) (
 type fakeRequestSink struct {
 	cursor   int64
 	requests []model.ExternalLaunchRequest
+	messages map[string]model.ExternalSourceMessage
 }
 
 func (f *fakeRequestSink) ExternalSourceCursor(_ context.Context, _ string) (int64, error) {
@@ -30,6 +32,26 @@ func (f *fakeRequestSink) ExternalSourceCursor(_ context.Context, _ string) (int
 }
 
 func (f *fakeRequestSink) IngestExternalRequests(_ context.Context, _ string, cursor int64, requests []model.ExternalLaunchRequest) (int, error) {
+	f.cursor = cursor
+	f.requests = append(f.requests, requests...)
+	return len(requests), nil
+}
+
+func (f *fakeRequestSink) ExternalSourceMessage(_ context.Context, source, chatID string, messageID int64) (*model.ExternalSourceMessage, error) {
+	message := f.messages[SourceMessageKey(chatID, messageID)]
+	if message.MessageID == 0 {
+		return nil, nil
+	}
+	return &message, nil
+}
+
+func (f *fakeRequestSink) IngestExternalBatch(_ context.Context, _ string, cursor int64, messages []model.ExternalSourceMessage, requests []model.ExternalLaunchRequest) (int, error) {
+	if f.messages == nil {
+		f.messages = map[string]model.ExternalSourceMessage{}
+	}
+	for _, message := range messages {
+		f.messages[SourceMessageKey(message.ChatID, message.MessageID)] = message
+	}
 	f.cursor = cursor
 	f.requests = append(f.requests, requests...)
 	return len(requests), nil
@@ -52,6 +74,21 @@ func TestPollOnceUsesPersistedCursorAndAdvancesPastIgnoredUpdates(t *testing.T) 
 	}
 	if sink.cursor != 9 || len(sink.requests) != 1 {
 		t.Fatalf("sink cursor=%d requests=%#v", sink.cursor, sink.requests)
+	}
+}
+
+func TestPollOnceResolvesThreadRootFromDurableCache(t *testing.T) {
+	t.Parallel()
+	client := &fakeUpdatesClient{updates: []Update{{UpdateID: 8, MessageID: 11, From: User{Login: "alice"}, Chat: Chat{ID: "chat", ThreadID: 9}, Text: "@robot-example inspect", MentionedUsers: []User{{Login: "robot-example"}}}}}
+	sink := &fakeRequestSink{cursor: 7, messages: map[string]model.ExternalSourceMessage{
+		SourceMessageKey("chat", 9): {Source: Source, ChatID: "chat", MessageID: 9, Sender: "alert-robot", Text: "Root alert"},
+	}}
+	poller := NewPoller(client, sink, FilterConfig{RobotLogin: "robot-example", AllowedSenders: []string{"alice"}})
+	if err := poller.PollOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(sink.requests) != 1 || !strings.Contains(sink.requests[0].Prompt, "Root alert") {
+		t.Fatalf("requests = %#v", sink.requests)
 	}
 }
 

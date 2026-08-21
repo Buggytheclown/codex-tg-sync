@@ -1,6 +1,11 @@
 package ymessenger
 
-import "testing"
+import (
+	"strings"
+	"testing"
+
+	"github.com/mideco-tech/codex-tg/internal/model"
+)
 
 func TestRequestsFromUpdatesAcceptsAllowedMentionFromAnyChat(t *testing.T) {
 	t.Parallel()
@@ -16,6 +21,44 @@ func TestRequestsFromUpdatesAcceptsAllowedMentionFromAnyChat(t *testing.T) {
 	}
 	if requests[0].ExternalID != "0/0/first:10" || requests[1].ExternalID != "0/0/second:11" {
 		t.Fatalf("external ids = %q, %q", requests[0].ExternalID, requests[1].ExternalID)
+	}
+}
+
+func TestRequestsFromUpdatesBuildsExplicitReplyContextAndReplyTarget(t *testing.T) {
+	t.Parallel()
+	cfg := FilterConfig{RobotLogin: "robot-example", AllowedSenders: []string{"alice"}, DefaultCWD: "/project", TelegramTopicID: 77, RequireApproval: true}
+	updates := []Update{{
+		UpdateID: 1, MessageID: 10, Timestamp: 1_700_000_100,
+		From: User{Login: "alice", DisplayName: "Alice"}, Chat: Chat{ID: "0/0/chat", Title: "Alerts", Type: "group"},
+		Text: "@robot-example investigate", MentionedUsers: []User{{Login: "robot-example", Robot: true}},
+		ReplyToMessage: &Update{MessageID: 9, Timestamp: 1_700_000_000, From: User{Login: "alert-robot", DisplayName: "Alert Robot", Robot: true}, Text: "Alert fired"},
+	}}
+
+	requests := RequestsFromUpdates(updates, cfg)
+	if len(requests) != 1 {
+		t.Fatalf("requests = %#v", requests)
+	}
+	request := requests[0]
+	for _, want := range []string{"Source: Yandex Messenger", "Chat: Alerts", "CONTEXT MESSAGE", "Alert Robot (@alert-robot)", "Alert fired", "USER REQUEST TO BOT", "Alice (@alice)", "@robot-example investigate"} {
+		if !strings.Contains(request.Prompt, want) {
+			t.Fatalf("prompt missing %q:\n%s", want, request.Prompt)
+		}
+	}
+	if request.SourceChatID != "0/0/chat" || request.SourceMessageID != 10 || request.SourceThreadID != 0 || request.AutoStart {
+		t.Fatalf("request routing = %#v", request)
+	}
+}
+
+func TestRequestsFromUpdatesUsesCachedThreadRootAndCanAutoStart(t *testing.T) {
+	t.Parallel()
+	cfg := FilterConfig{RobotLogin: "robot-example", AllowedSenders: []string{"alice"}, DefaultCWD: "/project", RequireApproval: false}
+	update := Update{UpdateID: 2, MessageID: 11, Timestamp: 1_700_000_100, From: User{Login: "alice"}, Chat: Chat{ID: "chat", ThreadID: 9}, Text: "@robot-example investigate", MentionedUsers: []User{{Login: "robot-example"}}}
+	roots := map[string]model.ExternalSourceMessage{
+		SourceMessageKey("chat", 9): {Source: Source, ChatID: "chat", MessageID: 9, Sender: "alert-robot", Timestamp: 1_700_000_000, Text: "Root alert"},
+	}
+	requests := RequestsFromUpdatesWithRoots([]Update{update}, cfg, roots)
+	if len(requests) != 1 || !requests[0].AutoStart || requests[0].SourceThreadID != 9 || !strings.Contains(requests[0].Prompt, "Root alert") {
+		t.Fatalf("requests = %#v", requests)
 	}
 }
 

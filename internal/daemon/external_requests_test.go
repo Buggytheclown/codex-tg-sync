@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mideco-tech/codex-tg/internal/appserver"
 	"github.com/mideco-tech/codex-tg/internal/model"
 )
 
@@ -69,6 +70,73 @@ func TestExternalLaunchApprovalRendersOnceAndDismissEditsSameMessage(t *testing.
 	stored, _ := service.store.GetExternalLaunchRequest(context.Background(), request.ID)
 	if stored == nil || stored.Status != model.ExternalLaunchDismissed {
 		t.Fatalf("stored request=%#v", stored)
+	}
+}
+
+func TestExternalLaunchAutoStartSkipsApprovalAndClaimsDurably(t *testing.T) {
+	t.Parallel()
+	service := activeAFCService(t)
+	sender := &recordingSender{}
+	service.SetSender(sender)
+	request := daemonExternalRequest("test:auto:1", "do work")
+	request.AutoStart = true
+	request.TelegramTopicID = 0
+	if _, err := service.IngestExternalRequests(context.Background(), "test", 1, []model.ExternalLaunchRequest{request}); err != nil {
+		t.Fatal(err)
+	}
+	service.processExternalLaunchRequests(context.Background())
+	stored, _ := service.store.GetExternalLaunchRequest(context.Background(), request.ID)
+	if stored == nil || stored.Status != model.ExternalLaunchStarting {
+		t.Fatalf("stored=%#v, want starting", stored)
+	}
+	if len(sender.messages) != 0 {
+		t.Fatalf("auto-start rendered approval messages=%#v", sender.messages)
+	}
+}
+
+type recordingExternalReplySender struct {
+	chatID          string
+	replyMessageID  int64
+	threadID        int64
+	text            string
+	returnedMessage int64
+	err             error
+}
+
+func (s *recordingExternalReplySender) SendExternalReply(_ context.Context, chatID string, replyMessageID, threadID int64, text string) (int64, error) {
+	s.chatID, s.replyMessageID, s.threadID, s.text = chatID, replyMessageID, threadID, text
+	return s.returnedMessage, s.err
+}
+
+func TestExternalFinalQueuesAndDeliversReplyToInvocation(t *testing.T) {
+	t.Parallel()
+	service := newTestService(t)
+	ctx := context.Background()
+	request := daemonExternalRequest("test:reply:1", "do work")
+	request.SourceChatID = "chat"
+	request.SourceMessageID = 42
+	request.SourceThreadID = 9
+	if _, err := service.IngestExternalRequests(ctx, "test", 1, []model.ExternalLaunchRequest{request}); err != nil {
+		t.Fatal(err)
+	}
+	if claimed, _ := service.store.ClaimExternalLaunchRequest(ctx, request.ID); !claimed {
+		t.Fatal("request was not claimed")
+	}
+	if changed, err := service.store.CompleteExternalLaunchRequest(ctx, request.ID, model.ExternalLaunchSessionStarted, "thread", "turn", "", ""); err != nil || !changed {
+		t.Fatalf("complete=%t err=%v", changed, err)
+	}
+	snapshot := appserver.SnapshotFromThreadRead(afcCompletedPayload("thread", "turn", "Investigated."))
+	service.queueExternalReplyFromSnapshot(ctx, snapshot)
+	service.queueExternalReplyFromSnapshot(ctx, snapshot)
+	sender := &recordingExternalReplySender{returnedMessage: 99}
+	service.SetExternalReplySender(sender)
+	service.processExternalReplyBatch(ctx)
+	if sender.chatID != "chat" || sender.replyMessageID != 42 || sender.threadID != 9 || sender.text != "Investigated." {
+		t.Fatalf("send = %#v", sender)
+	}
+	stored, _ := service.store.GetExternalLaunchRequest(ctx, request.ID)
+	if stored.ReplyStatus != model.ExternalReplySent || stored.ReplyMessageID != 99 {
+		t.Fatalf("stored=%#v", stored)
 	}
 }
 

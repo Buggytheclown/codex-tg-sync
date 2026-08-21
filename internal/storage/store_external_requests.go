@@ -7,9 +7,12 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/mideco-tech/codex-tg/internal/model"
 )
+
+const externalSourceMessageCacheLimit = 20_000
 
 func externalSourceCursorKey(source string) string {
 	return "external_source." + strings.TrimSpace(source) + ".cursor"
@@ -25,13 +28,20 @@ func validateExternalLaunchRequest(request model.ExternalLaunchRequest, source s
 	if request.Status != model.ExternalLaunchPendingApproval {
 		return fmt.Errorf("external launch request initial status must be %s", model.ExternalLaunchPendingApproval)
 	}
-	if request.TelegramTopicID == 0 || strings.TrimSpace(string(request.CreatedAt)) == "" || strings.TrimSpace(string(request.UpdatedAt)) == "" {
-		return errors.New("external launch request requires topic and timestamps")
+	if (!request.AutoStart && request.TelegramTopicID == 0) || strings.TrimSpace(string(request.CreatedAt)) == "" || strings.TrimSpace(string(request.UpdatedAt)) == "" {
+		return errors.New("external launch request requires approval topic unless auto-starting, and timestamps")
+	}
+	if (strings.TrimSpace(request.SourceChatID) == "") != (request.SourceMessageID == 0) {
+		return errors.New("external launch request reply target requires both chat and message")
 	}
 	return nil
 }
 
 func (s *Store) IngestExternalLaunchRequests(ctx context.Context, source string, cursor int64, requests []model.ExternalLaunchRequest) (int, error) {
+	return s.IngestExternalBatch(ctx, source, cursor, nil, requests)
+}
+
+func (s *Store) IngestExternalBatch(ctx context.Context, source string, cursor int64, messages []model.ExternalSourceMessage, requests []model.ExternalLaunchRequest) (int, error) {
 	source = strings.TrimSpace(source)
 	if source == "" || cursor < 0 {
 		return 0, errors.New("external source and non-negative cursor are required")
@@ -41,23 +51,52 @@ func (s *Store) IngestExternalLaunchRequests(ctx context.Context, source string,
 			return 0, err
 		}
 	}
+	for _, message := range messages {
+		if strings.TrimSpace(message.Source) != source || strings.TrimSpace(message.ChatID) == "" || message.MessageID == 0 || strings.TrimSpace(message.Text) == "" {
+			return 0, errors.New("external source message requires matching source, chat, message, and text")
+		}
+	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return 0, err
 	}
 	defer tx.Rollback()
+	for _, message := range messages {
+		if _, err := tx.ExecContext(ctx, `
+		INSERT INTO external_source_messages(source, chat_id, message_id, sender, timestamp, text, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(source, chat_id, message_id) DO UPDATE SET
+			sender=excluded.sender, timestamp=excluded.timestamp, text=excluded.text, updated_at=excluded.updated_at`,
+			message.Source, message.ChatID, message.MessageID, nullable(message.Sender), message.Timestamp, message.Text, message.CreatedAt, message.UpdatedAt); err != nil {
+			return 0, err
+		}
+	}
+	if len(messages) > 0 {
+		if _, err := tx.ExecContext(ctx, `
+		DELETE FROM external_source_messages
+		WHERE source=? AND rowid IN (
+			SELECT rowid FROM external_source_messages WHERE source=?
+			ORDER BY updated_at DESC, message_id DESC LIMIT -1 OFFSET ?
+		)`, source, source, externalSourceMessageCacheLimit); err != nil {
+			return 0, err
+		}
+	}
 	created := 0
 	for _, request := range requests {
 		result, err := tx.ExecContext(ctx, `
 		INSERT INTO external_launch_requests(
 			id, source, external_id, sender, title, safe_preview, source_url, prompt, cwd, status,
 			telegram_topic_id, telegram_message_id, telegram_rendered_status, thread_id, turn_id,
+			auto_start, source_chat_id, source_message_id, source_thread_id, reply_status, reply_text,
+			reply_message_id, reply_attempts, reply_available_at, reply_error,
 			error_type, error_summary, created_at, updated_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(source, external_id) DO NOTHING`,
 			request.ID, request.Source, request.ExternalID, request.Sender, request.Title, nullable(request.SafePreview), nullable(request.SourceURL),
 			request.Prompt, nullable(request.CWD), request.Status, request.TelegramTopicID, request.TelegramMessageID,
-			nullable(request.TelegramRenderedStatus), nullable(request.ThreadID), nullable(request.TurnID), nullable(request.ErrorType),
+			nullable(request.TelegramRenderedStatus), nullable(request.ThreadID), nullable(request.TurnID), boolToInt(request.AutoStart),
+			nullable(request.SourceChatID), request.SourceMessageID, request.SourceThreadID, nullable(request.ReplyStatus), nullable(request.ReplyText),
+			request.ReplyMessageID, request.ReplyAttempts, nullable(string(request.ReplyAvailableAt)), nullable(request.ReplyError), nullable(request.ErrorType),
 			nullable(request.ErrorSummary), request.CreatedAt, request.UpdatedAt)
 		if err != nil {
 			return 0, err
@@ -85,6 +124,26 @@ func (s *Store) IngestExternalRequests(ctx context.Context, source string, curso
 	return s.IngestExternalLaunchRequests(ctx, source, cursor, requests)
 }
 
+func (s *Store) ExternalSourceMessage(ctx context.Context, source, chatID string, messageID int64) (*model.ExternalSourceMessage, error) {
+	row := s.db.QueryRowContext(ctx, `
+	SELECT source, chat_id, message_id, coalesce(sender,''), timestamp, text, created_at, updated_at
+	FROM external_source_messages WHERE source=? AND chat_id=? AND message_id=?`, strings.TrimSpace(source), strings.TrimSpace(chatID), messageID)
+	var message model.ExternalSourceMessage
+	if err := row.Scan(&message.Source, &message.ChatID, &message.MessageID, &message.Sender, &message.Timestamp, &message.Text, &message.CreatedAt, &message.UpdatedAt); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return &message, nil
+}
+
+func (s *Store) ExternalSourceMessageCount(ctx context.Context, source string) (int, error) {
+	row := s.db.QueryRowContext(ctx, `SELECT count(*) FROM external_source_messages WHERE source=?`, strings.TrimSpace(source))
+	var count int
+	return count, row.Scan(&count)
+}
+
 func (s *Store) GetExternalSourceCursor(ctx context.Context, source string) (int64, error) {
 	row := s.db.QueryRowContext(ctx, `SELECT value FROM daemon_state WHERE key=?`, externalSourceCursorKey(source))
 	var raw string
@@ -106,16 +165,9 @@ func (s *Store) ExternalSourceCursor(ctx context.Context, source string) (int64,
 }
 
 func (s *Store) GetExternalLaunchRequest(ctx context.Context, id string) (*model.ExternalLaunchRequest, error) {
-	row := s.db.QueryRowContext(ctx, `
-	SELECT id, source, external_id, sender, title, coalesce(safe_preview,''), coalesce(source_url,''), prompt, coalesce(cwd,''), status,
-		telegram_topic_id, telegram_message_id, coalesce(telegram_rendered_status,''), coalesce(thread_id,''), coalesce(turn_id,''),
-		coalesce(error_type,''), coalesce(error_summary,''), created_at, updated_at
-	FROM external_launch_requests WHERE id=?`, id)
+	row := s.db.QueryRowContext(ctx, `SELECT `+externalLaunchRequestColumns+` FROM external_launch_requests WHERE id=?`, id)
 	var request model.ExternalLaunchRequest
-	if err := row.Scan(&request.ID, &request.Source, &request.ExternalID, &request.Sender, &request.Title, &request.SafePreview,
-		&request.SourceURL, &request.Prompt, &request.CWD, &request.Status, &request.TelegramTopicID, &request.TelegramMessageID,
-		&request.TelegramRenderedStatus, &request.ThreadID, &request.TurnID, &request.ErrorType, &request.ErrorSummary,
-		&request.CreatedAt, &request.UpdatedAt); err != nil {
+	if err := scanExternalLaunchRequest(row, &request); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, nil
 		}
@@ -128,12 +180,9 @@ func (s *Store) ListExternalLaunchRequestsForTelegram(ctx context.Context, limit
 	if limit <= 0 {
 		limit = 20
 	}
-	rows, err := s.db.QueryContext(ctx, `
-	SELECT id, source, external_id, sender, title, coalesce(safe_preview,''), coalesce(source_url,''), prompt, coalesce(cwd,''), status,
-		telegram_topic_id, telegram_message_id, coalesce(telegram_rendered_status,''), coalesce(thread_id,''), coalesce(turn_id,''),
-		coalesce(error_type,''), coalesce(error_summary,''), created_at, updated_at
+	rows, err := s.db.QueryContext(ctx, `SELECT `+externalLaunchRequestColumns+`
 	FROM external_launch_requests
-	WHERE telegram_message_id=0 OR coalesce(telegram_rendered_status,'') != status
+	WHERE auto_start=0 AND (telegram_message_id=0 OR coalesce(telegram_rendered_status,'') != status)
 	ORDER BY created_at, id
 	LIMIT ?`, limit)
 	if err != nil {
@@ -143,15 +192,58 @@ func (s *Store) ListExternalLaunchRequestsForTelegram(ctx context.Context, limit
 	requests := make([]model.ExternalLaunchRequest, 0)
 	for rows.Next() {
 		var request model.ExternalLaunchRequest
-		if err := rows.Scan(&request.ID, &request.Source, &request.ExternalID, &request.Sender, &request.Title, &request.SafePreview,
-			&request.SourceURL, &request.Prompt, &request.CWD, &request.Status, &request.TelegramTopicID, &request.TelegramMessageID,
-			&request.TelegramRenderedStatus, &request.ThreadID, &request.TurnID, &request.ErrorType, &request.ErrorSummary,
-			&request.CreatedAt, &request.UpdatedAt); err != nil {
+		if err := scanExternalLaunchRequest(rows, &request); err != nil {
 			return nil, err
 		}
 		requests = append(requests, request)
 	}
 	return requests, rows.Err()
+}
+
+func (s *Store) ListExternalLaunchRequestsForAutoStart(ctx context.Context, limit int) ([]model.ExternalLaunchRequest, error) {
+	if limit <= 0 {
+		limit = 20
+	}
+	rows, err := s.db.QueryContext(ctx, `SELECT `+externalLaunchRequestColumns+`
+	FROM external_launch_requests
+	WHERE auto_start=1 AND status=?
+	ORDER BY created_at, id LIMIT ?`, model.ExternalLaunchPendingApproval, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	requests := make([]model.ExternalLaunchRequest, 0)
+	for rows.Next() {
+		var request model.ExternalLaunchRequest
+		if err := scanExternalLaunchRequest(rows, &request); err != nil {
+			return nil, err
+		}
+		requests = append(requests, request)
+	}
+	return requests, rows.Err()
+}
+
+const externalLaunchRequestColumns = `
+	id, source, external_id, sender, title, coalesce(safe_preview,''), coalesce(source_url,''), prompt, coalesce(cwd,''), status,
+	telegram_topic_id, telegram_message_id, coalesce(telegram_rendered_status,''), coalesce(thread_id,''), coalesce(turn_id,''),
+	auto_start, coalesce(source_chat_id,''), source_message_id, source_thread_id,
+	coalesce(reply_status,''), coalesce(reply_text,''), reply_message_id, reply_attempts, coalesce(reply_available_at,''), coalesce(reply_error,''),
+	coalesce(error_type,''), coalesce(error_summary,''), created_at, updated_at`
+
+type rowScanner interface {
+	Scan(dest ...any) error
+}
+
+func scanExternalLaunchRequest(scanner rowScanner, request *model.ExternalLaunchRequest) error {
+	var autoStart int
+	err := scanner.Scan(&request.ID, &request.Source, &request.ExternalID, &request.Sender, &request.Title, &request.SafePreview,
+		&request.SourceURL, &request.Prompt, &request.CWD, &request.Status, &request.TelegramTopicID, &request.TelegramMessageID,
+		&request.TelegramRenderedStatus, &request.ThreadID, &request.TurnID, &autoStart, &request.SourceChatID,
+		&request.SourceMessageID, &request.SourceThreadID, &request.ReplyStatus, &request.ReplyText, &request.ReplyMessageID,
+		&request.ReplyAttempts, &request.ReplyAvailableAt, &request.ReplyError, &request.ErrorType, &request.ErrorSummary,
+		&request.CreatedAt, &request.UpdatedAt)
+	request.AutoStart = autoStart != 0
+	return err
 }
 
 func (s *Store) MarkExternalLaunchRequestTelegramSent(ctx context.Context, id string, messageID int64, renderedStatus string) error {
@@ -269,4 +361,142 @@ func (s *Store) RecoverStartingExternalLaunchRequests(ctx context.Context) (int6
 		return 0, err
 	}
 	return result.RowsAffected()
+}
+
+func (s *Store) QueueExternalReply(ctx context.Context, threadID, turnID, text string) (bool, error) {
+	threadID = strings.TrimSpace(threadID)
+	turnID = strings.TrimSpace(turnID)
+	text = strings.TrimSpace(text)
+	if threadID == "" || turnID == "" || text == "" {
+		return false, errors.New("external reply requires thread, turn, and text")
+	}
+	now := model.NowString()
+	result, err := s.db.ExecContext(ctx, `
+	UPDATE external_launch_requests
+	SET reply_status=?, reply_text=?, reply_available_at=?, reply_error='', updated_at=?
+	WHERE thread_id=? AND turn_id=? AND status=? AND coalesce(source_chat_id,'')<>'' AND source_message_id<>0
+	AND coalesce(reply_status,'')=''`, model.ExternalReplyPending, text, now, now, threadID, turnID, model.ExternalLaunchSessionStarted)
+	if err != nil {
+		return false, err
+	}
+	rows, err := result.RowsAffected()
+	return rows == 1, err
+}
+
+func (s *Store) ClaimExternalReplyBatch(ctx context.Context, limit int) ([]model.ExternalLaunchRequest, error) {
+	if limit <= 0 {
+		limit = 10
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+	now := model.NowString()
+	rows, err := tx.QueryContext(ctx, `SELECT `+externalLaunchRequestColumns+`
+	FROM external_launch_requests
+	WHERE reply_status=? AND (coalesce(reply_available_at,'')='' OR reply_available_at<=?)
+	ORDER BY reply_available_at, updated_at, id LIMIT ?`, model.ExternalReplyPending, now, limit)
+	if err != nil {
+		return nil, err
+	}
+	requests := make([]model.ExternalLaunchRequest, 0)
+	for rows.Next() {
+		var request model.ExternalLaunchRequest
+		if err := scanExternalLaunchRequest(rows, &request); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		requests = append(requests, request)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	for i := range requests {
+		result, err := tx.ExecContext(ctx, `UPDATE external_launch_requests SET reply_status=?, updated_at=? WHERE id=? AND reply_status=?`,
+			model.ExternalReplySending, now, requests[i].ID, model.ExternalReplyPending)
+		if err != nil {
+			return nil, err
+		}
+		changed, err := result.RowsAffected()
+		if err != nil || changed != 1 {
+			return nil, errors.New("external reply changed while claiming")
+		}
+		requests[i].ReplyStatus = model.ExternalReplySending
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	return requests, nil
+}
+
+func (s *Store) CompleteExternalReply(ctx context.Context, requestID string, messageID int64) error {
+	if strings.TrimSpace(requestID) == "" || messageID == 0 {
+		return errors.New("external reply completion requires request and message ids")
+	}
+	result, err := s.db.ExecContext(ctx, `
+	UPDATE external_launch_requests SET reply_status=?, reply_message_id=?, reply_error='', updated_at=?
+	WHERE id=? AND reply_status=?`, model.ExternalReplySent, messageID, model.NowString(), requestID, model.ExternalReplySending)
+	if err != nil {
+		return err
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if rows != 1 {
+		return errors.New("external reply changed before completion")
+	}
+	return nil
+}
+
+func (s *Store) FailExternalReply(ctx context.Context, requestID string, attempts int, availableAt time.Time, errorText string, dead bool) error {
+	status := model.ExternalReplyPending
+	if dead {
+		status = model.ExternalReplyDead
+	}
+	result, err := s.db.ExecContext(ctx, `
+	UPDATE external_launch_requests
+	SET reply_status=?, reply_attempts=?, reply_available_at=?, reply_error=?, updated_at=?
+	WHERE id=? AND reply_status=?`, status, attempts, model.TimeString(availableAt.UTC().Format(time.RFC3339Nano)), nullable(errorText), model.NowString(), requestID, model.ExternalReplySending)
+	if err != nil {
+		return err
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if rows != 1 {
+		return errors.New("external reply changed before failure was recorded")
+	}
+	return nil
+}
+
+func (s *Store) RecoverSendingExternalReplies(ctx context.Context) (int64, error) {
+	result, err := s.db.ExecContext(ctx, `
+	UPDATE external_launch_requests
+	SET reply_status=?, reply_available_at=?, reply_error='Daemon restarted during delivery; retrying.', updated_at=?
+	WHERE reply_status=?`, model.ExternalReplyPending, model.NowString(), model.NowString(), model.ExternalReplySending)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+func (s *Store) ExternalReplyBacklog(ctx context.Context) (map[string]int, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT coalesce(reply_status,''), count(*) FROM external_launch_requests WHERE coalesce(reply_status,'')<>'' GROUP BY reply_status`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	result := map[string]int{}
+	for rows.Next() {
+		var status string
+		var count int
+		if err := rows.Scan(&status, &count); err != nil {
+			return nil, err
+		}
+		result[status] = count
+	}
+	return result, rows.Err()
 }

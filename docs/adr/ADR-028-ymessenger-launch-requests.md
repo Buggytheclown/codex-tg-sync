@@ -28,8 +28,9 @@ from Telegram and App Server orchestration.
 - Authorization uses the configured sender-login allowlist plus an explicit
   configured robot entry in `mentioned_users`. Source chat id is not an
   authorization filter.
-- Every launch request requires Telegram approval. `Start` and `Dismiss` are
-  conditional, idempotent transitions stored before external effects.
+- Telegram approval is required by default. A source-specific configuration
+  flag may auto-start allowed explicit mentions; the durable conditional claim
+  is still stored before any external effect.
 - Approval messages use the existing Telegram bot and one manually created,
   configured forum topic. That topic is not stored as an AFC topic or draft and
   is never renamed or deleted by AFC lifecycle cleanup.
@@ -43,6 +44,16 @@ from Telegram and App Server orchestration.
   never rolls back a committed request or App Server transition.
 - Configuration extends the existing private `config.env`; the adapter is off
   by default and secrets remain redacted from public and diagnostic surfaces.
+- Bot API reply payloads and observed top-level messages provide the only MVP
+  context. Direct replies use `reply_to_message`; thread roots are resolved by
+  `(chat_id, thread_id)` from a durable cache because Bot API does not return a
+  thread parent or expose `getMessage`. History API and user tokens remain out
+  of scope.
+- The existing AFC App Server subscription and authoritative `thread/read`
+  snapshot queue one Messenger reply for the exact external `(thread_id,
+  turn_id)`. A durable retry worker sends the final answer as a reply to the
+  invoking source message. Codex never receives the OAuthTeam token and does
+  not choose the destination.
 
 ## Consequences
 
@@ -52,7 +63,8 @@ from Telegram and App Server orchestration.
 - The launch-request domain is generic enough for another in-process source,
   but this change does not introduce a public plugin or scheduler framework.
 - A permanent approval topic is an operator-managed prerequisite. Its absence
-  causes delivery failure without losing the durable request.
+  causes delivery failure without losing the durable request when approval is
+  enabled; it is optional for auto-start.
 - Duplicate source delivery and duplicate callbacks are expected and safe.
 - Exactly-once external execution is not claimed across an ambiguous App Server
   boundary; safety prefers a visible non-replayable state over duplicate work.
@@ -64,3 +76,5 @@ from Telegram and App Server orchestration.
 - Shared database access from another process.
 - Yandex Messenger History API or chat-id allowlisting for this flow.
 - Automatic dispatch retry, topic recreation, or multi-operator routing.
+- Full thread history, arbitrary message lookup, or replies to a destination
+  selected by Codex.

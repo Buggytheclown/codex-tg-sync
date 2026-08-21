@@ -15,6 +15,10 @@ const (
 	ExternalLaunchDismissed       = "dismissed"
 	ExternalLaunchFailed          = "failed"
 	ExternalLaunchOutcomeUnknown  = "outcome_unknown"
+	ExternalReplyPending          = "pending"
+	ExternalReplySending          = "sending"
+	ExternalReplySent             = "sent"
+	ExternalReplyDead             = "dead"
 
 	AFCStateOff        = "off"
 	AFCStateActivating = "activating"
@@ -153,10 +157,31 @@ type ExternalLaunchRequest struct {
 	TelegramRenderedStatus string
 	ThreadID               string
 	TurnID                 string
+	AutoStart              bool
+	SourceChatID           string
+	SourceMessageID        int64
+	SourceThreadID         int64
+	ReplyStatus            string
+	ReplyText              string
+	ReplyMessageID         int64
+	ReplyAttempts          int
+	ReplyAvailableAt       TimeString
+	ReplyError             string
 	ErrorType              string
 	ErrorSummary           string
 	CreatedAt              TimeString
 	UpdatedAt              TimeString
+}
+
+type ExternalSourceMessage struct {
+	Source    string
+	ChatID    string
+	MessageID int64
+	Sender    string
+	Timestamp int64
+	Text      string
+	CreatedAt TimeString
+	UpdatedAt TimeString
 }
 
 type SendOptions struct {
