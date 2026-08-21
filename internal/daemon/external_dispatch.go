@@ -1,0 +1,89 @@
+package daemon
+
+import (
+	"context"
+	"strings"
+
+	"github.com/mideco-tech/codex-tg/internal/model"
+)
+
+func (s *Service) dispatchExternalLaunchRequest(ctx context.Context, requestID string) {
+	s.afcMu.Lock()
+	defer s.afcMu.Unlock()
+
+	request, err := s.store.GetExternalLaunchRequest(ctx, requestID)
+	if err != nil || request == nil || request.Status != model.ExternalLaunchStarting {
+		return
+	}
+	state, err := s.store.GetAFCState(ctx)
+	if err != nil {
+		return
+	}
+	if state.State != model.AFCStateActive || state.ChatID != s.cfg.AFCGroupID {
+		_, _ = s.store.ResetExternalLaunchRequestPending(ctx, request.ID, "afc_inactive", "AFC is inactive; enable AFC and press Start again.")
+		s.processExternalLaunchRequests(ctx)
+		return
+	}
+	forum := s.getAFCForum()
+	if forum == nil {
+		_, _ = s.store.ResetExternalLaunchRequestPending(ctx, request.ID, "telegram_unavailable", "Telegram transport is unavailable; press Start to retry.")
+		s.processExternalLaunchRequests(ctx)
+		return
+	}
+
+	title := afcPromptTopicTitle(request.Prompt)
+	topicID, err := forum.CreateAFCTopic(ctx, title)
+	if err != nil {
+		_, _ = s.store.CompleteExternalLaunchRequest(ctx, request.ID, model.ExternalLaunchFailed, "", "", "telegram_topic", "Telegram could not create the session topic.")
+		s.processExternalLaunchRequests(ctx)
+		return
+	}
+	topics, _ := s.store.ListAFCTopics(ctx, state.SessionID)
+	drafts, _ := s.store.ListAFCTopicDrafts(ctx, state.SessionID)
+	projectName, directoryName := model.ProjectNameFromCWD(request.CWD)
+	draft := model.AFCTopicDraft{
+		SessionID: state.SessionID, ChatID: state.ChatID, TopicID: topicID, Rank: len(topics) + len(drafts) + 1,
+		Title: title, CWD: request.CWD, ProjectName: projectName, DirectoryName: directoryName,
+	}
+	if err := s.store.CreateAFCTopicDraft(ctx, draft); err != nil {
+		_ = forum.DeleteAFCTopic(ctx, topicID)
+		_, _ = s.store.CompleteExternalLaunchRequest(ctx, request.ID, model.ExternalLaunchFailed, "", "", "afc_draft", "AFC could not persist the new session topic.")
+		s.processExternalLaunchRequests(ctx)
+		return
+	}
+	claimed, receipt, created, err := s.store.ClaimAFCTopicDraftMessage(ctx, state.ChatID, topicID, request.TelegramMessageID)
+	if err != nil || !created {
+		_ = forum.DeleteAFCTopic(ctx, topicID)
+		_ = s.store.DeleteAFCTopic(ctx, state.SessionID, topicID)
+		_, _ = s.store.CompleteExternalLaunchRequest(ctx, request.ID, model.ExternalLaunchFailed, "", "", "afc_claim", "AFC could not claim the new session topic.")
+		s.processExternalLaunchRequests(ctx)
+		return
+	}
+	response, dispatchErr := s.startClaimedAFCDraftLocked(ctx, claimed, receipt, request.Prompt)
+	storedReceipt, receiptErr := s.store.GetAFCReceipt(ctx, topicID, request.TelegramMessageID)
+	if response != nil && strings.TrimSpace(response.ThreadID) != "" && strings.TrimSpace(response.TurnID) != "" && dispatchErr == nil {
+		_, _ = s.store.CompleteExternalLaunchRequest(ctx, request.ID, model.ExternalLaunchSessionStarted,
+			response.ThreadID, response.TurnID, "", "")
+		s.processExternalLaunchRequests(ctx)
+		return
+	}
+
+	threadID := ""
+	if storedReceipt != nil {
+		threadID = storedReceipt.ThreadID
+	}
+	status := model.ExternalLaunchOutcomeUnknown
+	errorType := "dispatch_unknown"
+	errorSummary := "AFC dispatch outcome is unknown; this request will not be replayed automatically."
+	if receiptErr == nil && storedReceipt != nil && storedReceipt.State == model.AFCReceiptRejected && dispatchErr == nil {
+		status = model.ExternalLaunchFailed
+		errorType = "dispatch_rejected"
+		errorSummary = "AFC rejected the request before its first turn could start."
+	}
+	_, _ = s.store.CompleteExternalLaunchRequest(ctx, request.ID, status, threadID, "", errorType, errorSummary)
+	if status == model.ExternalLaunchFailed {
+		_ = forum.DeleteAFCTopic(ctx, topicID)
+		_ = s.store.DeleteAFCTopic(ctx, state.SessionID, topicID)
+	}
+	s.processExternalLaunchRequests(ctx)
+}

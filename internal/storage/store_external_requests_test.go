@@ -2,6 +2,7 @@ package storage
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/mideco-tech/codex-tg/internal/model"
@@ -109,6 +110,50 @@ func TestExternalLaunchRequestTelegramDeliveryRemainsRetryable(t *testing.T) {
 	pending, err = store.ListExternalLaunchRequestsForTelegram(ctx, 10)
 	if err != nil || len(pending) != 1 || pending[0].TelegramMessageID != 501 {
 		t.Fatalf("status edit work=%#v err=%v", pending, err)
+	}
+}
+
+func TestRecoverStartingExternalLaunchRequestsMarksOutcomeUnknown(t *testing.T) {
+	t.Parallel()
+	store := openTestStore(t)
+	ctx := context.Background()
+	request := testExternalLaunchRequest("test:chat:22")
+	if _, err := store.IngestExternalLaunchRequests(ctx, "test", 22, []model.ExternalLaunchRequest{request}); err != nil {
+		t.Fatal(err)
+	}
+	if claimed, err := store.ClaimExternalLaunchRequest(ctx, request.ID); err != nil || !claimed {
+		t.Fatalf("claim=%t err=%v", claimed, err)
+	}
+	changed, err := store.RecoverStartingExternalLaunchRequests(ctx)
+	if err != nil || changed != 1 {
+		t.Fatalf("recovered=%d err=%v", changed, err)
+	}
+	stored, _ := store.GetExternalLaunchRequest(ctx, request.ID)
+	if stored.Status != model.ExternalLaunchOutcomeUnknown || !strings.Contains(stored.ErrorSummary, "restart") {
+		t.Fatalf("recovered request=%#v", stored)
+	}
+}
+
+func TestCompleteExternalLaunchRequestRequiresStartingState(t *testing.T) {
+	t.Parallel()
+	store := openTestStore(t)
+	ctx := context.Background()
+	request := testExternalLaunchRequest("test:chat:23")
+	if _, err := store.IngestExternalLaunchRequests(ctx, "test", 23, []model.ExternalLaunchRequest{request}); err != nil {
+		t.Fatal(err)
+	}
+	if changed, err := store.CompleteExternalLaunchRequest(ctx, request.ID, model.ExternalLaunchSessionStarted, "thread-1", "turn-1", "", ""); err != nil || changed {
+		t.Fatalf("completion before claim=%t err=%v", changed, err)
+	}
+	if claimed, _ := store.ClaimExternalLaunchRequest(ctx, request.ID); !claimed {
+		t.Fatal("claim failed")
+	}
+	if changed, err := store.CompleteExternalLaunchRequest(ctx, request.ID, model.ExternalLaunchSessionStarted, "thread-1", "turn-1", "", ""); err != nil || !changed {
+		t.Fatalf("completion=%t err=%v", changed, err)
+	}
+	stored, _ := store.GetExternalLaunchRequest(ctx, request.ID)
+	if stored.Status != model.ExternalLaunchSessionStarted || stored.ThreadID != "thread-1" || stored.TurnID != "turn-1" {
+		t.Fatalf("completed request=%#v", stored)
 	}
 }
 

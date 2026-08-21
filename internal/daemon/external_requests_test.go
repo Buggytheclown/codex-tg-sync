@@ -3,8 +3,10 @@ package daemon
 import (
 	"context"
 	"errors"
+	"io"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/mideco-tech/codex-tg/internal/model"
 )
@@ -69,8 +71,7 @@ func TestExternalLaunchApprovalRendersOnceAndDismissEditsSameMessage(t *testing.
 
 func TestExternalLaunchApprovalCallbackFailsClosedAndStartClaimsOnce(t *testing.T) {
 	t.Parallel()
-	service := newTestService(t)
-	service.cfg.AFCGroupID = -1001
+	service := activeAFCService(t)
 	service.cfg.ExternalRequestsTopicID = 77
 	sender := &recordingSender{}
 	service.SetSender(sender)
@@ -142,6 +143,104 @@ func TestExternalLaunchApprovalSendAndEditFailuresRemainRetryable(t *testing.T) 
 	if len(sender.edits) != 1 || sender.edits[0].messageID != 1 {
 		t.Fatalf("retry edits=%#v", sender.edits)
 	}
+}
+
+func TestDispatchExternalLaunchRequestCreatesAFCThreadTurnAndTopic(t *testing.T) {
+	t.Parallel()
+	service := activeAFCService(t)
+	writer := &stubSession{threadStartResult: map[string]any{"thread": map[string]any{"id": "external-thread", "cwd": "/project"}}}
+	service.liveFactory = func() Session { return writer }
+	forum := &fakeAFCForum{nextTopicID: 20}
+	service.SetAFCForum(forum)
+	request := prepareStartingExternalRequest(t, service, "test:dispatch:1", "run requested task")
+
+	service.dispatchExternalLaunchRequest(context.Background(), request.ID)
+	stored, _ := service.store.GetExternalLaunchRequest(context.Background(), request.ID)
+	if stored.Status != model.ExternalLaunchSessionStarted || stored.ThreadID != "external-thread" || stored.TurnID != "started-turn" {
+		t.Fatalf("dispatched request=%#v", stored)
+	}
+	if len(writer.threadStartCalls) != 1 || writer.threadStartCalls[0] != "/project" || len(writer.turnStartCalls) != 1 || writer.turnStartCalls[0].message != request.Prompt {
+		t.Fatalf("thread starts=%#v turn starts=%#v", writer.threadStartCalls, writer.turnStartCalls)
+	}
+	topics, err := service.store.ListAFCTopics(context.Background(), "s")
+	if err != nil || len(topics) != 3 || topics[2].ThreadID != "external-thread" || topics[2].TopicID != 21 {
+		t.Fatalf("topics=%#v err=%v", topics, err)
+	}
+
+	service.dispatchExternalLaunchRequest(context.Background(), request.ID)
+	if len(writer.threadStartCalls) != 1 || len(writer.turnStartCalls) != 1 {
+		t.Fatalf("duplicate dispatch mutated App Server: starts=%d turns=%d", len(writer.threadStartCalls), len(writer.turnStartCalls))
+	}
+}
+
+func TestDispatchExternalLaunchRequestLeavesPendingWhileAFCInactive(t *testing.T) {
+	t.Parallel()
+	service := newTestService(t)
+	service.cfg.AFCGroupID = -1001
+	writer := &stubSession{threadStartResult: map[string]any{"thread": map[string]any{"id": "must-not-start"}}}
+	service.liveFactory = func() Session { return writer }
+	forum := &fakeAFCForum{}
+	service.SetAFCForum(forum)
+	request := prepareStartingExternalRequest(t, service, "test:dispatch:2", "wait for AFC")
+
+	service.dispatchExternalLaunchRequest(context.Background(), request.ID)
+	stored, _ := service.store.GetExternalLaunchRequest(context.Background(), request.ID)
+	if stored.Status != model.ExternalLaunchPendingApproval || !strings.Contains(stored.ErrorSummary, "AFC") {
+		t.Fatalf("inactive request=%#v", stored)
+	}
+	if len(writer.threadStartCalls) != 0 || len(forum.creates) != 0 {
+		t.Fatalf("inactive dispatch mutated state: starts=%#v topics=%#v", writer.threadStartCalls, forum.creates)
+	}
+}
+
+func TestDispatchExternalLaunchRequestDoesNotReplayAmbiguousThreadStart(t *testing.T) {
+	t.Parallel()
+	service := activeAFCService(t)
+	writer := &stubSession{threadStartErr: io.EOF}
+	service.liveFactory = func() Session { return writer }
+	service.SetAFCForum(&fakeAFCForum{nextTopicID: 20})
+	request := prepareStartingExternalRequest(t, service, "test:dispatch:3", "ambiguous task")
+
+	service.dispatchExternalLaunchRequest(context.Background(), request.ID)
+	stored, _ := service.store.GetExternalLaunchRequest(context.Background(), request.ID)
+	if stored.Status != model.ExternalLaunchOutcomeUnknown {
+		t.Fatalf("ambiguous request=%#v", stored)
+	}
+	service.dispatchExternalLaunchRequest(context.Background(), request.ID)
+	if len(writer.threadStartCalls) != 1 {
+		t.Fatalf("ambiguous request replayed %d times", len(writer.threadStartCalls))
+	}
+}
+
+func TestDispatchExternalLaunchRequestTopicFailureCreatesNoCodexState(t *testing.T) {
+	t.Parallel()
+	service := activeAFCService(t)
+	writer := &stubSession{threadStartResult: map[string]any{"thread": map[string]any{"id": "must-not-start"}}}
+	service.liveFactory = func() Session { return writer }
+	service.SetAFCForum(&fakeAFCForum{createErrAt: 1})
+	request := prepareStartingExternalRequest(t, service, "test:dispatch:4", "topic failure")
+
+	service.dispatchExternalLaunchRequest(context.Background(), request.ID)
+	stored, _ := service.store.GetExternalLaunchRequest(context.Background(), request.ID)
+	if stored.Status != model.ExternalLaunchFailed || len(writer.threadStartCalls) != 0 {
+		t.Fatalf("topic failure request=%#v starts=%#v", stored, writer.threadStartCalls)
+	}
+}
+
+func prepareStartingExternalRequest(t *testing.T, service *Service, id, prompt string) model.ExternalLaunchRequest {
+	t.Helper()
+	request := daemonExternalRequest(id, prompt)
+	ctx := context.Background()
+	if _, err := service.IngestExternalRequests(ctx, "test", time.Now().UnixNano(), []model.ExternalLaunchRequest{request}); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.store.MarkExternalLaunchRequestTelegramSent(ctx, request.ID, 501, model.ExternalLaunchPendingApproval); err != nil {
+		t.Fatal(err)
+	}
+	if claimed, err := service.store.ClaimExternalLaunchRequest(ctx, request.ID); err != nil || !claimed {
+		t.Fatalf("claim=%t err=%v", claimed, err)
+	}
+	return request
 }
 
 func daemonExternalRequest(id, prompt string) model.ExternalLaunchRequest {

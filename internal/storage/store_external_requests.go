@@ -216,3 +216,57 @@ func (s *Store) ExpireExternalLaunchCallbackRoutes(ctx context.Context, requestI
 		model.CallbackStatusExpired, requestID)
 	return err
 }
+
+func (s *Store) CompleteExternalLaunchRequest(ctx context.Context, id, status, threadID, turnID, errorType, errorSummary string) (bool, error) {
+	switch status {
+	case model.ExternalLaunchSessionStarted:
+		if strings.TrimSpace(threadID) == "" || strings.TrimSpace(turnID) == "" {
+			return false, errors.New("started external launch request requires thread and turn ids")
+		}
+	case model.ExternalLaunchFailed, model.ExternalLaunchOutcomeUnknown:
+	default:
+		return false, errors.New("invalid terminal external launch request status")
+	}
+	result, err := s.db.ExecContext(ctx, `
+	UPDATE external_launch_requests
+	SET status=?, thread_id=?, turn_id=?, error_type=?, error_summary=?, updated_at=?
+	WHERE id=? AND status=?`, status, nullable(threadID), nullable(turnID), nullable(errorType), nullable(errorSummary),
+		model.NowString(), id, model.ExternalLaunchStarting)
+	if err != nil {
+		return false, err
+	}
+	rows, err := result.RowsAffected()
+	return rows == 1, err
+}
+
+func (s *Store) ResetExternalLaunchRequestPending(ctx context.Context, id, errorType, errorSummary string) (bool, error) {
+	result, err := s.db.ExecContext(ctx, `
+	UPDATE external_launch_requests
+	SET status=?, error_type=?, error_summary=?, updated_at=?
+	WHERE id=? AND status=?`, model.ExternalLaunchPendingApproval, nullable(errorType), nullable(errorSummary), model.NowString(),
+		id, model.ExternalLaunchStarting)
+	if err != nil {
+		return false, err
+	}
+	rows, err := result.RowsAffected()
+	return rows == 1, err
+}
+
+func (s *Store) NoteExternalLaunchRequestPendingError(ctx context.Context, id, errorType, errorSummary string) error {
+	_, err := s.db.ExecContext(ctx, `
+	UPDATE external_launch_requests
+	SET error_type=?, error_summary=?, telegram_rendered_status='', updated_at=?
+	WHERE id=? AND status=?`, nullable(errorType), nullable(errorSummary), model.NowString(), id, model.ExternalLaunchPendingApproval)
+	return err
+}
+
+func (s *Store) RecoverStartingExternalLaunchRequests(ctx context.Context) (int64, error) {
+	result, err := s.db.ExecContext(ctx, `
+	UPDATE external_launch_requests
+	SET status=?, error_type='daemon_restart', error_summary='Daemon restarted after dispatch claim; outcome is unknown and was not replayed.', updated_at=?
+	WHERE status=?`, model.ExternalLaunchOutcomeUnknown, model.NowString(), model.ExternalLaunchStarting)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}

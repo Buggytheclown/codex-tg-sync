@@ -256,7 +256,9 @@ func (s *Service) Start(ctx context.Context) error {
 	_ = s.store.SetState(runCtx, "daemon.last_error", "")
 	_ = s.store.SetState(runCtx, "appserver.live_connected", "false")
 	_ = s.store.SetState(runCtx, "appserver.poll_connected", "false")
-	cleanupSessionID, err := s.store.ResetAFCOnStartup(runCtx)
+	_, recoveryErr := s.store.RecoverStartingExternalLaunchRequests(runCtx)
+	cleanupSessionID, resetErr := s.store.ResetAFCOnStartup(runCtx)
+	err := errors.Join(recoveryErr, resetErr)
 	if err != nil {
 		cancel()
 		s.mu.Lock()
@@ -270,7 +272,7 @@ func (s *Service) Start(ctx context.Context) error {
 		_ = s.store.SetState(context.Background(), "daemon.phase", "startup_failed")
 		_ = s.store.SetState(context.Background(), "daemon.ready", "false")
 		_ = s.store.SetState(context.Background(), "daemon.last_error", sanitizeDiagnosticString(err.Error()))
-		return fmt.Errorf("reset AFC on startup: %w", err)
+		return fmt.Errorf("recover durable startup state: %w", err)
 	}
 	s.mu.Lock()
 	s.startupCleanupSessionID = cleanupSessionID

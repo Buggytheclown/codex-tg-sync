@@ -67,7 +67,29 @@ func (s *Service) renderExternalLaunchRequest(ctx context.Context, sender Sender
 		}
 		return s.store.MarkExternalLaunchRequestTelegramSent(ctx, request.ID, messageID, request.Status)
 	}
-	if err := sender.EditMessage(ctx, s.cfg.AFCGroupID, request.TelegramTopicID, request.TelegramMessageID, text, nil); err != nil {
+	var buttons [][]model.ButtonSpec
+	if request.Status == model.ExternalLaunchPendingApproval {
+		_ = s.store.ExpireExternalLaunchCallbackRoutes(ctx, request.ID)
+		startRoute, startButton, err := s.externalLaunchButton(ctx, request, "Start", "external_launch_start")
+		if err != nil {
+			return err
+		}
+		dismissRoute, dismissButton, err := s.externalLaunchButton(ctx, request, "Dismiss", "external_launch_dismiss")
+		if err != nil {
+			_ = s.store.ExpireExternalLaunchCallbackRoutes(ctx, request.ID)
+			return err
+		}
+		startRoute.TelegramMessageID = request.TelegramMessageID
+		dismissRoute.TelegramMessageID = request.TelegramMessageID
+		if err := s.store.PutCallbackRoute(ctx, startRoute); err != nil {
+			return err
+		}
+		if err := s.store.PutCallbackRoute(ctx, dismissRoute); err != nil {
+			return err
+		}
+		buttons = [][]model.ButtonSpec{{startButton, dismissButton}}
+	}
+	if err := sender.EditMessage(ctx, s.cfg.AFCGroupID, request.TelegramTopicID, request.TelegramMessageID, text, buttons); err != nil {
 		return err
 	}
 	return s.store.MarkExternalLaunchRequestTelegramRendered(ctx, request.ID, request.TelegramMessageID, request.Status)
@@ -144,6 +166,15 @@ func (s *Service) handleExternalLaunchCallback(ctx context.Context, chatID, topi
 	var changed bool
 	switch route.Action {
 	case "external_launch_start":
+		state, stateErr := s.store.GetAFCState(ctx)
+		if stateErr != nil {
+			return nil, stateErr
+		}
+		if state.State != model.AFCStateActive {
+			_ = s.store.NoteExternalLaunchRequestPendingError(ctx, request.ID, "afc_inactive", "AFC is inactive; enable AFC and press Start again.")
+			s.processExternalLaunchRequests(ctx)
+			return &DirectResponse{CallbackText: "AFC is inactive; request remains pending."}, nil
+		}
 		changed, err = s.store.ClaimExternalLaunchRequest(ctx, request.ID)
 	case "external_launch_dismiss":
 		changed, err = s.store.DismissExternalLaunchRequest(ctx, request.ID)
@@ -161,5 +192,21 @@ func (s *Service) handleExternalLaunchCallback(ctx context.Context, chatID, topi
 	if route.Action == "external_launch_dismiss" {
 		return &DirectResponse{CallbackText: "Dismissed."}, nil
 	}
+	s.startExternalLaunchDispatch(request.ID)
 	return &DirectResponse{CallbackText: "Starting."}, nil
+}
+
+func (s *Service) startExternalLaunchDispatch(requestID string) {
+	s.mu.RLock()
+	if !s.started || s.runCtx == nil {
+		s.mu.RUnlock()
+		return
+	}
+	ctx := s.runCtx
+	s.wg.Add(1)
+	go func() {
+		defer s.wg.Done()
+		s.dispatchExternalLaunchRequest(ctx, requestID)
+	}()
+	s.mu.RUnlock()
 }
