@@ -205,6 +205,13 @@ Primary environment variables:
 - `CTR_GO_ALLOWED_CHAT_IDS`
 - `CTR_GO_AFC_GROUP_ID` (optional exact private forum supergroup for AFC)
 - `CTR_GO_AFC_INITIAL_TOPIC_LIMIT` (`5` by default; initial `/afc on` snapshot only)
+- `CTR_GO_YMESSENGER_ENABLED` (`false` by default)
+- `CTR_GO_YMESSENGER_ROBOT_LOGIN` (required when the adapter is enabled)
+- `CTR_GO_YMESSENGER_OAUTH_TEAM_TOKEN` (required secret robot token)
+- `CTR_GO_YMESSENGER_ALLOWED_SENDERS` (comma-separated sender login allowlist)
+- `CTR_GO_YMESSENGER_POLL_SECONDS` (`2` by default)
+- `CTR_GO_EXTERNAL_REQUESTS_TOPIC_ID` (permanent Telegram approval topic id)
+- `CTR_GO_EXTERNAL_REQUEST_DEFAULT_CWD` (falls back to `CTR_GO_DEFAULT_CWD`)
 - `CTR_GO_DEFAULT_CWD`
 - `CTR_GO_CODEX_CHATS_ROOT` (`~/Documents/Codex` by default)
 - `CTR_GO_NOTIFY_NEW_RUN` (`true` by default; set `false`/`off`/`0` to send `New run` silently)
@@ -245,6 +252,31 @@ started it. While AFC is active, legacy DM mutations are disabled; `/help` and
 `/status` remain available. `/afc off` never
 restores the legacy observer automatically. Use `/afc off --force` only when AFC
 turns must be interrupted and drained.
+
+### Yandex Messenger launch requests
+
+The optional Yandex Messenger adapter runs inside the same `codex-tg` daemon;
+the normal one-command startup does not change. Create a permanent `Requests`
+topic manually in the configured AFC forum group, put its topic id in
+`CTR_GO_EXTERNAL_REQUESTS_TOPIC_ID`, and enable the adapter settings shown in
+`.env.example`. Do not create the topic through `/projects` or `/newchat`:
+those topics are AFC-owned and may be cleaned up, while `Requests` is never
+registered as an AFC topic or draft.
+
+The poller accepts a message only when `from.login` is in
+`CTR_GO_YMESSENGER_ALLOWED_SENDERS` and the configured robot is present in
+`mentioned_users`. Source `chat_id` is deliberately not filtered. Accepted
+messages appear in `Requests` with `Start` and `Dismiss`; either action edits
+that same Telegram message. `Start` requires AFC to be active, creates one
+normal AFC session topic, then uses the existing AFC writer to perform
+`thread/start` and the first `turn/start`.
+
+The update cursor and normalized request are committed in one SQLite
+transaction. Duplicate source messages and button presses are ignored. A
+daemon restart after a dispatch claim, or an ambiguous App Server response,
+marks the outcome unknown and never replays it automatically. Telegram
+send/edit failures remain pending for reconciliation. OAuthTeam and Telegram
+tokens stay only in the private config and are omitted from status/doctor JSON.
 
 ### Shared App Server startup on macOS
 

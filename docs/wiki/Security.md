@@ -15,11 +15,15 @@
   contain credentials, so treat the config file as secret material.
 - The macOS tray app controls service lifecycle and opens local files, but it
   does not read or display Telegram tokens.
+- The optional Yandex Messenger adapter authorizes by an explicit sender-login
+  allowlist plus a robot mention. It intentionally does not trust or filter on
+  a source chat id.
 
 ## Never Commit
 
 - `.env`
 - Bot tokens
+- Yandex Messenger OAuthTeam tokens
 - `config.env`
 - Telegram user sessions
 - Chat ids from private deployments
@@ -48,3 +52,7 @@ command, permission, or MCP requests.
 Secrets stay in the local config file today. A future Keychain migration is
 allowed, but runtime docs and logs must continue to avoid printing secrets in
 full.
+
+Yandex Messenger text is untrusted launch input. It always requires the
+configured Telegram operator to press `Start`; source messages cannot directly
+invoke App Server or approve later Codex permission prompts.

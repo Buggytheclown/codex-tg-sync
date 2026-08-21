@@ -117,19 +117,20 @@ and errors.
 
 ## Acceptance
 
-- [ ] Disabled configuration leaves existing startup and Telegram behavior
+- [x] Disabled configuration leaves existing startup and Telegram behavior
       unchanged.
-- [ ] One allowed mention from any source chat creates one durable request.
-- [ ] A denied sender or missing mention creates no request while the cursor
+- [x] One allowed mention from any source chat creates one durable request.
+- [x] A denied sender or missing mention creates no request while the cursor
       still advances.
-- [ ] Restart resumes from the persisted update id without losing or duplicating
+- [x] Restart resumes from the persisted update id without losing or duplicating
       a request.
-- [ ] One request creates one approval message in the configured topic.
-- [ ] Stale or mismatched callbacks fail closed.
-- [ ] Repeated Start creates at most one thread and first turn.
-- [ ] Dismiss never invokes App Server.
-- [ ] Successful Start yields one normal AFC topic through existing sync.
-- [ ] The permanent approval topic is never registered for AFC cleanup.
-- [ ] Ambiguous dispatch is visible and non-replayable.
-- [ ] Unit/integration tests pass; live Telegram/YMessenger validation is
-      recorded when credentials and a live contour are available.
+- [x] One request creates one approval message in the configured topic.
+- [x] Stale or mismatched callbacks fail closed.
+- [x] Repeated Start creates at most one thread and first turn.
+- [x] Dismiss never invokes App Server.
+- [x] Successful Start yields one normal AFC topic through the existing lifecycle.
+- [x] The permanent approval topic is never registered for AFC cleanup.
+- [x] Ambiguous dispatch is visible and non-replayable.
+- [x] Unit/integration tests pass.
+- [ ] Live Telegram/YMessenger validation is recorded when credentials and a
+      live contour are available.

@@ -204,6 +204,7 @@ func runStatus(cfg config.Config, out io.Writer) error {
 		fmt.Sprintf("Codex bin: %s", cfg.CodexBin),
 		fmt.Sprintf("Control API: %s", formatOptional(cfg.ControlAPIListen, "off")),
 		fmt.Sprintf("Telegram configured: %t", strings.TrimSpace(cfg.TelegramBotToken) != ""),
+		fmt.Sprintf("YMessenger launch requests: %s", map[bool]string{true: "enabled", false: "off"}[cfg.YMessengerEnabled]),
 		fmt.Sprintf("Allowed users: %s", formatIDs(cfg.AllowedUserIDs)),
 		fmt.Sprintf("Allowed chats: %s", formatIDs(cfg.AllowedChatIDs)),
 		fmt.Sprintf("Default cwd: %s", cfg.DefaultCWD),

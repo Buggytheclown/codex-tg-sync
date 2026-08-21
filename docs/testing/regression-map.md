@@ -155,20 +155,25 @@ Contract notes:
 ADR: `docs/adr/ADR-028-ymessenger-launch-requests.md`; feature brief:
 `docs/process/ind-06-ymessenger-launch-requests-brief.md`.
 
-Planned primary tests:
+Primary tests:
 
-- `internal/config/config_test.go` covers disabled defaults, enabled validation,
-  sender allowlists, poll interval, approval topic, default cwd, and token
-  redaction.
-- `internal/ymessenger` tests cover Bot API decoding, mention and sender
-  filtering without chat filtering, cursor recovery, and retry backoff.
-- `internal/storage` tests cover atomic request-plus-cursor ingestion, source
-  deduplication, conditional Start/Dismiss, and durable Telegram render state.
-- `internal/daemon` tests cover one approval message, callback scoping,
-  idempotent dispatch, App Server ambiguity, AFC materialization, and approval
-  topic exclusion from cleanup.
-- `internal/telegram` tests cover sending and editing the original approval
-  message without leaking secrets.
+- `internal/config/config_test.go::TestFromEnvReadsYMessengerLaunchRequestConfig`
+- `internal/config/config_test.go::TestValidateYMessengerRequiresEnabledFields`
+- `internal/config/config_test.go::TestMarshalJSONRedactsYMessengerToken`
+- `internal/ymessenger/client_test.go::TestClientGetUpdatesUsesOAuthTeamAndDecodesWireFormat`
+- `internal/ymessenger/filter_test.go::TestRequestsFromUpdatesAcceptsAllowedMentionFromAnyChat`
+- `internal/ymessenger/filter_test.go::TestRequestsFromUpdatesRejectsUnauthorizedMissingMentionAndRobotSender`
+- `internal/ymessenger/poller_test.go::TestPollOnceUsesPersistedCursorAndAdvancesPastIgnoredUpdates`
+- `internal/ymessenger/poller_test.go::TestPollOnceFailureDoesNotAdvanceCursorAndNextCallRetriesSameOffset`
+- `internal/storage/store_external_requests_test.go::TestIngestExternalLaunchRequestsCommitsRequestsAndCursorTogether`
+- `internal/storage/store_external_requests_test.go::TestExternalLaunchRequestTransitionsAreConditional`
+- `internal/storage/store_external_requests_test.go::TestRecoverStartingExternalLaunchRequestsMarksOutcomeUnknown`
+- `internal/daemon/external_requests_test.go::TestExternalLaunchApprovalRendersOnceAndDismissEditsSameMessage`
+- `internal/daemon/external_requests_test.go::TestExternalLaunchApprovalCallbackFailsClosedAndStartClaimsOnce`
+- `internal/daemon/external_requests_test.go::TestDispatchExternalLaunchRequestCreatesAFCThreadTurnAndTopic`
+- `internal/daemon/external_requests_test.go::TestDispatchExternalLaunchRequestDoesNotReplayAmbiguousThreadStart`
+- `internal/daemon/external_requests_test.go::TestDispatchExternalLaunchRequestLeavesPendingWhileAFCInactive`
+- `cmd/ctr-go/main_test.go::TestYMessengerPollerRemainsDisabledByDefault`
 
 Contract notes:
 

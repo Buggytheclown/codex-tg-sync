@@ -132,11 +132,13 @@ func TestStatusAndDoctorDoNotLeakConfigFileToken(t *testing.T) {
 	configPath := filepath.Join(dir, "config.env")
 	home := filepath.Join(dir, "home")
 	token := "123456:abcdefghijklmnopqrstuvwxyz"
+	ymessengerToken := "private-ymessenger-oauth-token"
 	if err := os.WriteFile(configPath, []byte(strings.Join([]string{
 		`CTR_GO_HOME="` + home + `"`,
 		`CTR_GO_TELEGRAM_BOT_TOKEN="` + token + `"`,
 		`CTR_GO_ALLOWED_USER_IDS="42"`,
 		`CTR_GO_DEFAULT_CWD="` + dir + `"`,
+		`CTR_GO_YMESSENGER_OAUTH_TEAM_TOKEN="` + ymessengerToken + `"`,
 		"",
 	}, "\n")), 0o600); err != nil {
 		t.Fatalf("WriteFile failed: %v", err)
@@ -148,7 +150,7 @@ func TestStatusAndDoctorDoNotLeakConfigFileToken(t *testing.T) {
 		if err := runWithIO(command, strings.NewReader(""), &out); err != nil {
 			t.Fatalf("%v failed: %v", command, err)
 		}
-		if strings.Contains(out.String(), token) {
+		if strings.Contains(out.String(), token) || strings.Contains(out.String(), ymessengerToken) {
 			t.Fatalf("%v leaked token:\n%s", command, out.String())
 		}
 	}
