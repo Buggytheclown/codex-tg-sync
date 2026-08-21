@@ -150,6 +150,36 @@ Contract notes:
   commit as a runtime source of truth.
 - Telegram is a channel adapter; Telegram ids must not become Codex identity.
 
+## YMessenger Launch Requests
+
+ADR: `docs/adr/ADR-028-ymessenger-launch-requests.md`; feature brief:
+`docs/process/ind-06-ymessenger-launch-requests-brief.md`.
+
+Planned primary tests:
+
+- `internal/config/config_test.go` covers disabled defaults, enabled validation,
+  sender allowlists, poll interval, approval topic, default cwd, and token
+  redaction.
+- `internal/ymessenger` tests cover Bot API decoding, mention and sender
+  filtering without chat filtering, cursor recovery, and retry backoff.
+- `internal/storage` tests cover atomic request-plus-cursor ingestion, source
+  deduplication, conditional Start/Dismiss, and durable Telegram render state.
+- `internal/daemon` tests cover one approval message, callback scoping,
+  idempotent dispatch, App Server ambiguity, AFC materialization, and approval
+  topic exclusion from cleanup.
+- `internal/telegram` tests cover sending and editing the original approval
+  message without leaking secrets.
+
+Contract notes:
+
+- `codex-tg` remains one process and the only Telegram update consumer.
+- Yandex Messenger accepts configured senders in any source chat only when the
+  configured robot is explicitly mentioned.
+- The permanent approval topic is configured, never AFC-owned, and never
+  deleted by AFC cleanup.
+- Duplicate updates and callbacks are safe; ambiguous App Server dispatch is
+  visible and non-replayable.
+
 ## Distribution And Local Config
 
 ADR: `docs/adr/ADR-017-release-binaries-and-init.md` and
