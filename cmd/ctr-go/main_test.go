@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"io"
 	"log"
@@ -35,6 +36,12 @@ func TestDiagnosticLoggerHonorsFlags(t *testing.T) {
 	}
 	if got := diagnosticLogger(config.Config{LogEnabled: true, DiagnosticLogs: false}, logger); got != nil {
 		t.Fatal("diagnosticLogger(diagnostics disabled) returned logger, want nil")
+	}
+}
+
+func TestYMessengerPollerRemainsDisabledByDefault(t *testing.T) {
+	if started := startYMessengerPoller(context.Background(), config.Config{}, nil, nil); started {
+		t.Fatal("YMessenger poller started without enabled config")
 	}
 }
 

@@ -173,6 +173,29 @@ func (s *Store) initialize(ctx context.Context) error {
 		updated_at TEXT NOT NULL
 	);
 
+	CREATE TABLE IF NOT EXISTS external_launch_requests (
+		id TEXT PRIMARY KEY,
+		source TEXT NOT NULL,
+		external_id TEXT NOT NULL,
+		sender TEXT NOT NULL,
+		title TEXT NOT NULL,
+		safe_preview TEXT,
+		source_url TEXT,
+		prompt TEXT NOT NULL,
+		cwd TEXT,
+		status TEXT NOT NULL,
+		telegram_topic_id INTEGER NOT NULL,
+		telegram_message_id INTEGER NOT NULL DEFAULT 0,
+		telegram_rendered_status TEXT,
+		thread_id TEXT,
+		turn_id TEXT,
+		error_type TEXT,
+		error_summary TEXT,
+		created_at TEXT NOT NULL,
+		updated_at TEXT NOT NULL,
+		UNIQUE(source, external_id)
+	);
+
 	CREATE TABLE IF NOT EXISTS afc_state (
 		id INTEGER PRIMARY KEY CHECK (id = 1),
 		session_id TEXT NOT NULL,
@@ -285,6 +308,7 @@ func (s *Store) initialize(ctx context.Context) error {
 	CREATE INDEX IF NOT EXISTS idx_observer_targets_enabled_updated_at ON observer_targets(enabled, updated_at DESC);
 	CREATE INDEX IF NOT EXISTS idx_delivery_queue_status_available_at ON delivery_queue(status, available_at);
 	CREATE INDEX IF NOT EXISTS idx_pending_approvals_status_updated_at ON pending_approvals(status, updated_at DESC);
+	CREATE INDEX IF NOT EXISTS idx_external_launch_status_updated_at ON external_launch_requests(status, updated_at);
 	CREATE INDEX IF NOT EXISTS idx_thread_panels_thread_current ON thread_panels(chat_id, topic_id, thread_id, is_current, updated_at DESC);
 	CREATE INDEX IF NOT EXISTS idx_chat_steer_expires_at ON chat_steer_state(expires_at);
 	CREATE INDEX IF NOT EXISTS idx_afc_topics_session_state ON afc_topics(session_id, telegram_state, rank);

@@ -7,6 +7,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestFromEnvReadsCodexChatsRoot(t *testing.T) {
@@ -44,6 +45,49 @@ func TestFromEnvDefaultsAFCInitialTopicLimitToFive(t *testing.T) {
 
 	if cfg.AFCInitialTopicLimit != 5 {
 		t.Fatalf("AFCInitialTopicLimit = %d, want 5", cfg.AFCInitialTopicLimit)
+	}
+}
+
+func TestFromEnvReadsYMessengerLaunchRequestConfig(t *testing.T) {
+	t.Setenv("CTR_GO_CONFIG", filepath.Join(t.TempDir(), "missing.env"))
+	t.Setenv("CTR_GO_YMESSENGER_ENABLED", "true")
+	t.Setenv("CTR_GO_YMESSENGER_ROBOT_LOGIN", "robot-example")
+	t.Setenv("CTR_GO_YMESSENGER_OAUTH_TEAM_TOKEN", "private-oauth-token")
+	t.Setenv("CTR_GO_YMESSENGER_ALLOWED_SENDERS", "alice,bob")
+	t.Setenv("CTR_GO_YMESSENGER_POLL_SECONDS", "2.5")
+	t.Setenv("CTR_GO_EXTERNAL_REQUESTS_TOPIC_ID", "77")
+	t.Setenv("CTR_GO_EXTERNAL_REQUEST_DEFAULT_CWD", filepath.Join(t.TempDir(), "project"))
+
+	cfg := FromEnv()
+
+	if !cfg.YMessengerEnabled || cfg.YMessengerRobotLogin != "robot-example" || cfg.YMessengerOAuthTeamToken != "private-oauth-token" {
+		t.Fatalf("YMessenger config = %#v", cfg)
+	}
+	if !reflect.DeepEqual(cfg.YMessengerAllowedSenders, []string{"alice", "bob"}) {
+		t.Fatalf("YMessengerAllowedSenders = %#v", cfg.YMessengerAllowedSenders)
+	}
+	if cfg.YMessengerPollInterval != 2500*time.Millisecond {
+		t.Fatalf("YMessengerPollInterval = %s, want 2.5s", cfg.YMessengerPollInterval)
+	}
+	if cfg.ExternalRequestsTopicID != 77 || cfg.ExternalRequestDefaultCWD == "" {
+		t.Fatalf("external request config = topic %d cwd %q", cfg.ExternalRequestsTopicID, cfg.ExternalRequestDefaultCWD)
+	}
+}
+
+func TestValidateYMessengerRequiresEnabledFields(t *testing.T) {
+	cfg := Config{YMessengerEnabled: true}
+	if err := cfg.ValidateYMessenger(); err == nil {
+		t.Fatal("ValidateYMessenger succeeded with missing fields")
+	}
+	cfg.YMessengerRobotLogin = "robot-example"
+	cfg.YMessengerOAuthTeamToken = "token"
+	cfg.YMessengerAllowedSenders = []string{"alice"}
+	cfg.YMessengerPollInterval = 2 * time.Second
+	cfg.AFCGroupID = -10042
+	cfg.ExternalRequestsTopicID = 77
+	cfg.ExternalRequestDefaultCWD = t.TempDir()
+	if err := cfg.ValidateYMessenger(); err != nil {
+		t.Fatalf("ValidateYMessenger(valid) failed: %v", err)
 	}
 }
 
@@ -104,6 +148,16 @@ func TestMarshalJSONIncludesPublicRuntimeConfig(t *testing.T) {
 	}
 	if got["app_server_socket"] != "/tmp/codex.sock" {
 		t.Fatalf("app_server_socket = %#v, want configured socket", got["app_server_socket"])
+	}
+}
+
+func TestMarshalJSONRedactsYMessengerToken(t *testing.T) {
+	data, err := json.Marshal(Config{YMessengerEnabled: true, YMessengerOAuthTeamToken: "do-not-leak"})
+	if err != nil {
+		t.Fatalf("json.Marshal failed: %v", err)
+	}
+	if strings.Contains(string(data), "do-not-leak") || strings.Contains(string(data), "oauth_team_token") {
+		t.Fatalf("config JSON leaked token: %s", data)
 	}
 }
 

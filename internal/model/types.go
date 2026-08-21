@@ -9,6 +9,13 @@ import (
 )
 
 const (
+	ExternalLaunchPendingApproval = "pending_approval"
+	ExternalLaunchStarting        = "starting"
+	ExternalLaunchSessionStarted  = "session_started"
+	ExternalLaunchDismissed       = "dismissed"
+	ExternalLaunchFailed          = "failed"
+	ExternalLaunchOutcomeUnknown  = "outcome_unknown"
+
 	AFCStateOff        = "off"
 	AFCStateActivating = "activating"
 	AFCStateActive     = "active"
@@ -129,6 +136,28 @@ type AFCMessageReceipt struct {
 }
 
 type TimeString string
+
+type ExternalLaunchRequest struct {
+	ID                     string
+	Source                 string
+	ExternalID             string
+	Sender                 string
+	Title                  string
+	SafePreview            string
+	SourceURL              string
+	Prompt                 string
+	CWD                    string
+	Status                 string
+	TelegramTopicID        int64
+	TelegramMessageID      int64
+	TelegramRenderedStatus string
+	ThreadID               string
+	TurnID                 string
+	ErrorType              string
+	ErrorSummary           string
+	CreatedAt              TimeString
+	UpdatedAt              TimeString
+}
 
 type SendOptions struct {
 	Silent bool

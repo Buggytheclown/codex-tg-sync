@@ -51,6 +51,13 @@ type Config struct {
 	AppServerListen             string
 	AppServerSocket             string
 	ControlAPIListen            string
+	YMessengerEnabled           bool
+	YMessengerRobotLogin        string
+	YMessengerOAuthTeamToken    string
+	YMessengerAllowedSenders    []string
+	YMessengerPollInterval      time.Duration
+	ExternalRequestsTopicID     int64
+	ExternalRequestDefaultCWD   string
 	TelegramBotToken            string
 	AllowedUserIDs              []int64
 	AllowedChatIDs              []int64
@@ -127,6 +134,7 @@ func fromSource(source envSource) Config {
 	if err != nil {
 		cwd = "."
 	}
+	defaultCWD := source.path("CTR_GO_DEFAULT_CWD", cwd)
 	codexBin := source.get("CTR_GO_CODEX_BIN")
 	if codexBin == "" {
 		codexBin = "codex"
@@ -146,12 +154,19 @@ func fromSource(source envSource) Config {
 		AppServerListen:             listen,
 		AppServerSocket:             source.get("CTR_GO_APP_SERVER_SOCKET"),
 		ControlAPIListen:            source.get("CTR_GO_CONTROL_API_LISTEN"),
+		YMessengerEnabled:           source.bool("CTR_GO_YMESSENGER_ENABLED", false),
+		YMessengerRobotLogin:        source.get("CTR_GO_YMESSENGER_ROBOT_LOGIN"),
+		YMessengerOAuthTeamToken:    source.get("CTR_GO_YMESSENGER_OAUTH_TEAM_TOKEN"),
+		YMessengerAllowedSenders:    parseStringList(source.get("CTR_GO_YMESSENGER_ALLOWED_SENDERS")),
+		YMessengerPollInterval:      source.durationSeconds("CTR_GO_YMESSENGER_POLL_SECONDS", 2*time.Second),
+		ExternalRequestsTopicID:     parseInt64(source.get("CTR_GO_EXTERNAL_REQUESTS_TOPIC_ID")),
+		ExternalRequestDefaultCWD:   source.path("CTR_GO_EXTERNAL_REQUEST_DEFAULT_CWD", defaultCWD),
 		TelegramBotToken:            source.first("CTR_GO_TELEGRAM_BOT_TOKEN", "CTR_TELEGRAM_BOT_TOKEN"),
 		AllowedUserIDs:              parseInt64List(source.first("CTR_GO_ALLOWED_USER_IDS", "CTR_ALLOWED_USER_IDS")),
 		AllowedChatIDs:              parseInt64List(source.first("CTR_GO_ALLOWED_CHAT_IDS", "CTR_ALLOWED_CHAT_IDS")),
 		AFCGroupID:                  parseInt64(source.get("CTR_GO_AFC_GROUP_ID")),
 		AFCInitialTopicLimit:        source.positiveInt("CTR_GO_AFC_INITIAL_TOPIC_LIMIT", DefaultAFCInitialTopicLimit),
-		DefaultCWD:                  source.string("CTR_GO_DEFAULT_CWD", cwd),
+		DefaultCWD:                  defaultCWD,
 		CodexChatsRoot:              source.path("CTR_GO_CODEX_CHATS_ROOT", DefaultCodexChatsRoot()),
 		PanelMode:                   normalizePanelMode(source.string("CTR_GO_PANEL_MODE", "per_run")),
 		LogEnabled:                  source.bool("CTR_GO_LOG_ENABLED", true),
@@ -178,6 +193,11 @@ func (c Config) MarshalJSON() ([]byte, error) {
 		AppServerListen             string  `json:"app_server_listen"`
 		AppServerSocket             string  `json:"app_server_socket,omitempty"`
 		ControlAPIListen            string  `json:"control_api_listen,omitempty"`
+		YMessengerEnabled           bool    `json:"ymessenger_enabled"`
+		YMessengerConfigured        bool    `json:"ymessenger_configured"`
+		YMessengerPollSeconds       float64 `json:"ymessenger_poll_seconds"`
+		ExternalRequestsTopicID     int64   `json:"external_requests_topic_id,omitempty"`
+		ExternalRequestDefaultCWD   string  `json:"external_request_default_cwd,omitempty"`
 		HasTelegramToken            bool    `json:"telegram_configured"`
 		AllowedUserIDs              []int64 `json:"allowed_user_ids"`
 		AllowedChatIDs              []int64 `json:"allowed_chat_ids"`
@@ -204,6 +224,11 @@ func (c Config) MarshalJSON() ([]byte, error) {
 		AppServerListen:             c.AppServerListen,
 		AppServerSocket:             c.AppServerSocket,
 		ControlAPIListen:            c.ControlAPIListen,
+		YMessengerEnabled:           c.YMessengerEnabled,
+		YMessengerConfigured:        strings.TrimSpace(c.YMessengerOAuthTeamToken) != "",
+		YMessengerPollSeconds:       c.YMessengerPollInterval.Seconds(),
+		ExternalRequestsTopicID:     c.ExternalRequestsTopicID,
+		ExternalRequestDefaultCWD:   c.ExternalRequestDefaultCWD,
 		HasTelegramToken:            c.TelegramBotToken != "",
 		AllowedUserIDs:              c.AllowedUserIDs,
 		AllowedChatIDs:              c.AllowedChatIDs,
@@ -223,6 +248,38 @@ func (c Config) MarshalJSON() ([]byte, error) {
 		GoOS:                        runtime.GOOS,
 		GoArch:                      runtime.GOARCH,
 	})
+}
+
+func (c Config) ValidateYMessenger() error {
+	if !c.YMessengerEnabled {
+		return nil
+	}
+	required := []struct {
+		name  string
+		value string
+	}{
+		{"CTR_GO_YMESSENGER_ROBOT_LOGIN", c.YMessengerRobotLogin},
+		{"CTR_GO_YMESSENGER_OAUTH_TEAM_TOKEN", c.YMessengerOAuthTeamToken},
+		{"CTR_GO_EXTERNAL_REQUEST_DEFAULT_CWD", c.ExternalRequestDefaultCWD},
+	}
+	for _, field := range required {
+		if strings.TrimSpace(field.value) == "" {
+			return fmt.Errorf("%s is required when YMessenger is enabled", field.name)
+		}
+	}
+	if len(c.YMessengerAllowedSenders) == 0 {
+		return fmt.Errorf("CTR_GO_YMESSENGER_ALLOWED_SENDERS is required when YMessenger is enabled")
+	}
+	if c.YMessengerPollInterval <= 0 {
+		return fmt.Errorf("CTR_GO_YMESSENGER_POLL_SECONDS must be positive")
+	}
+	if c.AFCGroupID == 0 {
+		return fmt.Errorf("CTR_GO_AFC_GROUP_ID is required when YMessenger is enabled")
+	}
+	if c.ExternalRequestsTopicID == 0 {
+		return fmt.Errorf("CTR_GO_EXTERNAL_REQUESTS_TOPIC_ID is required when YMessenger is enabled")
+	}
+	return nil
 }
 
 func DefaultCodexChatsRoot() string {
@@ -415,6 +472,26 @@ func parseInt64List(raw string) []int64 {
 		if err != nil {
 			continue
 		}
+		out = append(out, value)
+	}
+	return out
+}
+
+func parseStringList(raw string) []string {
+	parts := strings.FieldsFunc(raw, func(r rune) bool {
+		return r == ',' || r == ';' || r == ' ' || r == '\n' || r == '\t'
+	})
+	seen := make(map[string]struct{}, len(parts))
+	out := make([]string, 0, len(parts))
+	for _, part := range parts {
+		value := strings.ToLower(strings.TrimSpace(part))
+		if value == "" {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
 		out = append(out, value)
 	}
 	return out

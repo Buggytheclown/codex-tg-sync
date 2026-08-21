@@ -23,6 +23,7 @@ import (
 	"github.com/mideco-tech/codex-tg/internal/daemon"
 	"github.com/mideco-tech/codex-tg/internal/telegram"
 	"github.com/mideco-tech/codex-tg/internal/version"
+	"github.com/mideco-tech/codex-tg/internal/ymessenger"
 )
 
 func main() {
@@ -89,6 +90,9 @@ func runDaemon(cfg config.Config) error {
 	if strings.TrimSpace(cfg.TelegramBotToken) == "" {
 		return errors.New("CTR_GO_TELEGRAM_BOT_TOKEN or CTR_TELEGRAM_BOT_TOKEN must be set")
 	}
+	if err := cfg.ValidateYMessenger(); err != nil {
+		return err
+	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
@@ -114,9 +118,32 @@ func runDaemon(cfg config.Config) error {
 	if err := bot.Start(ctx); err != nil {
 		return err
 	}
+	startYMessengerPoller(ctx, cfg, service, logger)
 	service.FinishStartup(ctx)
 	logger.Printf("ctr-go daemon running with %s", bot.String())
 	return bot.Run(ctx)
+}
+
+func startYMessengerPoller(ctx context.Context, cfg config.Config, sink ymessenger.RequestSink, logger *log.Logger) bool {
+	if !cfg.YMessengerEnabled {
+		return false
+	}
+	client := ymessenger.NewClient(cfg.YMessengerOAuthTeamToken)
+	poller := ymessenger.NewPoller(client, sink, ymessenger.FilterConfig{
+		RobotLogin:      cfg.YMessengerRobotLogin,
+		AllowedSenders:  cfg.YMessengerAllowedSenders,
+		DefaultCWD:      cfg.ExternalRequestDefaultCWD,
+		TelegramTopicID: cfg.ExternalRequestsTopicID,
+	})
+	go poller.Run(ctx, cfg.YMessengerPollInterval, func(err error) {
+		if logger != nil {
+			logger.Printf("YMessenger poll failed: %s", telegram.SanitizeLogError(err))
+		}
+	})
+	if logger != nil {
+		logger.Printf("YMessenger launch requests enabled (poll interval %s)", cfg.YMessengerPollInterval)
+	}
+	return true
 }
 
 func startControlAPI(ctx context.Context, cfg config.Config, service *daemon.Service, logger *log.Logger) error {
