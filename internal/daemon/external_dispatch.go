@@ -51,7 +51,15 @@ func (s *Service) dispatchExternalLaunchRequest(ctx context.Context, requestID s
 		s.processExternalLaunchRequests(ctx)
 		return
 	}
-	claimed, receipt, created, err := s.store.ClaimAFCTopicDraftMessage(ctx, state.ChatID, topicID, request.TelegramMessageID)
+	sourceMessageID, err := forum.SendAFCMessage(ctx, topicID, model.RenderedMessage{Text: afcUserHeader + "\n" + request.Prompt}, true)
+	if err != nil {
+		_ = forum.DeleteAFCTopic(ctx, topicID)
+		_ = s.store.DeleteAFCTopic(ctx, state.SessionID, topicID)
+		_, _ = s.store.CompleteExternalLaunchRequest(ctx, request.ID, model.ExternalLaunchFailed, "", "", "telegram_prompt", "Telegram could not write the initial request into the session topic.")
+		s.processExternalLaunchRequests(ctx)
+		return
+	}
+	claimed, receipt, created, err := s.store.ClaimAFCTopicDraftMessage(ctx, state.ChatID, topicID, sourceMessageID)
 	if err != nil || !created {
 		_ = forum.DeleteAFCTopic(ctx, topicID)
 		_ = s.store.DeleteAFCTopic(ctx, state.SessionID, topicID)
@@ -60,7 +68,7 @@ func (s *Service) dispatchExternalLaunchRequest(ctx context.Context, requestID s
 		return
 	}
 	response, dispatchErr := s.startClaimedAFCDraftLocked(ctx, claimed, receipt, request.Prompt)
-	storedReceipt, receiptErr := s.store.GetAFCReceipt(ctx, topicID, request.TelegramMessageID)
+	storedReceipt, receiptErr := s.store.GetAFCReceipt(ctx, topicID, sourceMessageID)
 	if response != nil && strings.TrimSpace(response.ThreadID) != "" && strings.TrimSpace(response.TurnID) != "" && dispatchErr == nil {
 		_, _ = s.store.CompleteExternalLaunchRequest(ctx, request.ID, model.ExternalLaunchSessionStarted,
 			response.ThreadID, response.TurnID, "", "")

@@ -52,7 +52,7 @@ func (s *Service) renderExternalLaunchRequest(ctx context.Context, sender Sender
 			return err
 		}
 		messageID, err := sender.SendMessage(ctx, s.cfg.AFCGroupID, request.TelegramTopicID, text,
-			[][]model.ButtonSpec{{startButton, dismissButton}}, notifySendOptions())
+			[][]model.ButtonSpec{{dismissButton, startButton}}, notifySendOptions())
 		if err != nil {
 			_ = s.store.ExpireExternalLaunchCallbackRoutes(ctx, request.ID)
 			return err
@@ -87,7 +87,7 @@ func (s *Service) renderExternalLaunchRequest(ctx context.Context, sender Sender
 		if err := s.store.PutCallbackRoute(ctx, dismissRoute); err != nil {
 			return err
 		}
-		buttons = [][]model.ButtonSpec{{startButton, dismissButton}}
+		buttons = [][]model.ButtonSpec{{dismissButton, startButton}}
 	}
 	if err := sender.EditMessage(ctx, s.cfg.AFCGroupID, request.TelegramTopicID, request.TelegramMessageID, text, buttons); err != nil {
 		return err

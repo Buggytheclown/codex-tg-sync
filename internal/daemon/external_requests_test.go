@@ -55,6 +55,9 @@ func TestExternalLaunchApprovalRendersOnceAndDismissEditsSameMessage(t *testing.
 	if callbackTokenForButton(message.buttons, "Start") == "" || dismissToken == "" {
 		t.Fatalf("approval buttons=%#v", message.buttons)
 	}
+	if len(message.buttons) != 1 || len(message.buttons[0]) != 2 || message.buttons[0][0].Text != "Dismiss" || message.buttons[0][1].Text != "Start" {
+		t.Fatalf("approval button order=%#v, want Dismiss then Start", message.buttons)
+	}
 
 	response, err := service.HandleCallback(context.Background(), -1001, 77, message.messageID, 123456789, dismissToken)
 	if err != nil || response == nil || !strings.Contains(response.CallbackText, "Dismissed") {
@@ -162,6 +165,15 @@ func TestDispatchExternalLaunchRequestCreatesAFCThreadTurnAndTopic(t *testing.T)
 	if len(writer.threadStartCalls) != 1 || writer.threadStartCalls[0] != "/project" || len(writer.turnStartCalls) != 1 || writer.turnStartCalls[0].message != request.Prompt {
 		t.Fatalf("thread starts=%#v turn starts=%#v", writer.threadStartCalls, writer.turnStartCalls)
 	}
+	userMessages := 0
+	for _, sent := range forum.sends {
+		if sent.topicID == 21 && sent.text == afcUserHeader+"\n"+request.Prompt {
+			userMessages++
+		}
+	}
+	if userMessages != 1 {
+		t.Fatalf("initial AFC user messages=%d sends=%#v, want exactly one", userMessages, forum.sends)
+	}
 	topics, err := service.store.ListAFCTopics(context.Background(), "s")
 	if err != nil || len(topics) != 3 || topics[2].ThreadID != "external-thread" || topics[2].TopicID != 21 {
 		t.Fatalf("topics=%#v err=%v", topics, err)
@@ -170,6 +182,15 @@ func TestDispatchExternalLaunchRequestCreatesAFCThreadTurnAndTopic(t *testing.T)
 	service.dispatchExternalLaunchRequest(context.Background(), request.ID)
 	if len(writer.threadStartCalls) != 1 || len(writer.turnStartCalls) != 1 {
 		t.Fatalf("duplicate dispatch mutated App Server: starts=%d turns=%d", len(writer.threadStartCalls), len(writer.turnStartCalls))
+	}
+	userMessages = 0
+	for _, sent := range forum.sends {
+		if sent.topicID == 21 && sent.text == afcUserHeader+"\n"+request.Prompt {
+			userMessages++
+		}
+	}
+	if userMessages != 1 {
+		t.Fatalf("duplicate dispatch sent %d initial user messages", userMessages)
 	}
 }
 
@@ -224,6 +245,29 @@ func TestDispatchExternalLaunchRequestTopicFailureCreatesNoCodexState(t *testing
 	stored, _ := service.store.GetExternalLaunchRequest(context.Background(), request.ID)
 	if stored.Status != model.ExternalLaunchFailed || len(writer.threadStartCalls) != 0 {
 		t.Fatalf("topic failure request=%#v starts=%#v", stored, writer.threadStartCalls)
+	}
+}
+
+func TestDispatchExternalLaunchRequestPromptSendFailureCreatesNoCodexState(t *testing.T) {
+	t.Parallel()
+	service := activeAFCService(t)
+	writer := &stubSession{threadStartResult: map[string]any{"thread": map[string]any{"id": "must-not-start"}}}
+	service.liveFactory = func() Session { return writer }
+	forum := &fakeAFCForum{nextTopicID: 20, sendErrAt: 1}
+	service.SetAFCForum(forum)
+	request := prepareStartingExternalRequest(t, service, "test:dispatch:5", "prompt send failure")
+
+	service.dispatchExternalLaunchRequest(context.Background(), request.ID)
+	stored, _ := service.store.GetExternalLaunchRequest(context.Background(), request.ID)
+	if stored.Status != model.ExternalLaunchFailed || len(writer.threadStartCalls) != 0 {
+		t.Fatalf("prompt send failure request=%#v starts=%#v", stored, writer.threadStartCalls)
+	}
+	if len(forum.deletes) != 1 || forum.deletes[0] != 21 {
+		t.Fatalf("deleted topics=%#v, want [21]", forum.deletes)
+	}
+	drafts, err := service.store.ListAFCTopicDrafts(context.Background(), "s")
+	if err != nil || len(drafts) != 0 {
+		t.Fatalf("drafts=%#v err=%v, want cleanup", drafts, err)
 	}
 }
 
