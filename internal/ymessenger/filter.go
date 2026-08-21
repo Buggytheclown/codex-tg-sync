@@ -23,7 +23,7 @@ func RequestsFromUpdates(updates []Update, cfg FilterConfig) []model.ExternalLau
 	return RequestsFromUpdatesWithRoots(updates, cfg, nil)
 }
 
-func RequestsFromUpdatesWithRoots(updates []Update, cfg FilterConfig, roots map[string]model.ExternalSourceMessage) []model.ExternalLaunchRequest {
+func RequestsFromUpdatesWithRoots(updates []Update, cfg FilterConfig, roots map[string]ContextMessage) []model.ExternalLaunchRequest {
 	allowed := make(map[string]struct{}, len(cfg.AllowedSenders))
 	for _, sender := range cfg.AllowedSenders {
 		if normalized := normalizeLogin(sender); normalized != "" {
@@ -55,26 +55,11 @@ func RequestsFromUpdatesWithRoots(updates []Update, cfg FilterConfig, roots map[
 	return requests
 }
 
-func RootMessagesFromUpdates(updates []Update) []model.ExternalSourceMessage {
-	messages := make([]model.ExternalSourceMessage, 0, len(updates))
-	for _, update := range updates {
-		if update.MessageID == 0 || update.Chat.ThreadID != 0 || strings.TrimSpace(update.Chat.ID) == "" || strings.TrimSpace(update.Text) == "" {
-			continue
-		}
-		now := model.NowString()
-		messages = append(messages, model.ExternalSourceMessage{
-			Source: Source, ChatID: strings.TrimSpace(update.Chat.ID), MessageID: update.MessageID,
-			Sender: userLabel(update.From), Timestamp: update.Timestamp, Text: strings.TrimSpace(update.Text), CreatedAt: now, UpdatedAt: now,
-		})
-	}
-	return messages
-}
-
 func SourceMessageKey(chatID string, messageID int64) string {
 	return fmt.Sprintf("%s:%d", strings.TrimSpace(chatID), messageID)
 }
 
-func buildPrompt(update Update, roots map[string]model.ExternalSourceMessage) string {
+func buildPrompt(update Update, roots map[string]ContextMessage) string {
 	chatName := strings.TrimSpace(update.Chat.Title)
 	if chatName == "" {
 		chatName = strings.TrimSpace(update.Chat.ID)
@@ -96,9 +81,9 @@ func buildPrompt(update Update, roots map[string]model.ExternalSourceMessage) st
 	if update.Chat.ThreadID != 0 {
 		lines = append(lines, "", "[CONTEXT MESSAGE — THREAD ROOT]")
 		if root, ok := roots[SourceMessageKey(update.Chat.ID, update.Chat.ThreadID)]; ok {
-			lines = appendContextMessage(lines, root.Sender, root.Timestamp, root.Text)
+			lines = appendContextMessage(lines, userLabel(root.From), root.Timestamp, root.Text)
 		} else {
-			lines = append(lines, "Unavailable: the robot did not observe the thread root message.")
+			lines = append(lines, "Unavailable: History API did not return the thread root message.")
 		}
 	} else if update.ReplyToMessage != nil {
 		lines = append(lines, "", "[CONTEXT MESSAGE — REPLIED MESSAGE]")

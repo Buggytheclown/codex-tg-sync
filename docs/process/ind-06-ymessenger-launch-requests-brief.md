@@ -19,7 +19,8 @@ Add one optional Yandex Messenger adapter to the existing `codex-tg` daemon:
 - create a normal Codex thread and first turn through the existing App Server
   and AFC lifecycle after approval;
 - keep the normal AFC topic as the surface for all later Codex activity.
-- include one direct replied-to message or one cached thread root as context;
+- include one direct replied-to message or one thread root fetched on demand as
+  context;
 - return the terminal Codex final as a Bot API reply to the invoking message;
 - allow configured explicit mentions to skip Telegram approval while keeping
   approval required by default.
@@ -37,7 +38,7 @@ operator manages.
 - Automatic creation, rename, deletion, or repair of the permanent approval
   topic.
 - Multiple Telegram approval topics or multiple operators.
-- Full thread history, History API, or user OAuth tokens.
+- Full thread history or user OAuth tokens.
 
 ## UX
 
@@ -73,7 +74,8 @@ LaunchRequestSink -> SQLite external_launch_requests
 ```
 
 - `internal/ymessenger` owns Bot API transport, update parsing, filtering,
-  polling, context prompt construction, and its source cursor.
+  polling, the narrow History API root lookup, context prompt construction,
+  and its source cursor.
 - The launch-request domain owns durable state, idempotency, Telegram delivery
   metadata, and dispatch outcome.
 - Telegram owns callback delivery and message rendering, but does not interpret
@@ -107,8 +109,11 @@ authorization filter.
   is never replayed automatically.
 - Telegram send/edit failures do not roll back request or Codex state; delivery
   is reconciled from SQLite.
-- Top-level source messages, accepted requests, and the update cursor are
-  committed atomically. Thread root lookup therefore survives restarts.
+- Accepted requests and the update cursor are committed atomically. Thread
+  roots are fetched only for authorized explicit mentions before that commit;
+  transient lookup failures leave the cursor unchanged for retry.
+- A successful History API response without the exact root is represented as
+  unavailable context and does not block later updates.
 - Final replies use a durable pending/sending/sent/dead lifecycle with bounded
   retries. Duplicate terminal events cannot queue a second reply.
 
@@ -148,8 +153,9 @@ and errors.
 - [x] Ambiguous dispatch is visible and non-replayable.
 - [x] Unit/integration tests pass.
 - [x] Approval can be disabled without bypassing sender/mention authorization.
-- [x] Direct reply and cached thread-root context are clearly separated from
+- [x] Direct reply and on-demand thread-root context are clearly separated from
       the invoking user request.
+- [x] Unrelated top-level chat messages are not persisted.
 - [x] A terminal final is durably returned as a reply to the invoking message.
 - [x] Reply backlog and lifecycle failures are observable without exposing
       message contents or tokens.

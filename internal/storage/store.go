@@ -206,18 +206,6 @@ func (s *Store) initialize(ctx context.Context) error {
 		UNIQUE(source, external_id)
 	);
 
-	CREATE TABLE IF NOT EXISTS external_source_messages (
-		source TEXT NOT NULL,
-		chat_id TEXT NOT NULL,
-		message_id INTEGER NOT NULL,
-		sender TEXT,
-		timestamp INTEGER NOT NULL DEFAULT 0,
-		text TEXT NOT NULL,
-		created_at TEXT NOT NULL,
-		updated_at TEXT NOT NULL,
-		PRIMARY KEY(source, chat_id, message_id)
-	);
-
 	CREATE TABLE IF NOT EXISTS afc_state (
 		id INTEGER PRIMARY KEY CHECK (id = 1),
 		session_id TEXT NOT NULL,
@@ -331,7 +319,6 @@ func (s *Store) initialize(ctx context.Context) error {
 	CREATE INDEX IF NOT EXISTS idx_delivery_queue_status_available_at ON delivery_queue(status, available_at);
 	CREATE INDEX IF NOT EXISTS idx_pending_approvals_status_updated_at ON pending_approvals(status, updated_at DESC);
 	CREATE INDEX IF NOT EXISTS idx_external_launch_status_updated_at ON external_launch_requests(status, updated_at);
-	CREATE INDEX IF NOT EXISTS idx_external_source_messages_updated ON external_source_messages(source, updated_at DESC);
 	CREATE INDEX IF NOT EXISTS idx_thread_panels_thread_current ON thread_panels(chat_id, topic_id, thread_id, is_current, updated_at DESC);
 	CREATE INDEX IF NOT EXISTS idx_chat_steer_expires_at ON chat_steer_state(expires_at);
 	CREATE INDEX IF NOT EXISTS idx_afc_topics_session_state ON afc_topics(session_id, telegram_state, rank);
@@ -339,6 +326,11 @@ func (s *Store) initialize(ctx context.Context) error {
 	CREATE INDEX IF NOT EXISTS idx_afc_receipts_session_thread ON afc_message_receipts(session_id, thread_id, updated_at);
 	`
 	if _, err := s.db.ExecContext(ctx, schema); err != nil {
+		return err
+	}
+	// This legacy cache captured every top-level Messenger message observed by
+	// the robot. Thread roots are now fetched on demand from History API.
+	if _, err := s.db.ExecContext(ctx, `DROP TABLE IF EXISTS external_source_messages`); err != nil {
 		return err
 	}
 	if err := s.ensureColumn(ctx, "thread_panels", "source_mode", `ALTER TABLE thread_panels ADD COLUMN source_mode TEXT NOT NULL DEFAULT 'explicit'`); err != nil {

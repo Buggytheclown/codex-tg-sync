@@ -163,16 +163,20 @@ Primary tests:
 - `internal/config/config_test.go::TestYMessengerApprovalDefaultsToRequired`
 - `internal/config/config_test.go::TestValidateYMessengerDoesNotRequireApprovalTopicWhenApprovalDisabled`
 - `internal/ymessenger/client_test.go::TestClientGetUpdatesUsesOAuthTeamAndDecodesWireFormat`
+- `internal/ymessenger/client_test.go::TestClientGetThreadRootUsesRobotOAuthAndExactTimestampWindow`
+- `internal/ymessenger/client_test.go::TestClientGetThreadRootReturnsNilWhenExactMessageIsAbsent`
+- `internal/ymessenger/client_test.go::TestClientGetThreadRootDoesNotTreatHistoryAPIErrorAsMissingRoot`
 - `internal/ymessenger/client_test.go::TestClientSendExternalReplyTargetsInvocation`
 - `internal/ymessenger/filter_test.go::TestRequestsFromUpdatesAcceptsAllowedMentionFromAnyChat`
 - `internal/ymessenger/filter_test.go::TestRequestsFromUpdatesBuildsExplicitReplyContextAndReplyTarget`
-- `internal/ymessenger/filter_test.go::TestRequestsFromUpdatesUsesCachedThreadRootAndCanAutoStart`
+- `internal/ymessenger/filter_test.go::TestRequestsFromUpdatesUsesHistoryThreadRootAndCanAutoStart`
 - `internal/ymessenger/filter_test.go::TestRequestsFromUpdatesRejectsUnauthorizedMissingMentionAndRobotSender`
 - `internal/ymessenger/poller_test.go::TestPollOnceUsesPersistedCursorAndAdvancesPastIgnoredUpdates`
 - `internal/ymessenger/poller_test.go::TestPollOnceFailureDoesNotAdvanceCursorAndNextCallRetriesSameOffset`
-- `internal/ymessenger/poller_test.go::TestPollOnceResolvesThreadRootFromDurableCache`
+- `internal/ymessenger/poller_test.go::TestPollOnceResolvesActionableThreadRootFromHistory`
+- `internal/ymessenger/poller_test.go::TestPollOnceHistoryFailureDoesNotAdvanceCursor`
 - `internal/storage/store_external_requests_test.go::TestIngestExternalLaunchRequestsCommitsRequestsAndCursorTogether`
-- `internal/storage/store_external_requests_test.go::TestIngestExternalBatchPersistsThreadRootAndRequestWithCursor`
+- `internal/storage/store_external_requests_test.go::TestOpenDropsLegacyExternalSourceMessageCacheAndPreservesRequests`
 - `internal/storage/store_external_requests_test.go::TestExternalReplyQueueIsIdempotentAndRetryable`
 - `internal/storage/store_external_requests_test.go::TestExternalLaunchRequestTransitionsAreConditional`
 - `internal/storage/store_external_requests_test.go::TestRecoverStartingExternalLaunchRequestsMarksOutcomeUnknown`
@@ -190,6 +194,8 @@ Contract notes:
 - `codex-tg` remains one process and the only Telegram update consumer.
 - Yandex Messenger accepts configured senders in any source chat only when the
   configured robot is explicitly mentioned.
+- Thread roots are fetched on demand through History API with the configured
+  robot OAuth token; unrelated chat messages are not cached.
 - The permanent approval topic is configured, never AFC-owned, and never
   deleted by AFC cleanup when approval is enabled.
 - Auto-start is opt-in; sender allowlisting and explicit robot mention remain

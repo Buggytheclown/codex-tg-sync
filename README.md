@@ -274,10 +274,14 @@ perform `thread/start` and the first `turn/start`.
 
 For direct replies, the nested `reply_to_message` is included as untrusted
 context. For thread messages, the adapter uses the Bot API invariant that
-`chat.thread_id` equals the root message id and resolves that root from a
-durable cache of top-level updates already observed by the robot. Old roots
-that the robot never observed, or that have fallen outside the bounded cache,
-are reported explicitly as unavailable; no user token or History API is used.
+`chat.thread_id` equals the root message timestamp and resolves that exact
+message on demand through Messenger History API. The configured robot OAuth
+token is reused with the History API `OAuth` authorization scheme; no user
+token or additional secret is required. History lookup runs only for an
+allowed explicit robot mention. A transient lookup failure leaves the update
+cursor unchanged for retry, while an absent root is reported explicitly and
+does not block later updates. The daemon does not cache unrelated chat
+messages.
 
 The existing App Server subscription and authoritative `thread/read` snapshot
 remain the only source of the Codex final answer. A terminal final is queued in

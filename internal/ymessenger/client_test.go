@@ -34,6 +34,64 @@ func TestClientGetUpdatesUsesOAuthTeamAndDecodesWireFormat(t *testing.T) {
 	}
 }
 
+func TestClientGetThreadRootUsesRobotOAuthAndExactTimestampWindow(t *testing.T) {
+	t.Parallel()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("Authorization"); got != "OAuth secret" {
+			t.Fatalf("Authorization = %q", got)
+		}
+		if r.URL.Path != "/history" || r.Method != http.MethodPost {
+			t.Fatalf("request = %s %s", r.Method, r.URL.Path)
+		}
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		if body["ChatId"] != "0/0/chat" || body["MinTimestamp"] != float64(98) || body["MaxTimestamp"] != float64(100) || body["Limit"] != float64(10) {
+			t.Fatalf("body = %#v", body)
+		}
+		_, _ = w.Write([]byte(`{"Chats":[{"Messages":[{"ServerMessage":{"ClientMessage":{"Plain":{"Text":{"MessageText":"Root alert"}}},"ServerMessageInfo":{"Timestamp":99,"From":{"Login":"alert-robot","DisplayName":"Alert Robot","IsRobot":true}}}},{"ServerMessage":{"ClientMessage":{"Plain":{"Text":{"MessageText":"Adjacent"}}},"ServerMessageInfo":{"Timestamp":100,"From":{"DisplayName":"Someone"}}}}]}]}`))
+	}))
+	defer server.Close()
+
+	client := NewClient("secret", WithHistoryBaseURL(server.URL), WithHTTPClient(server.Client()))
+	root, err := client.GetThreadRoot(context.Background(), "0/0/chat", 99)
+	if err != nil {
+		t.Fatalf("GetThreadRoot failed: %v", err)
+	}
+	if root == nil || root.MessageID != 99 || root.Timestamp != 99 || root.Text != "Root alert" || root.From.Login != "alert-robot" || root.From.DisplayName != "Alert Robot" || !root.From.Robot {
+		t.Fatalf("root = %#v", root)
+	}
+}
+
+func TestClientGetThreadRootReturnsNilWhenExactMessageIsAbsent(t *testing.T) {
+	t.Parallel()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"Chats":[{"Messages":[{"ServerMessage":{"ClientMessage":{"Plain":{"Text":{"MessageText":"Adjacent"}}},"ServerMessageInfo":{"Timestamp":100,"From":{"DisplayName":"Someone"}}}}]}]}`))
+	}))
+	defer server.Close()
+
+	client := NewClient("secret", WithHistoryBaseURL(server.URL), WithHTTPClient(server.Client()))
+	root, err := client.GetThreadRoot(context.Background(), "0/0/chat", 99)
+	if err != nil || root != nil {
+		t.Fatalf("root=%#v err=%v, want nil root without error", root, err)
+	}
+}
+
+func TestClientGetThreadRootDoesNotTreatHistoryAPIErrorAsMissingRoot(t *testing.T) {
+	t.Parallel()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"Error":{"Message":"temporary failure"}}`))
+	}))
+	defer server.Close()
+
+	client := NewClient("secret", WithHistoryBaseURL(server.URL), WithHTTPClient(server.Client()))
+	root, err := client.GetThreadRoot(context.Background(), "0/0/chat", 99)
+	if err == nil || root != nil {
+		t.Fatalf("root=%#v err=%v, want retryable error", root, err)
+	}
+}
+
 func TestClientSendExternalReplyTargetsInvocation(t *testing.T) {
 	t.Parallel()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

@@ -173,17 +173,6 @@ type ExternalLaunchRequest struct {
 	UpdatedAt              TimeString
 }
 
-type ExternalSourceMessage struct {
-	Source    string
-	ChatID    string
-	MessageID int64
-	Sender    string
-	Timestamp int64
-	Text      string
-	CreatedAt TimeString
-	UpdatedAt TimeString
-}
-
 type SendOptions struct {
 	Silent bool
 }

@@ -3,8 +3,6 @@ package ymessenger
 import (
 	"strings"
 	"testing"
-
-	"github.com/mideco-tech/codex-tg/internal/model"
 )
 
 func TestRequestsFromUpdatesAcceptsAllowedMentionFromAnyChat(t *testing.T) {
@@ -49,12 +47,12 @@ func TestRequestsFromUpdatesBuildsExplicitReplyContextAndReplyTarget(t *testing.
 	}
 }
 
-func TestRequestsFromUpdatesUsesCachedThreadRootAndCanAutoStart(t *testing.T) {
+func TestRequestsFromUpdatesUsesHistoryThreadRootAndCanAutoStart(t *testing.T) {
 	t.Parallel()
 	cfg := FilterConfig{RobotLogin: "robot-example", AllowedSenders: []string{"alice"}, DefaultCWD: "/project", RequireApproval: false}
 	update := Update{UpdateID: 2, MessageID: 11, Timestamp: 1_700_000_100, From: User{Login: "alice"}, Chat: Chat{ID: "chat", ThreadID: 9}, Text: "@robot-example investigate", MentionedUsers: []User{{Login: "robot-example"}}}
-	roots := map[string]model.ExternalSourceMessage{
-		SourceMessageKey("chat", 9): {Source: Source, ChatID: "chat", MessageID: 9, Sender: "alert-robot", Timestamp: 1_700_000_000, Text: "Root alert"},
+	roots := map[string]ContextMessage{
+		SourceMessageKey("chat", 9): {MessageID: 9, From: User{Login: "alert-robot"}, Timestamp: 1_700_000_000, Text: "Root alert"},
 	}
 	requests := RequestsFromUpdatesWithRoots([]Update{update}, cfg, roots)
 	if len(requests) != 1 || !requests[0].AutoStart || requests[0].SourceThreadID != 9 || !strings.Contains(requests[0].Prompt, "Root alert") {

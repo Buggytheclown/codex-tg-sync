@@ -22,20 +22,8 @@ func (s *Service) ExternalSourceCursor(ctx context.Context, source string) (int6
 func (s *Service) IngestExternalRequests(ctx context.Context, source string, cursor int64, requests []model.ExternalLaunchRequest) (int, error) {
 	created, err := s.store.IngestExternalRequests(ctx, source, cursor, requests)
 	if err == nil && created > 0 {
-		s.processExternalLaunchRequests(ctx)
-	}
-	return created, err
-}
-
-func (s *Service) ExternalSourceMessage(ctx context.Context, source, chatID string, messageID int64) (*model.ExternalSourceMessage, error) {
-	return s.store.ExternalSourceMessage(ctx, source, chatID, messageID)
-}
-
-func (s *Service) IngestExternalBatch(ctx context.Context, source string, cursor int64, messages []model.ExternalSourceMessage, requests []model.ExternalLaunchRequest) (int, error) {
-	created, err := s.store.IngestExternalBatch(ctx, source, cursor, messages, requests)
-	if err == nil && created > 0 {
 		for _, request := range requests {
-			if strings.Contains(request.Prompt, "Unavailable: the robot did not observe the thread root message.") {
+			if strings.Contains(request.Prompt, "Unavailable: History API did not return the thread root message.") {
 				s.logLifecycle("external_context_missing", lifecycleFields{"request_id": request.ID, "source": request.Source, "context": "thread_root"})
 			}
 		}

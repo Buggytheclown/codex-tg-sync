@@ -302,14 +302,12 @@ func (s *Service) Start(ctx context.Context) error {
 func (s *Service) Doctor(ctx context.Context) (map[string]any, error) {
 	backlog, _ := s.store.DeliveryQueueBacklog(ctx)
 	externalReplyBacklog, _ := s.store.ExternalReplyBacklog(ctx)
-	externalSourceMessages, _ := s.store.ExternalSourceMessageCount(ctx, "yandex_messenger")
 	state, _ := s.store.ListState(ctx)
 	return map[string]any{
-		"config":                   s.cfg,
-		"delivery_backlog":         backlog,
-		"external_reply_backlog":   externalReplyBacklog,
-		"external_source_messages": externalSourceMessages,
-		"daemon_state":             state,
+		"config":                 s.cfg,
+		"delivery_backlog":       backlog,
+		"external_reply_backlog": externalReplyBacklog,
+		"daemon_state":           state,
 	}, nil
 }
 

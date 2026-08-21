@@ -44,11 +44,18 @@ from Telegram and App Server orchestration.
   never rolls back a committed request or App Server transition.
 - Configuration extends the existing private `config.env`; the adapter is off
   by default and secrets remain redacted from public and diagnostic surfaces.
-- Bot API reply payloads and observed top-level messages provide the only MVP
-  context. Direct replies use `reply_to_message`; thread roots are resolved by
-  `(chat_id, thread_id)` from a durable cache because Bot API does not return a
-  thread parent or expose `getMessage`. History API and user tokens remain out
-  of scope.
+- Direct replies use the Bot API `reply_to_message` payload. Bot API does not
+  return a native thread parent or expose `getMessage`, so an actionable thread
+  mention resolves its exact root on demand through Messenger History API by
+  `(chat_id, thread_id)`. The configured robot OAuth token is reused with the
+  `OAuth` authorization scheme; no user token or additional secret is needed.
+  History lookup happens only after sender and explicit-mention authorization.
+  Transient lookup failure prevents cursor advancement and is retried; a
+  successful response without the exact root records explicit unavailable
+  context and allows the cursor to advance.
+- The legacy durable cache of all observed top-level Messenger messages is
+  removed during database migration. Only accepted launch requests and their
+  normalized prompts remain durable.
 - The existing AFC App Server subscription and authoritative `thread/read`
   snapshot queue one Messenger reply for the exact external `(thread_id,
   turn_id)`. A durable retry worker sends the final answer as a reply to the
@@ -66,6 +73,9 @@ from Telegram and App Server orchestration.
   causes delivery failure without losing the durable request when approval is
   enabled; it is optional for auto-start.
 - Duplicate source delivery and duplicate callbacks are expected and safe.
+- History API is a separate internal Messenger endpoint rather than a Bot API
+  method. Its small transport boundary and deterministic tests keep replacement
+  local if that endpoint changes.
 - Exactly-once external execution is not claimed across an ambiguous App Server
   boundary; safety prefers a visible non-replayable state over duplicate work.
 
@@ -74,7 +84,7 @@ from Telegram and App Server orchestration.
 - Generic cron or user-script execution.
 - External write Control API.
 - Shared database access from another process.
-- Yandex Messenger History API or chat-id allowlisting for this flow.
+- Chat-id allowlisting for this flow.
 - Automatic dispatch retry, topic recreation, or multi-operator routing.
-- Full thread history, arbitrary message lookup, or replies to a destination
+- Full thread history, arbitrary user-selected message lookup, or replies to a destination
   selected by Codex.

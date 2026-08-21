@@ -2,6 +2,7 @@ package storage
 
 import (
 	"context"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -46,32 +47,46 @@ func TestIngestExternalLaunchRequestsCommitsRequestsAndCursorTogether(t *testing
 	}
 }
 
-func TestIngestExternalBatchPersistsThreadRootAndRequestWithCursor(t *testing.T) {
+func TestOpenDropsLegacyExternalSourceMessageCacheAndPreservesRequests(t *testing.T) {
 	t.Parallel()
-	store := openTestStore(t)
+	dbPath := filepath.Join(t.TempDir(), "state.sqlite")
+	store, err := Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
 	ctx := context.Background()
-	now := model.NowString()
-	message := model.ExternalSourceMessage{Source: "yandex_messenger", ChatID: "chat", MessageID: 9, Sender: "alert-robot", Timestamp: 123, Text: "Root alert", CreatedAt: now, UpdatedAt: now}
-	request := model.ExternalLaunchRequest{
-		ID: "yandex_messenger:chat:10", Source: "yandex_messenger", ExternalID: "chat:10", Sender: "alice", Title: "Request from alice",
-		Prompt: "inspect", CWD: "/project", Status: model.ExternalLaunchPendingApproval, AutoStart: true,
-		SourceChatID: "chat", SourceMessageID: 10, SourceThreadID: 9, CreatedAt: now, UpdatedAt: now,
+	request := testExternalLaunchRequest("test:chat:legacy-cache")
+	if _, err := store.IngestExternalLaunchRequests(ctx, "test", 1, []model.ExternalLaunchRequest{request}); err != nil {
+		t.Fatal(err)
 	}
-	created, err := store.IngestExternalBatch(ctx, "yandex_messenger", 5, []model.ExternalSourceMessage{message}, []model.ExternalLaunchRequest{request})
-	if err != nil || created != 1 {
-		t.Fatalf("IngestExternalBatch created=%d err=%v", created, err)
+	if _, err := store.db.ExecContext(ctx, `
+		CREATE TABLE external_source_messages (
+			source TEXT NOT NULL, chat_id TEXT NOT NULL, message_id INTEGER NOT NULL,
+			sender TEXT, timestamp INTEGER NOT NULL DEFAULT 0, text TEXT NOT NULL,
+			created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+			PRIMARY KEY(source, chat_id, message_id)
+		);
+		INSERT INTO external_source_messages(source, chat_id, message_id, text, created_at, updated_at)
+		VALUES ('yandex_messenger', 'chat', 9, 'Root alert', 'now', 'now')`); err != nil {
+		t.Fatal(err)
 	}
-	root, err := store.ExternalSourceMessage(ctx, "yandex_messenger", "chat", 9)
-	if err != nil || root == nil || root.Text != "Root alert" {
-		t.Fatalf("root=%#v err=%v", root, err)
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	store, err = Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	row := store.db.QueryRowContext(ctx, `SELECT count(*) FROM sqlite_master WHERE type='table' AND name='external_source_messages'`)
+	var count int
+	if err := row.Scan(&count); err != nil || count != 0 {
+		t.Fatalf("legacy cache table count=%d err=%v, want absent", count, err)
 	}
 	stored, err := store.GetExternalLaunchRequest(ctx, request.ID)
-	if err != nil || stored == nil || !stored.AutoStart || stored.SourceMessageID != 10 || stored.SourceThreadID != 9 {
-		t.Fatalf("request=%#v err=%v", stored, err)
-	}
-	cursor, _ := store.GetExternalSourceCursor(ctx, "yandex_messenger")
-	if cursor != 5 {
-		t.Fatalf("cursor=%d, want 5", cursor)
+	if err != nil || stored == nil {
+		t.Fatalf("launch request was not preserved: request=%#v err=%v", stored, err)
 	}
 }
 

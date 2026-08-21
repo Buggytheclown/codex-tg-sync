@@ -12,8 +12,6 @@ import (
 	"github.com/mideco-tech/codex-tg/internal/model"
 )
 
-const externalSourceMessageCacheLimit = 20_000
-
 func externalSourceCursorKey(source string) string {
 	return "external_source." + strings.TrimSpace(source) + ".cursor"
 }
@@ -38,10 +36,6 @@ func validateExternalLaunchRequest(request model.ExternalLaunchRequest, source s
 }
 
 func (s *Store) IngestExternalLaunchRequests(ctx context.Context, source string, cursor int64, requests []model.ExternalLaunchRequest) (int, error) {
-	return s.IngestExternalBatch(ctx, source, cursor, nil, requests)
-}
-
-func (s *Store) IngestExternalBatch(ctx context.Context, source string, cursor int64, messages []model.ExternalSourceMessage, requests []model.ExternalLaunchRequest) (int, error) {
 	source = strings.TrimSpace(source)
 	if source == "" || cursor < 0 {
 		return 0, errors.New("external source and non-negative cursor are required")
@@ -51,36 +45,11 @@ func (s *Store) IngestExternalBatch(ctx context.Context, source string, cursor i
 			return 0, err
 		}
 	}
-	for _, message := range messages {
-		if strings.TrimSpace(message.Source) != source || strings.TrimSpace(message.ChatID) == "" || message.MessageID == 0 || strings.TrimSpace(message.Text) == "" {
-			return 0, errors.New("external source message requires matching source, chat, message, and text")
-		}
-	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return 0, err
 	}
 	defer tx.Rollback()
-	for _, message := range messages {
-		if _, err := tx.ExecContext(ctx, `
-		INSERT INTO external_source_messages(source, chat_id, message_id, sender, timestamp, text, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-		ON CONFLICT(source, chat_id, message_id) DO UPDATE SET
-			sender=excluded.sender, timestamp=excluded.timestamp, text=excluded.text, updated_at=excluded.updated_at`,
-			message.Source, message.ChatID, message.MessageID, nullable(message.Sender), message.Timestamp, message.Text, message.CreatedAt, message.UpdatedAt); err != nil {
-			return 0, err
-		}
-	}
-	if len(messages) > 0 {
-		if _, err := tx.ExecContext(ctx, `
-		DELETE FROM external_source_messages
-		WHERE source=? AND rowid IN (
-			SELECT rowid FROM external_source_messages WHERE source=?
-			ORDER BY updated_at DESC, message_id DESC LIMIT -1 OFFSET ?
-		)`, source, source, externalSourceMessageCacheLimit); err != nil {
-			return 0, err
-		}
-	}
 	created := 0
 	for _, request := range requests {
 		result, err := tx.ExecContext(ctx, `
@@ -122,26 +91,6 @@ func (s *Store) IngestExternalBatch(ctx context.Context, source string, cursor i
 
 func (s *Store) IngestExternalRequests(ctx context.Context, source string, cursor int64, requests []model.ExternalLaunchRequest) (int, error) {
 	return s.IngestExternalLaunchRequests(ctx, source, cursor, requests)
-}
-
-func (s *Store) ExternalSourceMessage(ctx context.Context, source, chatID string, messageID int64) (*model.ExternalSourceMessage, error) {
-	row := s.db.QueryRowContext(ctx, `
-	SELECT source, chat_id, message_id, coalesce(sender,''), timestamp, text, created_at, updated_at
-	FROM external_source_messages WHERE source=? AND chat_id=? AND message_id=?`, strings.TrimSpace(source), strings.TrimSpace(chatID), messageID)
-	var message model.ExternalSourceMessage
-	if err := row.Scan(&message.Source, &message.ChatID, &message.MessageID, &message.Sender, &message.Timestamp, &message.Text, &message.CreatedAt, &message.UpdatedAt); err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return nil, nil
-		}
-		return nil, err
-	}
-	return &message, nil
-}
-
-func (s *Store) ExternalSourceMessageCount(ctx context.Context, source string) (int, error) {
-	row := s.db.QueryRowContext(ctx, `SELECT count(*) FROM external_source_messages WHERE source=?`, strings.TrimSpace(source))
-	var count int
-	return count, row.Scan(&count)
 }
 
 func (s *Store) GetExternalSourceCursor(ctx context.Context, source string) (int64, error) {
