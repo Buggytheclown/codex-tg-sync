@@ -170,14 +170,14 @@ go run ./cmd/ctr-go repair
 go run ./cmd/ctr-go daemon run
 ```
 
-Telegram commands:
+Telegram command menu:
 
-- `/start`, `/help`
-- `/threads`, `/projects`, `/new`, `/newchat`, `/newthread`, `/show`, `/bind`, `/reply`, `/plan`
-- `/settings`, `/model`, `/effort`
-- `/context`, `/whereami`
-- `/observe all`, `/observe off`
-- `/status`, `/repair`, `/stop`, `/approve`, `/deny`
+- `/sync on|off` controls Sync mode
+- `/status`, `/refresh`
+- `/projects`, `/newchat`, `/stop`
+
+Legacy DM commands remain available as hidden compatibility handlers but are
+not advertised in the Telegram command menu.
 
 `/projects` opens cached project/workspace navigation sorted by the latest
 thread activity. Codex UI Chats from `Documents/Codex` are grouped under
@@ -204,7 +204,7 @@ Primary environment variables:
 - `CTR_GO_ALLOWED_USER_IDS`
 - `CTR_GO_ALLOWED_CHAT_IDS`
 - `CTR_GO_AFC_GROUP_ID` (optional exact private forum supergroup for AFC)
-- `CTR_GO_AFC_INITIAL_TOPIC_LIMIT` (`5` by default; initial `/afc on` snapshot only)
+- `CTR_GO_AFC_INITIAL_TOPIC_LIMIT` (`5` by default; initial `/sync on` snapshot only)
 - `CTR_GO_YMESSENGER_ENABLED` (`false` by default)
 - `CTR_GO_YMESSENGER_ROBOT_LOGIN` (required when the adapter is enabled)
 - `CTR_GO_YMESSENGER_OAUTH_TEAM_TOKEN` (required secret robot token)
@@ -242,10 +242,10 @@ Compatibility fallbacks:
 Set `CTR_GO_AFC_GROUP_ID` to one private Telegram forum supergroup and configure
 exactly one `CTR_GO_ALLOWED_USER_IDS` value. The group must contain only that
 user and the bot; the bot must be able to manage topics and delete messages.
-Use `/afc on` in the built-in General topic. Activation validates the group and
+Use `/sync on` in the built-in General topic. Activation validates the group and
 idempotently renames that built-in topic to `Control` before creating managed topics for
 five recent Codex threads by default. While AFC is active, reconciliation creates one
-topic for each newly discovered Desktop chat; `/sync` triggers the same reconciliation
+topic for each newly discovered Desktop chat; `/refresh` triggers the same reconciliation
 immediately. Control advertises `/projects` and `/newchat`;
 either command creates a Telegram draft topic without holding an App Server
 writer. Send its first prompt only after the topic is ready: AFC creates the
@@ -253,8 +253,8 @@ Codex thread and first turn together, then renames the topic from that prompt.
 Messages sent while a topic turn is active steer that exact turn, and `/stop`
 targets the current shared-daemon turn regardless of whether Desktop or Telegram
 started it. While AFC is active, legacy DM mutations are disabled; `/help` and
-`/status` remain available. `/afc off` never
-restores the legacy observer automatically. Use `/afc off --force` only when AFC
+`/status` remain available. `/sync off` never
+restores the legacy observer automatically. Use `/sync off --force` only when AFC
 turns must be interrupted and drained.
 
 ### Yandex Messenger launch requests
@@ -318,7 +318,7 @@ manually started managed daemon do not survive a reboot. Use this order:
 1. Start the managed App Server daemon.
 2. Set local-daemon mode for GUI apps launched afterward.
 3. Open Codex Desktop.
-4. Start or restart `codex-tg`, verify the shared connection, then run `/afc on`
+4. Start or restart `codex-tg`, verify the shared connection, then run `/sync on`
    in Control.
 
 Run steps 1 and 2 before opening Desktop:
@@ -340,7 +340,7 @@ When installed with `--start-at-login`, `codex-tg` may start automatically
 before the managed daemon. In that case it stays fail-closed, resets AFC to
 `off`, and sends one warning to Control. It does not spawn a private App Server.
 Start the managed daemon, restart Desktop in local-daemon mode, and then run
-`/afc on`.
+`/sync on`.
 
 #### If Codex Desktop was opened first
 
@@ -349,12 +349,12 @@ Desktop probably started a private App Server. Recover with this exact order:
 1. Fully quit Codex Desktop with **Cmd+Q**; closing its window is not enough.
 2. Run the two daemon and `launchctl` commands above.
 3. Reopen Codex Desktop.
-4. Run `ctr-go service restart`, verify `ctr-go status`, and send `/afc on` in
+4. Run `ctr-go service restart`, verify `ctr-go status`, and send `/sync on` in
    Control.
 
 Every `codex-tg` restart intentionally resets AFC to `off` for the MVP. Existing
 Codex work continues in the shared runtime, but the old Telegram topics are
-cleaned up. Run `/afc on` in Control after the shared connection is healthy.
+cleaned up. Run `/sync on` in Control after the shared connection is healthy.
 
 ## Verification
 

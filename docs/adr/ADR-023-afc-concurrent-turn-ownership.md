@@ -40,7 +40,7 @@ executed even though no response arrived.
   after the last lease is confirmed terminal.
 - Restart changes unfinished `accepted/starting/active` state to `unknown` but
   does not create a writer and does not replay input.
-- Until safe/force draining is implemented, `/afc off` rejects while any AFC
+- Until safe/force draining is implemented, `/sync off` rejects while any AFC
   lease is starting, active, or unknown.
 
 ## Consequences

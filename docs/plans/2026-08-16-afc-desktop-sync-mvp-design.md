@@ -40,12 +40,12 @@ The Telegram adapter has three AFC states:
 - `draining`: no new AFC or legacy mutations start while active work reaches a
   guarded terminal state.
 
-`/afc off` never restores the legacy observer or starts a legacy connection.
+`/sync off` never restores the legacy observer or starts a legacy connection.
 Later explicit DM work may start legacy lazily.
 
 ## Activation And Reconciliation
 
-`/afc on` validates the configured private forum group and permanent Control
+`/sync on` validates the configured private forum group and permanent Control
 topic, verifies the managed daemon, then creates topics for the most recent
 eligible top-level Codex chats. The default initial limit is five and is
 configured with `CTR_GO_AFC_INITIAL_TOPIC_LIMIT`. Invalid or non-positive values
@@ -59,8 +59,8 @@ The mapping is persisted before presentation work can race with another sync.
 For a tracked chat, `thread/resume` is sent with only `threadId`; it acts as a
 connection subscription to the shared daemon, not as process ownership. Live
 events drive prompt, progress, tool, status, and final presentation, while
-`thread/read` remains the durable catch-up and repair source. `/sync` triggers
-the same idempotent reconciliation without requiring `/afc off` and `/afc on`.
+`thread/read` remains the durable catch-up and repair source. `/refresh` triggers
+the same idempotent reconciliation without requiring `/sync off` and `/sync on`.
 
 Codex thread names flow to Telegram topic names. Telegram topic renames do not
 rename Codex threads in the MVP.
@@ -124,7 +124,7 @@ visible to Desktop because both clients share the daemon.
 
 ## Acceptance Scenarios
 
-1. `/afc on` creates at most five initial topics by default and reports the
+1. `/sync on` creates at most five initial topics by default and reports the
    configured limit in status/diagnostics.
 2. A new Desktop chat becomes one topic within the reconciliation window and
    shows user prompt, elapsed progress, and final answer.
@@ -135,5 +135,5 @@ visible to Desktop because both clients share the daemon.
 6. `/stop` interrupts both Desktop-origin and Telegram-origin active turns.
 7. Restart restores mappings and subscriptions without replay or duplication.
 8. While AFC is active, legacy DM mutation fails before any App Server request;
-   after `/afc off`, an explicit DM mutation may start legacy lazily.
+   after `/sync off`, an explicit DM mutation may start legacy lazily.
 9. Existing legacy and AFC tests continue to pass.

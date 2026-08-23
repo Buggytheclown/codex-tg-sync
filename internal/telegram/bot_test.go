@@ -40,7 +40,7 @@ func TestSanitizeTelegramLogErrorRedactsBotTokenURL(t *testing.T) {
 	}
 }
 
-func TestDefaultCommandsExposeNewChatMenuCommand(t *testing.T) {
+func TestDefaultCommandsExposeOnlySyncModeCommands(t *testing.T) {
 	t.Parallel()
 
 	seen := make(map[string]bool)
@@ -50,13 +50,13 @@ func TestDefaultCommandsExposeNewChatMenuCommand(t *testing.T) {
 		}
 		seen[command.Command] = true
 	}
-	for _, command := range []string{"newchat", "newthread"} {
+	for _, command := range []string{"sync", "status", "refresh", "projects", "newchat", "stop"} {
 		if !seen[command] {
 			t.Fatalf("defaultCommands must expose /%s in the Telegram command menu", command)
 		}
 	}
-	if seen["default"] {
-		t.Fatal("defaultCommands must not expose hidden /default fallback in the Telegram command menu")
+	if len(seen) != 6 {
+		t.Fatalf("defaultCommands = %#v, want only Sync mode commands", defaultCommands())
 	}
 }
 

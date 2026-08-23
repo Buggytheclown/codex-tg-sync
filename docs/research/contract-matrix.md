@@ -8,7 +8,16 @@ This file now serves two purposes:
 - target Telegram observer/UI v2 deltas that the Go runtime is expected to adopt
 - v0.5 Codex Control Plane contracts that future adapters should consume
 
-## Commands
+## Advertised Telegram command menu
+
+- `/sync on|off`
+- `/status`
+- `/refresh`
+- `/projects`
+- `/newchat`
+- `/stop`
+
+## Hidden legacy compatibility commands
 
 - `/start`
 - `/help`
@@ -35,6 +44,9 @@ This file now serves two purposes:
 - `/stop [thread]`
 - `/approve <request_id>`
 - `/deny <request_id>`
+
+Legacy handlers remain callable for compatibility, but are not registered in
+the Telegram command menu.
 
 ## Aliases and adjacent commands
 
@@ -120,11 +132,11 @@ Local HTTP adapter:
 
 ## Telegram Adapter Contract
 
-- AFC Control exposes `/sync` to trigger the same idempotent Desktop-chat
+- AFC Control exposes `/sync on|off` for lifecycle and `/refresh` to trigger the same idempotent Desktop-chat
   reconciliation that normally runs on the observer poll interval.
 - While AFC is activating, active, or draining, legacy DM `/help` and `/status`
   remain read-only but every legacy Telegram mutation is rejected before an
-  App Server call. `/afc off` does not restart legacy lifecycle; a later
+  App Server call. `/sync off` does not restart legacy lifecycle; a later
   explicit DM mutation starts it lazily.
 - A plain message in an active AFC topic steers the authoritative active turn.
   A new turn starts only after terminal or explicit stale-active evidence.

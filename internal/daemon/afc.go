@@ -98,7 +98,7 @@ func (s *Service) handleAFCMessage(ctx context.Context, topicID, messageID, user
 			fields[0], _, _ = strings.Cut(fields[0], "@")
 		}
 		switch {
-		case len(fields) == 1 && fields[0] == "/afc":
+		case len(fields) == 1 && fields[0] == "/sync":
 			state, err := s.store.GetAFCState(ctx)
 			if err != nil {
 				return nil, err
@@ -107,20 +107,20 @@ func (s *Service) handleAFCMessage(ctx context.Context, topicID, messageID, user
 				return s.deactivateAFC(ctx)
 			}
 			return s.activateAFC(ctx, userID)
-		case len(fields) == 2 && fields[0] == "/afc" && fields[1] == "on":
+		case len(fields) == 2 && fields[0] == "/sync" && fields[1] == "on":
 			return s.activateAFC(ctx, userID)
-		case len(fields) == 3 && fields[0] == "/afc" && fields[1] == "off" && fields[2] == "--force":
+		case len(fields) == 3 && fields[0] == "/sync" && fields[1] == "off" && fields[2] == "--force":
 			return s.forceDeactivateAFC(ctx)
-		case len(fields) == 2 && fields[0] == "/afc" && fields[1] == "off":
+		case len(fields) == 2 && fields[0] == "/sync" && fields[1] == "off":
 			return s.deactivateAFC(ctx)
 		case len(fields) == 1 && fields[0] == "/status":
 			return s.afcStatus(ctx)
-		case len(fields) == 1 && fields[0] == "/sync":
+		case len(fields) == 1 && fields[0] == "/refresh":
 			return s.syncAFCCommand(ctx)
 		case len(fields) == 1 && (fields[0] == "/projects" || fields[0] == "/newchat"):
 			return s.afcProjectsMenu(ctx, topicID)
 		default:
-			return &DirectResponse{Text: "AFC Control accepts /afc on, /afc off, /status, /sync, /projects, and /newchat. Legacy commands are disabled in this group."}, nil
+			return &DirectResponse{Text: "Sync Control accepts /sync on, /sync off, /status, /refresh, /projects, and /newchat. Legacy commands are disabled in this group."}, nil
 		}
 	}
 	topic, err := s.store.GetActiveAFCTopic(ctx, s.cfg.AFCGroupID, topicID)
@@ -502,7 +502,7 @@ func (s *Service) deactivateAFC(ctx context.Context) (*DirectResponse, error) {
 	}
 	if writer.Starting+writer.Active+writer.Unknown > 0 || hasUnfinishedAFCTopics(topics) || hasUnfinishedAFCDrafts(drafts) {
 		titles := unfinishedAFCWorkTitles(topics, drafts)
-		return &DirectResponse{Text: "AFC off refused; unfinished topics: " + strings.Join(titles, ", ") + ". Use /afc off --force to drain."}, nil
+		return &DirectResponse{Text: "AFC off refused; unfinished topics: " + strings.Join(titles, ", ") + ". Use /sync off --force to drain."}, nil
 	}
 	topics, err = s.store.MarkAFCOff(ctx, state.SessionID)
 	if err != nil {
@@ -540,7 +540,7 @@ func (s *Service) afcStatus(ctx context.Context) (*DirectResponse, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &DirectResponse{Text: fmt.Sprintf("AFC state: %s\nSession: %s\nInitial topic limit: %d\nConnected topics: %d\nReady drafts: %d\nSync command: /sync\nNew task commands: /projects, /newchat\nActivation summary: %s",
+	return &DirectResponse{Text: fmt.Sprintf("AFC state: %s\nSession: %s\nInitial topic limit: %d\nConnected topics: %d\nReady drafts: %d\nRefresh command: /refresh\nNew task commands: /projects, /newchat\nActivation summary: %s",
 		state.State, state.SessionID, afcInitialTopicLimit(s.cfg.AFCInitialTopicLimit), countConnectedAFCTopics(topics), countReadyAFCDrafts(drafts), strings.TrimSpace(state.ActivationSummaryJSON))}, nil
 }
 
@@ -1128,7 +1128,7 @@ func (s *Service) finishStartup(ctx context.Context, cleanupSessionID string) {
 		"Fix:\n" +
 		"1. Start the managed daemon: codex app-server daemon start\n" +
 		"2. Restart Codex Desktop in local-daemon mode.\n" +
-		"3. Restart codex-tg, then run /afc on in Control."}
+		"3. Restart codex-tg, then run /sync on in Control."}
 	if _, err := forum.SendAFCMessage(ctx, afcControlTopicID, message, false); err != nil {
 		s.logLifecycle("afc_startup_warning_failed", lifecycleFields{"error": err})
 		return

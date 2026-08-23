@@ -392,27 +392,12 @@ func (b *Bot) sendFailureMessage(ctx context.Context, chatID, topicID int64, cau
 
 func defaultCommands() []BotCommand {
 	return []BotCommand{
-		{Command: "start", Description: "Bridge status and quick help"},
-		{Command: "help", Description: "Command list"},
-		{Command: "status", Description: "Daemon and routing status"},
-		{Command: "threads", Description: "List cached Codex threads"},
-		{Command: "projects", Description: "List cached projects"},
-		{Command: "newchat", Description: "Start a new Codex UI Chat"},
-		{Command: "newthread", Description: "Start without project selection"},
-		{Command: "show", Description: "Show a thread card"},
-		{Command: "bind", Description: "Bind this chat to a thread"},
-		{Command: "reply", Description: "Send input to a thread"},
-		{Command: "plan", Description: "Start Plan Mode in a thread"},
-		{Command: "settings", Description: "Show Codex model settings"},
-		{Command: "model", Description: "Choose the Codex model"},
-		{Command: "effort", Description: "Choose reasoning effort"},
-		{Command: "context", Description: "Show current routing context"},
-		{Command: "observe", Description: "Enable or disable observer mode"},
-		{Command: "panelmode", Description: "Switch trio lifecycle mode"},
-		{Command: "repair", Description: "Restart app-server sessions"},
+		{Command: "sync", Description: "Enable or disable Sync mode"},
+		{Command: "status", Description: "Show Sync mode status"},
+		{Command: "refresh", Description: "Refresh Desktop chat topics"},
+		{Command: "projects", Description: "Start a task in a project"},
+		{Command: "newchat", Description: "Start a new Codex chat"},
 		{Command: "stop", Description: "Interrupt the active turn"},
-		{Command: "approve", Description: "Approve a pending request"},
-		{Command: "deny", Description: "Decline a pending request"},
 	}
 }
 

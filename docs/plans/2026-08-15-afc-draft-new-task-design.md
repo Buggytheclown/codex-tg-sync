@@ -33,7 +33,7 @@ the first prompt.
   source message through the new first-turn path.
 - The first prompt produces a short Telegram-safe title. AFC renames the topic
   immediately and asks App Server to use the same thread name best-effort.
-- `/afc off` treats ready drafts as cleanup targets. A starting or
+- `/sync off` treats ready drafts as cleanup targets. A starting or
   ownership-unknown draft blocks safe off just like unfinished bound work.
 - AFC Control fallback help lists `/projects` and `/newchat` alongside the
   lifecycle commands it already accepts.

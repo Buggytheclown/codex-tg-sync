@@ -56,7 +56,7 @@ Desktop sees without maintaining a second App Server runtime.
   bridge-restart continuation behavior for the MVP by resetting AFC to `off`;
   the reconciliation rule still applies to in-process connection repair.
 - AFC active and legacy DM mutation are mutually exclusive. Legacy code remains
-  lazy and compatible; `/afc off` does not restore it automatically.
+  lazy and compatible; `/sync off` does not restore it automatically.
 
 ## Consequences
 

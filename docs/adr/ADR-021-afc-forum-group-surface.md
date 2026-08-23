@@ -32,7 +32,7 @@ a deleted or stale topic is different from a retryable Telegram outage.
   `retry_after` when supplied.
 - `message thread not found`, deleted-topic, and closed-topic failures are typed
   as stale topic failures. HTTP/API 5xx and 429 are retryable.
-- After the security/capability probe succeeds, `/afc on` idempotently renames
+- After the security/capability probe succeeds, `/sync on` idempotently renames
   the built-in General topic to permanent `Control` with
   `editGeneralForumTopic`. A Telegram `not modified` response is success; any
   other preparation failure aborts activation before session or task-topic

@@ -34,7 +34,7 @@ Contract notes:
   thread.
 - `thread/start` uses an unclaimed process reservation and claims the returned
   durable id before the first turn.
-- `/afc off` must not restore the observer or start/resume an eager legacy
+- `/sync off` must not restore the observer or start/resume an eager legacy
   lifecycle; explicit later legacy work may start its writer lazily.
 
 ## Shared Daemon AFC Sync
@@ -91,7 +91,7 @@ Contract notes:
 - Shared-daemon subscription resumes by exact `threadId` only; `thread/read`
   remains the durable catch-up source.
 - A `codex-tg` process restart resets AFC to `off`, cleans the previous Telegram
-  session, and requires a manual `/afc on`; it does not interrupt Codex work.
+  session, and requires a manual `/sync on`; it does not interrupt Codex work.
 - AFC active rejects legacy DM mutations before App Server access. Off does not
   restore legacy lifecycle; explicit later DM work may start lazily.
 - Long AFC Finals are split at Telegram's UTF-16 message boundary. The first

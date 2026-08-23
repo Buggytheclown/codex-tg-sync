@@ -52,7 +52,7 @@ must not replay the prompt or kill the process blindly.
   mutation while another process generation owns that thread.
 - AFC shutdown drains and closes only the AFC writer. It does not interrupt a
   legacy writer that owns other threads.
-- `/afc off` does not restore the observer, start an eager legacy writer, or
+- `/sync off` does not restore the observer, start an eager legacy writer, or
   resume tracked legacy threads. A later explicit legacy mutation may lazily
   start the legacy writer.
 

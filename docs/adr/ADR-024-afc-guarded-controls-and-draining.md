@@ -22,9 +22,9 @@ and force-off must not trade cleanup convenience for lost turn ownership.
   current AFC lease. In shared-daemon mode, ADR-026 allows `/stop` to re-read
   the topic's exact durable thread and interrupt its authoritative active turn
   regardless of Desktop or Telegram origin. It never guesses a turn id.
-- Safe `/afc off` refuses while starting, active, or unknown leases exist and
+- Safe `/sync off` refuses while starting, active, or unknown leases exist and
   lists their stable topic titles.
-- `/afc off --force` first changes the writer/session to `draining`, rejects new
+- `/sync off --force` first changes the writer/session to `draining`, rejects new
   starts, interrupts each known active AFC turn, and waits for guarded terminal
   evidence. Full confirmation closes the shared writer, then commits logical
   off and starts best-effort topic cleanup.

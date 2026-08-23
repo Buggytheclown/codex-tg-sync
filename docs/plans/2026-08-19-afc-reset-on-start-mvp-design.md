@@ -4,7 +4,7 @@
 
 Make `codex-tg` restarts predictable for the MVP. Every process start resets
 the Telegram AFC surface to `off`, cleans up the previous AFC session, and
-requires an explicit `/afc on` before Telegram can mutate Codex threads again.
+requires an explicit `/sync on` before Telegram can mutate Codex threads again.
 
 The rest of the SQLite control-plane state remains intact. In particular,
 thread snapshots, bindings, observer routes, delivery metadata, and Codex
@@ -30,7 +30,7 @@ continues independently of the Telegram AFC reset.
    for this process start, including the operator recovery steps.
 
 No AFC session is activated automatically. The operator starts a fresh session
-with `/afc on` after runtime health is restored.
+with `/sync on` after runtime health is restored.
 
 ## Runtime Recovery
 
@@ -39,7 +39,7 @@ The supported macOS startup order is:
 1. start the managed Codex App Server daemon;
 2. start Codex Desktop in local-daemon mode;
 3. start or restart `codex-tg`;
-4. verify the shared connection and run `/afc on` in Control.
+4. verify the shared connection and run `/sync on` in Control.
 
 Shared-daemon mode remains fail-closed: `codex-tg` must not spawn a private App
 Server when the configured Unix socket is unavailable.
@@ -64,8 +64,8 @@ Out of scope:
 ## Acceptance
 
 - Restarting from an AFC topic with `starting`, `active`, or `unknown` work
-  produces AFC `off`, not an `/afc off` refusal.
-- The old AFC topics are cleanup-only and a later `/afc on` creates a fresh
+  produces AFC `off`, not a `/sync off` refusal.
+- The old AFC topics are cleanup-only and a later `/sync on` creates a fresh
   session without replaying Telegram input.
 - Non-AFC SQLite records survive the reset.
 - Stale persisted connection flags do not report a connection before the new

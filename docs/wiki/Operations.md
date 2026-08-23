@@ -54,7 +54,7 @@ closes the transport and can make the turn appear `interrupted`.
 In shared-daemon AFC mode, Codex Desktop and `codex-tg` use the same managed App
 Server. Restarting only `codex-tg` does not interrupt the authoritative Codex
 turn, but it intentionally resets AFC to `off` and cleans the previous Telegram
-topics. Run `/afc on` after the bridge reconnects.
+topics. Run `/sync on` after the bridge reconnects.
 
 Until a safe restart command exists, prefer this order:
 

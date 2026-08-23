@@ -16,7 +16,7 @@ created only some topics.
   AFC topics never appear in legacy bindings, observer targets, or panels.
 - Exact AFC-group updates pass through an AFC router before every legacy
   message or callback handler. Unknown and cleanup topics fail closed.
-- `/afc on` validates the private group, reads one fresh `thread/list`
+- `/sync on` validates the private group, reads one fresh `thread/list`
   snapshot, filters archived/internal threads, sorts by
   `updated_at DESC, thread_id ASC`, and attempts at most eight topics once each.
 - Every successful topic is persisted immediately. One or more successes make
@@ -45,7 +45,7 @@ created only some topics.
 - While an AFC writer lease is active, a poll snapshot for a different turn is
   stale presentation evidence and cannot replace or append after the active
   turn's status message.
-- `/afc off` commits logical `off` before best-effort topic deletion. Failed
+- `/sync off` commits logical `off` before best-effort topic deletion. Failed
   deletes remain cleanup-only and unroutable. It does not restore the legacy
   observer and does not start, stop, or replace the legacy writer.
 - Restart keeps an active session passive. An interrupted `activating` session

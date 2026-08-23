@@ -141,7 +141,7 @@ func TestAFCPartialActivationOwnsGroupAndDisablesLegacyObserver(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	response, err := service.HandleMessage(ctx, -1001, 1, 123456789, "/afc on", 0)
+	response, err := service.HandleMessage(ctx, -1001, 1, 123456789, "/sync on", 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -188,7 +188,7 @@ func TestAFCActivationUsesConfiguredInitialTopicLimit(t *testing.T) {
 	forum := &fakeAFCForum{nextTopicID: 10}
 	service.SetAFCForum(forum)
 
-	response, err := service.HandleMessage(context.Background(), -1001, 1, 123456789, "/afc on", 0)
+	response, err := service.HandleMessage(context.Background(), -1001, 1, 123456789, "/sync on", 0)
 	if err != nil || response == nil {
 		t.Fatalf("response=%#v err=%v", response, err)
 	}
@@ -252,7 +252,7 @@ func TestAFCSyncDiscoversNewDesktopThreadExactlyOnceAndResubscribesAfterReconnec
 	}
 }
 
-func TestAFCSyncControlCommandReportsDiscoveryAndHelpAdvertisesIt(t *testing.T) {
+func TestAFCRefreshControlCommandReportsDiscoveryAndHelpAdvertisesIt(t *testing.T) {
 	service := activeAFCService(t)
 	ctx := context.Background()
 	state, err := service.store.GetAFCState(ctx)
@@ -269,12 +269,12 @@ func TestAFCSyncControlCommandReportsDiscoveryAndHelpAdvertisesIt(t *testing.T) 
 	forum := &fakeAFCForum{nextTopicID: 30}
 	service.SetAFCForum(forum)
 
-	response, err := service.HandleMessage(ctx, -1001, 1, 123456789, "/sync", 0)
+	response, err := service.HandleMessage(ctx, -1001, 1, 123456789, "/refresh", 0)
 	if err != nil || response == nil || !strings.Contains(response.Text, "discovered: 1") {
 		t.Fatalf("response=%#v err=%v", response, err)
 	}
 	help, err := service.HandleMessage(ctx, -1001, 1, 123456789, "/unknown", 0)
-	if err != nil || help == nil || !strings.Contains(help.Text, "/sync") {
+	if err != nil || help == nil || !strings.Contains(help.Text, "/refresh") {
 		t.Fatalf("help=%#v err=%v", help, err)
 	}
 }
@@ -289,7 +289,7 @@ func TestAFCActivationFailsClosedWhenControlPreparationFails(t *testing.T) {
 	forum := &fakeAFCForum{prepareErr: errors.New("cannot rename General")}
 	service.SetAFCForum(forum)
 
-	response, err := service.HandleMessage(context.Background(), -1001, 1, 123456789, "/afc on", 0)
+	response, err := service.HandleMessage(context.Background(), -1001, 1, 123456789, "/sync on", 0)
 	if err == nil || !strings.Contains(err.Error(), "prepare AFC Control") {
 		t.Fatalf("response=%#v err=%v, want Control preparation failure", response, err)
 	}
@@ -325,7 +325,7 @@ func TestAFCZeroTopicActivationLeavesObserverEnabled(t *testing.T) {
 	if err := service.store.SetGlobalObserverTarget(ctx, 99, 0, true); err != nil {
 		t.Fatal(err)
 	}
-	response, err := service.HandleMessage(ctx, -1001, 1, 123456789, "/afc on", 0)
+	response, err := service.HandleMessage(ctx, -1001, 1, 123456789, "/sync on", 0)
 	if err != nil || response == nil || !strings.Contains(response.Text, "active: 0") {
 		t.Fatalf("response=%#v err=%v", response, err)
 	}
@@ -1128,7 +1128,7 @@ func TestAFCOffMarksOffBeforeCleanupAndDoesNotRestoreLegacy(t *testing.T) {
 		}
 	}}
 	service.SetAFCForum(forum)
-	response, err := service.HandleMessage(ctx, -1001, 1, 123456789, "/afc off", 0)
+	response, err := service.HandleMessage(ctx, -1001, 1, 123456789, "/sync off", 0)
 	if err != nil || response == nil {
 		t.Fatalf("response=%#v err=%v", response, err)
 	}
@@ -1153,7 +1153,7 @@ func TestAFCOffCleansReadyDraftTopic(t *testing.T) {
 	}
 	forum := &fakeAFCForum{}
 	service.SetAFCForum(forum)
-	response, err := service.HandleMessageWithID(ctx, -1001, 1, 908, 123456789, "/afc off", 0)
+	response, err := service.HandleMessageWithID(ctx, -1001, 1, 908, 123456789, "/sync off", 0)
 	if err != nil || response == nil || !strings.Contains(response.Text, "deleted 3 topic") {
 		t.Fatalf("response=%#v err=%v deletes=%#v", response, err, forum.deletes)
 	}
@@ -1178,7 +1178,7 @@ func TestAFCSafeOffRefusesStartingDraft(t *testing.T) {
 	}
 	forum := &fakeAFCForum{}
 	service.SetAFCForum(forum)
-	response, err := service.HandleMessageWithID(ctx, -1001, 1, 910, 123456789, "/afc off", 0)
+	response, err := service.HandleMessageWithID(ctx, -1001, 1, 910, 123456789, "/sync off", 0)
 	if err != nil || response == nil || !strings.Contains(response.Text, "off refused") || !strings.Contains(response.Text, "New task") {
 		t.Fatalf("response=%#v err=%v", response, err)
 	}
@@ -1313,7 +1313,7 @@ func TestAFCActiveBlocksLegacyDMBeforeAppServerAndOffKeepsLegacyLazy(t *testing.
 		t.Fatalf("status=%#v err=%v", status, err)
 	}
 
-	if _, err := service.HandleMessageWithID(ctx, -1001, 1, 804, 123456789, "/afc off", 0); err != nil {
+	if _, err := service.HandleMessageWithID(ctx, -1001, 1, 804, 123456789, "/sync off", 0); err != nil {
 		t.Fatal(err)
 	}
 	if legacy.startCalls != 0 {
@@ -1764,7 +1764,7 @@ func TestAFCSafeOffRefusesActiveTurnsWithoutCleanup(t *testing.T) {
 	if _, err := service.HandleMessageWithID(ctx, -1001, 11, 501, 123456789, "one", 0); err != nil {
 		t.Fatal(err)
 	}
-	response, err := service.HandleMessageWithID(ctx, -1001, 1, 700, 123456789, "/afc off", 0)
+	response, err := service.HandleMessageWithID(ctx, -1001, 1, 700, 123456789, "/sync off", 0)
 	if err != nil || response == nil || !strings.Contains(response.Text, "refused") {
 		t.Fatalf("response=%#v err=%v", response, err)
 	}
@@ -1794,7 +1794,7 @@ func TestAFCForceOffInterruptsAllAndWaitsForTerminalBeforeCleanup(t *testing.T) 
 	service.mu.Lock()
 	service.poll, service.pollConnected = poll, true
 	service.mu.Unlock()
-	response, err := service.HandleMessageWithID(ctx, -1001, 1, 700, 123456789, "/afc off --force", 0)
+	response, err := service.HandleMessageWithID(ctx, -1001, 1, 700, 123456789, "/sync off --force", 0)
 	if err != nil || response == nil || !strings.Contains(response.Text, "AFC off") {
 		t.Fatalf("response=%#v err=%v", response, err)
 	}
@@ -1826,7 +1826,7 @@ func TestAFCForceOffTimeoutStaysDrainingAndDoesNotCleanup(t *testing.T) {
 	service.mu.Lock()
 	service.poll, service.pollConnected = poll, true
 	service.mu.Unlock()
-	response, err := service.HandleMessageWithID(ctx, -1001, 1, 700, 123456789, "/afc off --force", 0)
+	response, err := service.HandleMessageWithID(ctx, -1001, 1, 700, 123456789, "/sync off --force", 0)
 	if err != nil || response == nil || !strings.Contains(response.Text, "remains draining") {
 		t.Fatalf("response=%#v err=%v", response, err)
 	}
@@ -1852,11 +1852,11 @@ func TestAFCRestartUnknownOwnershipBlocksSafeAndForceCleanup(t *testing.T) {
 	if err := service.store.RecoverAFCWriterState(ctx); err != nil {
 		t.Fatal(err)
 	}
-	safe, err := service.HandleMessageWithID(ctx, -1001, 1, 700, 123456789, "/afc off", 0)
+	safe, err := service.HandleMessageWithID(ctx, -1001, 1, 700, 123456789, "/sync off", 0)
 	if err != nil || safe == nil || !strings.Contains(safe.Text, "refused") {
 		t.Fatalf("safe=%#v err=%v", safe, err)
 	}
-	forced, err := service.HandleMessageWithID(ctx, -1001, 1, 701, 123456789, "/afc off --force", 0)
+	forced, err := service.HandleMessageWithID(ctx, -1001, 1, 701, 123456789, "/sync off --force", 0)
 	if err != nil || forced == nil || !strings.Contains(forced.Text, "remains draining") {
 		t.Fatalf("forced=%#v err=%v", forced, err)
 	}
@@ -1905,7 +1905,7 @@ func TestAFCStartupResetsSessionCleansTopicsAndWarnsOnceWhenDaemonUnavailable(t 
 	}
 	if len(forum.sends) != 1 || forum.sends[0].topicID != afcControlTopicID ||
 		!strings.Contains(forum.sends[0].text, "Shared Codex App Server is unavailable") ||
-		!strings.Contains(forum.sends[0].text, "/afc on") {
+		!strings.Contains(forum.sends[0].text, "/sync on") {
 		t.Fatalf("startup warnings=%#v", forum.sends)
 	}
 	if value, _ := service.store.GetState(ctx, "appserver.poll_connected"); value != "false" {
