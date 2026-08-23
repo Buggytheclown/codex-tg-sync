@@ -248,7 +248,7 @@ func externalLaunchRequestText(request model.ExternalLaunchRequest) string {
 	if strings.TrimSpace(request.ErrorSummary) != "" {
 		lines = append(lines, "Error: "+request.ErrorSummary)
 	}
-	lines = append(lines, "", "Requested text:", request.Prompt)
+	lines = append(lines, "", "Requested text:", externalLaunchTelegramPreview(request))
 	text := strings.Join(lines, "\n")
 	const safeTelegramTextRunes = 3900
 	runes := []rune(text)
@@ -256,6 +256,13 @@ func externalLaunchRequestText(request model.ExternalLaunchRequest) string {
 		text = string(runes[:safeTelegramTextRunes]) + "\n… [truncated to Telegram limit]"
 	}
 	return text
+}
+
+func externalLaunchTelegramPreview(request model.ExternalLaunchRequest) string {
+	if preview := strings.TrimSpace(request.SafePreview); preview != "" {
+		return preview
+	}
+	return strings.TrimSpace(request.Prompt)
 }
 
 func (s *Service) handleExternalLaunchCallback(ctx context.Context, chatID, topicID, messageID int64, route *model.CallbackRoute) (*DirectResponse, error) {

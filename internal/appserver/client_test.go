@@ -315,7 +315,7 @@ func TestStartParamsIncludeExplicitPermissions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if threadParams["approvalPolicy"] != "never" || threadParams["sandbox"] != "dangerFullAccess" {
+	if threadParams["approvalPolicy"] != "never" || threadParams["sandbox"] != "danger-full-access" {
 		t.Fatalf("thread permissions = %#v", threadParams)
 	}
 
@@ -328,6 +328,31 @@ func TestStartParamsIncludeExplicitPermissions(t *testing.T) {
 	}
 	sandbox, ok := turnParams["sandboxPolicy"].(map[string]any)
 	if turnParams["approvalPolicy"] != "never" || !ok || sandbox["type"] != "dangerFullAccess" {
+		t.Fatalf("turn permissions = %#v", turnParams)
+	}
+}
+
+func TestStartParamsUseProtocolSpecificPermissionEnums(t *testing.T) {
+	threadParams, err := threadStartParams("/tmp/project", ThreadStartOptions{
+		ApprovalPolicy: "on-request",
+		SandboxMode:    "workspace-write",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if threadParams["approvalPolicy"] != "on-request" || threadParams["sandbox"] != "workspace-write" {
+		t.Fatalf("thread permissions = %#v", threadParams)
+	}
+
+	turnParams, err := turnStartParams("thread-1", "Run it", "/tmp/project", TurnStartOptions{
+		ApprovalPolicy: "untrusted",
+		SandboxMode:    "read-only",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sandbox, ok := turnParams["sandboxPolicy"].(map[string]any)
+	if turnParams["approvalPolicy"] != "untrusted" || !ok || sandbox["type"] != "readOnly" {
 		t.Fatalf("turn permissions = %#v", turnParams)
 	}
 }

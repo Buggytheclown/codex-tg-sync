@@ -824,7 +824,7 @@ func addPermissionParams(params map[string]any, approvalPolicy, sandboxMode stri
 	} else if value != "" {
 		params["approvalPolicy"] = value
 	}
-	if value, err := appServerSandboxMode(sandboxMode); err != nil {
+	if value, err := appServerSandboxMode(sandboxMode, turn); err != nil {
 		return err
 	} else if value != "" {
 		if turn {
@@ -843,23 +843,32 @@ func appServerApprovalPolicy(value string) (string, error) {
 	case "never":
 		return "never", nil
 	case "on-request", "onrequest":
-		return "onRequest", nil
+		return "on-request", nil
 	case "untrusted", "unless-trusted", "unlesstrusted":
-		return "unlessTrusted", nil
+		return "untrusted", nil
 	default:
 		return "", fmt.Errorf("unsupported approval policy %q", value)
 	}
 }
 
-func appServerSandboxMode(value string) (string, error) {
+func appServerSandboxMode(value string, turn bool) (string, error) {
 	switch strings.ToLower(strings.ReplaceAll(strings.TrimSpace(value), "_", "-")) {
 	case "":
 		return "", nil
 	case "read-only", "readonly":
+		if !turn {
+			return "read-only", nil
+		}
 		return "readOnly", nil
 	case "workspace-write", "workspacewrite":
+		if !turn {
+			return "workspace-write", nil
+		}
 		return "workspaceWrite", nil
 	case "danger-full-access", "dangerfullaccess":
+		if !turn {
+			return "danger-full-access", nil
+		}
 		return "dangerFullAccess", nil
 	default:
 		return "", fmt.Errorf("unsupported sandbox mode %q", value)

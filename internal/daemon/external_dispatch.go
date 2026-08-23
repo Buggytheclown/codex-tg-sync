@@ -40,7 +40,8 @@ func (s *Service) dispatchExternalLaunchRequest(ctx context.Context, requestID s
 		return
 	}
 
-	title := afcPromptTopicTitle(request.Prompt)
+	telegramPreview := externalLaunchTelegramPreview(*request)
+	title := afcPromptTopicTitle(telegramPreview)
 	topicID, err := forum.CreateAFCTopic(ctx, title)
 	if err != nil {
 		_, _ = s.store.CompleteExternalLaunchRequest(ctx, request.ID, model.ExternalLaunchFailed, "", "", "telegram_topic", "Telegram could not create the session topic.")
@@ -60,7 +61,7 @@ func (s *Service) dispatchExternalLaunchRequest(ctx context.Context, requestID s
 		s.finishExternalLaunchDispatch(ctx, request.AutoStart)
 		return
 	}
-	sourceMessageID, err := forum.SendAFCMessage(ctx, topicID, model.RenderedMessage{Text: afcUserHeader + "\n" + request.Prompt}, true)
+	sourceMessageID, err := forum.SendAFCMessage(ctx, topicID, model.RenderedMessage{Text: afcUserHeader + "\n" + telegramPreview}, true)
 	if err != nil {
 		_ = forum.DeleteAFCTopic(ctx, topicID)
 		_ = s.store.DeleteAFCTopic(ctx, state.SessionID, topicID)
@@ -101,6 +102,9 @@ func (s *Service) dispatchExternalLaunchRequest(ctx context.Context, requestID s
 		status = model.ExternalLaunchFailed
 		errorType = "dispatch_rejected"
 		errorSummary = "AFC rejected the request before its first turn could start."
+		if response != nil && strings.TrimSpace(response.Text) != "" {
+			errorSummary = strings.TrimSpace(response.Text)
+		}
 	}
 	_, _ = s.store.CompleteExternalLaunchRequest(ctx, request.ID, status, threadID, "", errorType, errorSummary)
 	if status == model.ExternalLaunchFailed {

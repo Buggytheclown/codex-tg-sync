@@ -38,7 +38,8 @@ func TestExternalLaunchApprovalRendersOnceAndDismissEditsSameMessage(t *testing.
 	service.cfg.ExternalRequestsTopicID = 77
 	sender := &recordingSender{}
 	service.SetSender(sender)
-	request := daemonExternalRequest("test:approval:1", "Please inspect the full request text")
+	request := daemonExternalRequest("test:approval:1", "Please inspect the original message")
+	request.Prompt = "Source: test\nUntrusted context that must only reach Codex\n\nUser request:\n" + request.SafePreview
 	if _, err := service.IngestExternalRequests(context.Background(), "test", 1, []model.ExternalLaunchRequest{request}); err != nil {
 		t.Fatal(err)
 	}
@@ -49,7 +50,7 @@ func TestExternalLaunchApprovalRendersOnceAndDismissEditsSameMessage(t *testing.
 		t.Fatalf("messages=%#v, want one durable approval", sender.messages)
 	}
 	message := sender.messages[0]
-	if message.chatID != -1001 || message.topicID != 77 || !strings.Contains(message.text, request.Prompt) || !strings.Contains(message.text, request.Sender) {
+	if message.chatID != -1001 || message.topicID != 77 || !strings.Contains(message.text, request.SafePreview) || strings.Contains(message.text, "Untrusted context") || !strings.Contains(message.text, request.Sender) {
 		t.Fatalf("approval message=%#v", message)
 	}
 	dismissToken := callbackTokenForButton(message.buttons, "Dismiss")
@@ -254,7 +255,9 @@ func TestDispatchExternalLaunchRequestCreatesAFCThreadTurnAndTopic(t *testing.T)
 	service.liveFactory = func() Session { return writer }
 	forum := &fakeAFCForum{nextTopicID: 20}
 	service.SetAFCForum(forum)
-	request := prepareStartingExternalRequest(t, service, "test:dispatch:1", "run requested task")
+	request := daemonExternalRequest("test:dispatch:1", "run requested task")
+	request.Prompt = "Source: test\nUntrusted context for Codex only\n\nUser request:\n" + request.SafePreview
+	request = prepareStartingExternalRequestRecord(t, service, request)
 
 	service.dispatchExternalLaunchRequest(context.Background(), request.ID)
 	stored, _ := service.store.GetExternalLaunchRequest(context.Background(), request.ID)
@@ -272,7 +275,7 @@ func TestDispatchExternalLaunchRequestCreatesAFCThreadTurnAndTopic(t *testing.T)
 	}
 	userMessages := 0
 	for _, sent := range forum.sends {
-		if sent.topicID == 21 && sent.text == afcUserHeader+"\n"+request.Prompt {
+		if sent.topicID == 21 && sent.text == afcUserHeader+"\n"+request.SafePreview {
 			userMessages++
 		}
 	}
@@ -290,7 +293,7 @@ func TestDispatchExternalLaunchRequestCreatesAFCThreadTurnAndTopic(t *testing.T)
 	}
 	userMessages = 0
 	for _, sent := range forum.sends {
-		if sent.topicID == 21 && sent.text == afcUserHeader+"\n"+request.Prompt {
+		if sent.topicID == 21 && sent.text == afcUserHeader+"\n"+request.SafePreview {
 			userMessages++
 		}
 	}
@@ -378,7 +381,11 @@ func TestDispatchExternalLaunchRequestPromptSendFailureCreatesNoCodexState(t *te
 
 func prepareStartingExternalRequest(t *testing.T, service *Service, id, prompt string) model.ExternalLaunchRequest {
 	t.Helper()
-	request := daemonExternalRequest(id, prompt)
+	return prepareStartingExternalRequestRecord(t, service, daemonExternalRequest(id, prompt))
+}
+
+func prepareStartingExternalRequestRecord(t *testing.T, service *Service, request model.ExternalLaunchRequest) model.ExternalLaunchRequest {
+	t.Helper()
 	ctx := context.Background()
 	if _, err := service.IngestExternalRequests(ctx, "test", time.Now().UnixNano(), []model.ExternalLaunchRequest{request}); err != nil {
 		t.Fatal(err)
