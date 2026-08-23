@@ -82,7 +82,7 @@ func (s *Service) dispatchExternalLaunchRequest(ctx context.Context, requestID s
 		ApprovalsReviewer: s.cfg.ExternalApprovalsReviewer,
 		SandboxMode:       s.cfg.ExternalSandboxMode,
 	}
-	response, dispatchErr := s.startClaimedAFCDraftLocked(ctx, claimed, receipt, request.Prompt, permissions)
+	response, dispatchErr := s.startClaimedAFCDraftLocked(ctx, claimed, receipt, request.Prompt, telegramPreview, permissions)
 	storedReceipt, receiptErr := s.store.GetAFCReceipt(ctx, topicID, sourceMessageID)
 	if response != nil && strings.TrimSpace(response.ThreadID) != "" && strings.TrimSpace(response.TurnID) != "" && dispatchErr == nil {
 		_, _ = s.store.CompleteExternalLaunchRequest(ctx, request.ID, model.ExternalLaunchSessionStarted,

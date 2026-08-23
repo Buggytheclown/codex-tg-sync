@@ -283,6 +283,9 @@ func TestDispatchExternalLaunchRequestCreatesAFCThreadTurnAndTopic(t *testing.T)
 	if userMessages != 1 {
 		t.Fatalf("initial AFC user messages=%d sends=%#v, want exactly one", userMessages, forum.sends)
 	}
+	if len(forum.renames) != 1 || forum.renames[0].title != request.SafePreview {
+		t.Fatalf("AFC topic renames=%#v, want safe preview title", forum.renames)
+	}
 	topics, err := service.store.ListAFCTopics(context.Background(), "s")
 	if err != nil || len(topics) != 3 || topics[2].ThreadID != "external-thread" || topics[2].TopicID != 21 {
 		t.Fatalf("topics=%#v err=%v", topics, err)

@@ -35,10 +35,10 @@ func (s *Service) dispatchAFCDraftMessage(ctx context.Context, draft model.AFCTo
 	if !created {
 		return afcDuplicateReceiptResponse(receipt), nil
 	}
-	return s.startClaimedAFCDraftLocked(ctx, claimed, receipt, text, appserver.ThreadStartOptions{})
+	return s.startClaimedAFCDraftLocked(ctx, claimed, receipt, text, text, appserver.ThreadStartOptions{})
 }
 
-func (s *Service) startClaimedAFCDraftLocked(ctx context.Context, draft model.AFCTopicDraft, receipt model.AFCMessageReceipt, text string, permissions appserver.ThreadStartOptions) (*DirectResponse, error) {
+func (s *Service) startClaimedAFCDraftLocked(ctx context.Context, draft model.AFCTopicDraft, receipt model.AFCMessageReceipt, text, titleText string, permissions appserver.ThreadStartOptions) (*DirectResponse, error) {
 	lease, err := s.afcWriter.ReserveProcess(ctx, "draft:"+randomToken())
 	if err != nil {
 		_ = s.store.ResetAFCTopicDraftMessage(ctx, draft, receipt)
@@ -69,7 +69,7 @@ func (s *Service) startClaimedAFCDraftLocked(ctx context.Context, draft model.AF
 		_ = s.store.MarkAFCTopicDraftUnknown(ctx, draft, receipt)
 		return &DirectResponse{Text: fmt.Sprintf("AFC created a thread but could not claim it; ownership is unknown: %v", err)}, nil
 	}
-	title := afcPromptTopicTitle(text)
+	title := afcPromptTopicTitle(titleText)
 	thread.Title = title
 	if err := s.store.UpsertThread(ctx, thread); err != nil {
 		_ = s.afcWriter.MarkUnknown(lease)
