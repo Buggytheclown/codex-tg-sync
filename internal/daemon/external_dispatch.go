@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 
+	"github.com/mideco-tech/codex-tg/internal/appserver"
 	"github.com/mideco-tech/codex-tg/internal/model"
 )
 
@@ -75,7 +76,11 @@ func (s *Service) dispatchExternalLaunchRequest(ctx context.Context, requestID s
 		s.finishExternalLaunchDispatch(ctx, request.AutoStart)
 		return
 	}
-	response, dispatchErr := s.startClaimedAFCDraftLocked(ctx, claimed, receipt, request.Prompt)
+	permissions := appserver.ThreadStartOptions{
+		ApprovalPolicy: s.cfg.ExternalApprovalPolicy,
+		SandboxMode:    s.cfg.ExternalSandboxMode,
+	}
+	response, dispatchErr := s.startClaimedAFCDraftLocked(ctx, claimed, receipt, request.Prompt, permissions)
 	storedReceipt, receiptErr := s.store.GetAFCReceipt(ctx, topicID, sourceMessageID)
 	if response != nil && strings.TrimSpace(response.ThreadID) != "" && strings.TrimSpace(response.TurnID) != "" && dispatchErr == nil {
 		_, _ = s.store.CompleteExternalLaunchRequest(ctx, request.ID, model.ExternalLaunchSessionStarted,
@@ -108,5 +113,12 @@ func (s *Service) dispatchExternalLaunchRequest(ctx context.Context, requestID s
 func (s *Service) finishExternalLaunchDispatch(ctx context.Context, autoStart bool) {
 	if !autoStart {
 		s.processExternalLaunchRequests(ctx)
+		return
 	}
+	s.externalRequestMu.Lock()
+	s.mu.RLock()
+	sender := s.sender
+	s.mu.RUnlock()
+	s.renderExternalLaunchRequestsLocked(ctx, sender)
+	s.externalRequestMu.Unlock()
 }

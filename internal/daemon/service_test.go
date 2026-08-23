@@ -4928,6 +4928,7 @@ type stubSession struct {
 	turnSteerErr           error
 	turnSteerErrs          []error
 	threadStartCalls       []string
+	threadStartOptions     []appserver.ThreadStartOptions
 	threadSetNameCalls     []threadSetNameCall
 	threadResumeCalls      []threadResumeCall
 	turnSteerCalls         []turnCall
@@ -4955,6 +4956,8 @@ type turnCall struct {
 	collaborationMode string
 	model             string
 	reasoningEffort   string
+	approvalPolicy    string
+	sandboxMode       string
 }
 
 type respondRequestCall struct {
@@ -4997,8 +5000,9 @@ func (s *stubSession) ThreadResume(ctx context.Context, threadID, cwd string) (m
 	}
 	return nil, nil
 }
-func (s *stubSession) ThreadStart(ctx context.Context, cwd string) (map[string]any, error) {
+func (s *stubSession) ThreadStart(ctx context.Context, cwd string, options appserver.ThreadStartOptions) (map[string]any, error) {
 	s.threadStartCalls = append(s.threadStartCalls, cwd)
+	s.threadStartOptions = append(s.threadStartOptions, options)
 	if s.threadStartErr != nil {
 		return nil, s.threadStartErr
 	}
@@ -5019,6 +5023,8 @@ func (s *stubSession) TurnStart(ctx context.Context, threadID, message, cwd stri
 		collaborationMode: options.CollaborationMode,
 		model:             options.Model,
 		reasoningEffort:   options.ReasoningEffort,
+		approvalPolicy:    options.ApprovalPolicy,
+		sandboxMode:       options.SandboxMode,
 	})
 	return map[string]any{"turn": map[string]any{"id": "started-turn"}}, nil
 }

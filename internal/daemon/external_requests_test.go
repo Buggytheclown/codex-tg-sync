@@ -73,14 +73,15 @@ func TestExternalLaunchApprovalRendersOnceAndDismissEditsSameMessage(t *testing.
 	}
 }
 
-func TestExternalLaunchAutoStartSkipsApprovalAndClaimsDurably(t *testing.T) {
+func TestExternalLaunchAutoStartRendersStatusWithoutApprovalButtonsAndClaimsDurably(t *testing.T) {
 	t.Parallel()
 	service := activeAFCService(t)
+	service.cfg.ExternalRequestsTopicID = 77
 	sender := &recordingSender{}
 	service.SetSender(sender)
 	request := daemonExternalRequest("test:auto:1", "do work")
 	request.AutoStart = true
-	request.TelegramTopicID = 0
+	request.TelegramTopicID = 77
 	if _, err := service.IngestExternalRequests(context.Background(), "test", 1, []model.ExternalLaunchRequest{request}); err != nil {
 		t.Fatal(err)
 	}
@@ -89,8 +90,36 @@ func TestExternalLaunchAutoStartSkipsApprovalAndClaimsDurably(t *testing.T) {
 	if stored == nil || stored.Status != model.ExternalLaunchStarting {
 		t.Fatalf("stored=%#v, want starting", stored)
 	}
-	if len(sender.messages) != 0 {
-		t.Fatalf("auto-start rendered approval messages=%#v", sender.messages)
+	if len(sender.messages) != 1 || sender.messages[0].topicID != 77 || len(sender.messages[0].buttons) != 0 {
+		t.Fatalf("auto-start status messages=%#v, want one buttonless Telegram card", sender.messages)
+	}
+}
+
+func TestExternalLaunchAutoStartCardEditsToTerminalStatus(t *testing.T) {
+	t.Parallel()
+	service := newTestService(t)
+	service.cfg.AFCGroupID = -1001
+	sender := &recordingSender{}
+	service.SetSender(sender)
+	request := daemonExternalRequest("test:auto:terminal", "do work")
+	request.AutoStart = true
+	request.TelegramTopicID = 77
+	ctx := context.Background()
+	if _, err := service.IngestExternalRequests(ctx, "test", 1, []model.ExternalLaunchRequest{request}); err != nil {
+		t.Fatal(err)
+	}
+	if len(sender.messages) != 1 || len(sender.messages[0].buttons) != 0 {
+		t.Fatalf("initial auto-start card=%#v", sender.messages)
+	}
+	if claimed, err := service.store.ClaimExternalLaunchRequest(ctx, request.ID); err != nil || !claimed {
+		t.Fatalf("claim=%t err=%v", claimed, err)
+	}
+	if changed, err := service.store.CompleteExternalLaunchRequest(ctx, request.ID, model.ExternalLaunchSessionStarted, "thread", "turn", "", ""); err != nil || !changed {
+		t.Fatalf("complete=%t err=%v", changed, err)
+	}
+	service.processExternalLaunchRequests(ctx)
+	if len(sender.edits) != 1 || sender.edits[0].messageID != sender.messages[0].messageID || len(sender.edits[0].buttons) != 0 || !strings.Contains(sender.edits[0].text, "Status: Started") {
+		t.Fatalf("terminal auto-start edit=%#v", sender.edits)
 	}
 }
 
@@ -219,6 +248,8 @@ func TestExternalLaunchApprovalSendAndEditFailuresRemainRetryable(t *testing.T) 
 func TestDispatchExternalLaunchRequestCreatesAFCThreadTurnAndTopic(t *testing.T) {
 	t.Parallel()
 	service := activeAFCService(t)
+	service.cfg.ExternalApprovalPolicy = "never"
+	service.cfg.ExternalSandboxMode = "danger-full-access"
 	writer := &stubSession{threadStartResult: map[string]any{"thread": map[string]any{"id": "external-thread", "cwd": "/project"}}}
 	service.liveFactory = func() Session { return writer }
 	forum := &fakeAFCForum{nextTopicID: 20}
@@ -232,6 +263,12 @@ func TestDispatchExternalLaunchRequestCreatesAFCThreadTurnAndTopic(t *testing.T)
 	}
 	if len(writer.threadStartCalls) != 1 || writer.threadStartCalls[0] != "/project" || len(writer.turnStartCalls) != 1 || writer.turnStartCalls[0].message != request.Prompt {
 		t.Fatalf("thread starts=%#v turn starts=%#v", writer.threadStartCalls, writer.turnStartCalls)
+	}
+	if len(writer.threadStartOptions) != 1 || writer.threadStartOptions[0].ApprovalPolicy != "never" || writer.threadStartOptions[0].SandboxMode != "danger-full-access" {
+		t.Fatalf("thread permissions=%#v", writer.threadStartOptions)
+	}
+	if writer.turnStartCalls[0].approvalPolicy != "never" || writer.turnStartCalls[0].sandboxMode != "danger-full-access" {
+		t.Fatalf("turn permissions=%#v", writer.turnStartCalls[0])
 	}
 	userMessages := 0
 	for _, sent := range forum.sends {

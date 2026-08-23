@@ -12,6 +12,8 @@ import (
 	"github.com/mideco-tech/codex-tg/internal/model"
 )
 
+const externalTelegramVisibilityPending = "__visibility_required__"
+
 func externalSourceCursorKey(source string) string {
 	return "external_source." + strings.TrimSpace(source) + ".cursor"
 }
@@ -52,6 +54,10 @@ func (s *Store) IngestExternalLaunchRequests(ctx context.Context, source string,
 	defer tx.Rollback()
 	created := 0
 	for _, request := range requests {
+		telegramRenderedStatus := request.TelegramRenderedStatus
+		if request.AutoStart && request.TelegramTopicID != 0 && strings.TrimSpace(telegramRenderedStatus) == "" {
+			telegramRenderedStatus = externalTelegramVisibilityPending
+		}
 		result, err := tx.ExecContext(ctx, `
 		INSERT INTO external_launch_requests(
 			id, source, external_id, sender, title, safe_preview, source_url, prompt, cwd, status,
@@ -63,7 +69,7 @@ func (s *Store) IngestExternalLaunchRequests(ctx context.Context, source string,
 		ON CONFLICT(source, external_id) DO NOTHING`,
 			request.ID, request.Source, request.ExternalID, request.Sender, request.Title, nullable(request.SafePreview), nullable(request.SourceURL),
 			request.Prompt, nullable(request.CWD), request.Status, request.TelegramTopicID, request.TelegramMessageID,
-			nullable(request.TelegramRenderedStatus), nullable(request.ThreadID), nullable(request.TurnID), boolToInt(request.AutoStart),
+			nullable(telegramRenderedStatus), nullable(request.ThreadID), nullable(request.TurnID), boolToInt(request.AutoStart),
 			nullable(request.SourceChatID), request.SourceMessageID, request.SourceThreadID, nullable(request.ReplyStatus), nullable(request.ReplyText),
 			request.ReplyMessageID, request.ReplyAttempts, nullable(string(request.ReplyAvailableAt)), nullable(request.ReplyError), nullable(request.ErrorType),
 			nullable(request.ErrorSummary), request.CreatedAt, request.UpdatedAt)
@@ -131,9 +137,16 @@ func (s *Store) ListExternalLaunchRequestsForTelegram(ctx context.Context, limit
 	}
 	rows, err := s.db.QueryContext(ctx, `SELECT `+externalLaunchRequestColumns+`
 	FROM external_launch_requests
-	WHERE auto_start=0 AND (telegram_message_id=0 OR coalesce(telegram_rendered_status,'') != status)
+	WHERE telegram_topic_id != 0 AND (
+		(auto_start=0 AND (telegram_message_id=0 OR coalesce(telegram_rendered_status,'') != status))
+		OR
+		(auto_start=1 AND (
+			telegram_rendered_status=?
+			OR (telegram_message_id != 0 AND coalesce(telegram_rendered_status,'') != status)
+		))
+	)
 	ORDER BY created_at, id
-	LIMIT ?`, limit)
+	LIMIT ?`, externalTelegramVisibilityPending, limit)
 	if err != nil {
 		return nil, err
 	}

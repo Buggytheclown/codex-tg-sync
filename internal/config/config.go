@@ -59,6 +59,8 @@ type Config struct {
 	YMessengerRequireApproval   bool
 	ExternalRequestsTopicID     int64
 	ExternalRequestDefaultCWD   string
+	ExternalApprovalPolicy      string
+	ExternalSandboxMode         string
 	TelegramBotToken            string
 	AllowedUserIDs              []int64
 	AllowedChatIDs              []int64
@@ -163,6 +165,8 @@ func fromSource(source envSource) Config {
 		YMessengerRequireApproval:   source.bool("CTR_GO_YMESSENGER_REQUIRE_APPROVAL", true),
 		ExternalRequestsTopicID:     parseInt64(source.get("CTR_GO_EXTERNAL_REQUESTS_TOPIC_ID")),
 		ExternalRequestDefaultCWD:   source.path("CTR_GO_EXTERNAL_REQUEST_DEFAULT_CWD", defaultCWD),
+		ExternalApprovalPolicy:      strings.TrimSpace(source.get("CTR_GO_EXTERNAL_REQUEST_APPROVAL_POLICY")),
+		ExternalSandboxMode:         strings.TrimSpace(source.get("CTR_GO_EXTERNAL_REQUEST_SANDBOX_MODE")),
 		TelegramBotToken:            source.first("CTR_GO_TELEGRAM_BOT_TOKEN", "CTR_TELEGRAM_BOT_TOKEN"),
 		AllowedUserIDs:              parseInt64List(source.first("CTR_GO_ALLOWED_USER_IDS", "CTR_ALLOWED_USER_IDS")),
 		AllowedChatIDs:              parseInt64List(source.first("CTR_GO_ALLOWED_CHAT_IDS", "CTR_ALLOWED_CHAT_IDS")),
@@ -201,6 +205,8 @@ func (c Config) MarshalJSON() ([]byte, error) {
 		YMessengerRequireApproval   bool    `json:"ymessenger_require_approval"`
 		ExternalRequestsTopicID     int64   `json:"external_requests_topic_id,omitempty"`
 		ExternalRequestDefaultCWD   string  `json:"external_request_default_cwd,omitempty"`
+		ExternalApprovalPolicy      string  `json:"external_request_approval_policy,omitempty"`
+		ExternalSandboxMode         string  `json:"external_request_sandbox_mode,omitempty"`
 		HasTelegramToken            bool    `json:"telegram_configured"`
 		AllowedUserIDs              []int64 `json:"allowed_user_ids"`
 		AllowedChatIDs              []int64 `json:"allowed_chat_ids"`
@@ -233,6 +239,8 @@ func (c Config) MarshalJSON() ([]byte, error) {
 		YMessengerRequireApproval:   c.YMessengerRequireApproval,
 		ExternalRequestsTopicID:     c.ExternalRequestsTopicID,
 		ExternalRequestDefaultCWD:   c.ExternalRequestDefaultCWD,
+		ExternalApprovalPolicy:      c.ExternalApprovalPolicy,
+		ExternalSandboxMode:         c.ExternalSandboxMode,
 		HasTelegramToken:            c.TelegramBotToken != "",
 		AllowedUserIDs:              c.AllowedUserIDs,
 		AllowedChatIDs:              c.AllowedChatIDs,
@@ -280,10 +288,26 @@ func (c Config) ValidateYMessenger() error {
 	if c.AFCGroupID == 0 {
 		return fmt.Errorf("CTR_GO_AFC_GROUP_ID is required when YMessenger is enabled")
 	}
-	if c.YMessengerRequireApproval && c.ExternalRequestsTopicID == 0 {
+	if c.ExternalRequestsTopicID == 0 {
 		return fmt.Errorf("CTR_GO_EXTERNAL_REQUESTS_TOPIC_ID is required when YMessenger is enabled")
 	}
+	if !oneOf(c.ExternalApprovalPolicy, "", "never", "on-request", "untrusted") {
+		return fmt.Errorf("CTR_GO_EXTERNAL_REQUEST_APPROVAL_POLICY must be never, on-request, or untrusted")
+	}
+	if !oneOf(c.ExternalSandboxMode, "", "read-only", "workspace-write", "danger-full-access") {
+		return fmt.Errorf("CTR_GO_EXTERNAL_REQUEST_SANDBOX_MODE must be read-only, workspace-write, or danger-full-access")
+	}
 	return nil
+}
+
+func oneOf(value string, allowed ...string) bool {
+	value = strings.ToLower(strings.TrimSpace(value))
+	for _, candidate := range allowed {
+		if value == candidate {
+			return true
+		}
+	}
+	return false
 }
 
 func DefaultCodexChatsRoot() string {

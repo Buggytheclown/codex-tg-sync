@@ -736,7 +736,7 @@ func (s *Service) createThreadFromProjectPrompt(ctx context.Context, chatID, top
 	requestCtx, cancel := context.WithTimeout(ctx, s.cfg.RequestTimeout)
 	defer cancel()
 	started := time.Now()
-	threadPayload, err := live.ThreadStart(requestCtx, state.CWD)
+	threadPayload, err := live.ThreadStart(requestCtx, state.CWD, appserver.ThreadStartOptions{})
 	s.logAppServerCall("ThreadStart", started, err, live, lifecycleFields{
 		"cwd":          state.CWD,
 		"project_name": state.ProjectName,

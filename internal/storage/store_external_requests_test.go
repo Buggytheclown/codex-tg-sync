@@ -201,6 +201,28 @@ func TestExternalLaunchRequestTelegramDeliveryRemainsRetryable(t *testing.T) {
 	}
 }
 
+func TestAutoStartTelegramVisibilityAppliesOnlyToNewMarkedRequests(t *testing.T) {
+	t.Parallel()
+	store := openTestStore(t)
+	ctx := context.Background()
+	request := testExternalLaunchRequest("test:auto-visible")
+	request.AutoStart = true
+	if _, err := store.IngestExternalLaunchRequests(ctx, "test", 22, []model.ExternalLaunchRequest{request}); err != nil {
+		t.Fatal(err)
+	}
+	pending, err := store.ListExternalLaunchRequestsForTelegram(ctx, 10)
+	if err != nil || len(pending) != 1 {
+		t.Fatalf("new auto-start visibility=%#v err=%v", pending, err)
+	}
+	if _, err := store.db.ExecContext(ctx, `UPDATE external_launch_requests SET telegram_rendered_status='' WHERE id=?`, request.ID); err != nil {
+		t.Fatal(err)
+	}
+	pending, err = store.ListExternalLaunchRequestsForTelegram(ctx, 10)
+	if err != nil || len(pending) != 0 {
+		t.Fatalf("historical unmarked auto-start was backfilled: %#v err=%v", pending, err)
+	}
+}
+
 func TestRecoverStartingExternalLaunchRequestsMarksOutcomeUnknown(t *testing.T) {
 	t.Parallel()
 	store := openTestStore(t)

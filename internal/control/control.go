@@ -13,6 +13,13 @@ type TurnStartOptions struct {
 	CollaborationMode string
 	Model             string
 	ReasoningEffort   string
+	ApprovalPolicy    string
+	SandboxMode       string
+}
+
+type ThreadStartOptions struct {
+	ApprovalPolicy string
+	SandboxMode    string
 }
 
 type ModelOption struct {
@@ -54,7 +61,7 @@ type Threads interface {
 	ThreadList(ctx context.Context, limit int, cursor string) (map[string]any, error)
 	ThreadRead(ctx context.Context, threadID string, includeTurns bool) (map[string]any, error)
 	ThreadResume(ctx context.Context, threadID, cwd string) (map[string]any, error)
-	ThreadStart(ctx context.Context, cwd string) (map[string]any, error)
+	ThreadStart(ctx context.Context, cwd string, options ThreadStartOptions) (map[string]any, error)
 }
 
 type ThreadAdmin interface {

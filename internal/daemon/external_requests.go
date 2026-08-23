@@ -57,6 +57,14 @@ func (s *Service) processExternalLaunchRequests(ctx context.Context) {
 	s.mu.RLock()
 	sender := s.sender
 	s.mu.RUnlock()
+	s.renderExternalLaunchRequestsLocked(ctx, sender)
+	s.externalRequestMu.Unlock()
+	for _, requestID := range requestIDs {
+		s.startExternalLaunchDispatch(requestID)
+	}
+}
+
+func (s *Service) renderExternalLaunchRequestsLocked(ctx context.Context, sender Sender) {
 	if sender != nil && s.cfg.AFCGroupID != 0 {
 		requests, err := s.store.ListExternalLaunchRequestsForTelegram(ctx, 20)
 		if err != nil {
@@ -68,10 +76,6 @@ func (s *Service) processExternalLaunchRequests(ctx context.Context) {
 				}
 			}
 		}
-	}
-	s.externalRequestMu.Unlock()
-	for _, requestID := range requestIDs {
-		s.startExternalLaunchDispatch(requestID)
 	}
 }
 
@@ -141,33 +145,37 @@ func (s *Service) renderExternalLaunchRequest(ctx context.Context, sender Sender
 	text := externalLaunchRequestText(request)
 	if request.TelegramMessageID == 0 {
 		_ = s.store.ExpireExternalLaunchCallbackRoutes(ctx, request.ID)
-		startRoute, startButton, err := s.externalLaunchButton(ctx, request, "Start", "external_launch_start")
-		if err != nil {
-			return err
-		}
-		dismissRoute, dismissButton, err := s.externalLaunchButton(ctx, request, "Dismiss", "external_launch_dismiss")
-		if err != nil {
-			_ = s.store.ExpireExternalLaunchCallbackRoutes(ctx, request.ID)
-			return err
+		var buttons [][]model.ButtonSpec
+		var routes []model.CallbackRoute
+		if !request.AutoStart {
+			startRoute, startButton, err := s.externalLaunchButton(ctx, request, "Start", "external_launch_start")
+			if err != nil {
+				return err
+			}
+			dismissRoute, dismissButton, err := s.externalLaunchButton(ctx, request, "Dismiss", "external_launch_dismiss")
+			if err != nil {
+				_ = s.store.ExpireExternalLaunchCallbackRoutes(ctx, request.ID)
+				return err
+			}
+			buttons = [][]model.ButtonSpec{{dismissButton, startButton}}
+			routes = []model.CallbackRoute{startRoute, dismissRoute}
 		}
 		messageID, err := sender.SendMessage(ctx, s.cfg.AFCGroupID, request.TelegramTopicID, text,
-			[][]model.ButtonSpec{{dismissButton, startButton}}, notifySendOptions())
+			buttons, notifySendOptions())
 		if err != nil {
 			_ = s.store.ExpireExternalLaunchCallbackRoutes(ctx, request.ID)
 			return err
 		}
-		startRoute.TelegramMessageID = messageID
-		dismissRoute.TelegramMessageID = messageID
-		if err := s.store.PutCallbackRoute(ctx, startRoute); err != nil {
-			return err
-		}
-		if err := s.store.PutCallbackRoute(ctx, dismissRoute); err != nil {
-			return err
+		for _, route := range routes {
+			route.TelegramMessageID = messageID
+			if err := s.store.PutCallbackRoute(ctx, route); err != nil {
+				return err
+			}
 		}
 		return s.store.MarkExternalLaunchRequestTelegramSent(ctx, request.ID, messageID, request.Status)
 	}
 	var buttons [][]model.ButtonSpec
-	if request.Status == model.ExternalLaunchPendingApproval {
+	if !request.AutoStart && request.Status == model.ExternalLaunchPendingApproval {
 		_ = s.store.ExpireExternalLaunchCallbackRoutes(ctx, request.ID)
 		startRoute, startButton, err := s.externalLaunchButton(ctx, request, "Start", "external_launch_start")
 		if err != nil {

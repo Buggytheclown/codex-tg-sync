@@ -211,8 +211,10 @@ Primary environment variables:
 - `CTR_GO_YMESSENGER_ALLOWED_SENDERS` (comma-separated sender login allowlist)
 - `CTR_GO_YMESSENGER_POLL_SECONDS` (`2` by default)
 - `CTR_GO_YMESSENGER_REQUIRE_APPROVAL` (`true` by default; set `false` to start allowed explicit mentions automatically)
-- `CTR_GO_EXTERNAL_REQUESTS_TOPIC_ID` (permanent Telegram approval topic id)
+- `CTR_GO_EXTERNAL_REQUESTS_TOPIC_ID` (permanent Telegram request/status topic id)
 - `CTR_GO_EXTERNAL_REQUEST_DEFAULT_CWD` (falls back to `CTR_GO_DEFAULT_CWD`)
+- `CTR_GO_EXTERNAL_REQUEST_APPROVAL_POLICY` (`never`, `on-request`, or `untrusted`; empty inherits the App Server default)
+- `CTR_GO_EXTERNAL_REQUEST_SANDBOX_MODE` (`read-only`, `workspace-write`, or `danger-full-access`; empty inherits the App Server default)
 - `CTR_GO_DEFAULT_CWD`
 - `CTR_GO_CODEX_CHATS_ROOT` (`~/Documents/Codex` by default)
 - `CTR_GO_NOTIFY_NEW_RUN` (`true` by default; set `false`/`off`/`0` to send `New run` silently)
@@ -260,17 +262,20 @@ The optional Yandex Messenger adapter runs inside the same `codex-tg` daemon;
 the normal one-command startup does not change. Approval is secure by default.
 When it is enabled, create a permanent `Requests` topic manually in the
 configured AFC forum group and put its topic id in
-`CTR_GO_EXTERNAL_REQUESTS_TOPIC_ID`. Set
-`CTR_GO_YMESSENGER_REQUIRE_APPROVAL=false` to start allowed explicit mentions
-automatically; the permanent approval topic is then optional.
+`CTR_GO_EXTERNAL_REQUESTS_TOPIC_ID`. Every accepted request is rendered there
+as a durable status card. Set `CTR_GO_YMESSENGER_REQUIRE_APPROVAL=false` to
+start allowed explicit mentions automatically; auto-start cards have no
+approval buttons and are edited as the launch progresses.
 
 The poller accepts a message only when `from.login` is in
 `CTR_GO_YMESSENGER_ALLOWED_SENDERS` and the configured robot is present in
 `mentioned_users`. Source `chat_id` is deliberately not filtered. Accepted
-messages either appear in `Requests` with `Start` and `Dismiss`, or are claimed
-automatically when approval is disabled. Dispatch requires AFC to be active,
-creates one normal AFC session topic, then uses the existing AFC writer to
-perform `thread/start` and the first `turn/start`.
+messages always appear in `Requests`; approval-gated requests include `Start`
+and `Dismiss`, while automatic requests are informational only. Dispatch
+requires AFC to be active, creates one normal AFC session topic, then uses the
+existing AFC writer to perform `thread/start` and the first `turn/start`.
+Optional external-request permission settings are passed explicitly to both
+calls, so the launch does not depend on cached App Server defaults.
 
 For direct replies, the nested `reply_to_message` is included as untrusted
 context. For thread messages, the adapter uses the Bot API invariant that

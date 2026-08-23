@@ -307,6 +307,40 @@ func TestTurnStartParamsIncludesDefaultCollaborationMode(t *testing.T) {
 	}
 }
 
+func TestStartParamsIncludeExplicitPermissions(t *testing.T) {
+	threadParams, err := threadStartParams("/tmp/project", ThreadStartOptions{
+		ApprovalPolicy: "never",
+		SandboxMode:    "danger-full-access",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if threadParams["approvalPolicy"] != "never" || threadParams["sandbox"] != "dangerFullAccess" {
+		t.Fatalf("thread permissions = %#v", threadParams)
+	}
+
+	turnParams, err := turnStartParams("thread-1", "Run it", "/tmp/project", TurnStartOptions{
+		ApprovalPolicy: "never",
+		SandboxMode:    "danger-full-access",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sandbox, ok := turnParams["sandboxPolicy"].(map[string]any)
+	if turnParams["approvalPolicy"] != "never" || !ok || sandbox["type"] != "dangerFullAccess" {
+		t.Fatalf("turn permissions = %#v", turnParams)
+	}
+}
+
+func TestStartParamsRejectUnsupportedPermissions(t *testing.T) {
+	if _, err := threadStartParams("", ThreadStartOptions{ApprovalPolicy: "sometimes"}); err == nil {
+		t.Fatal("threadStartParams accepted unsupported approval policy")
+	}
+	if _, err := turnStartParams("thread-1", "Run it", "", TurnStartOptions{SandboxMode: "host"}); err == nil {
+		t.Fatal("turnStartParams accepted unsupported sandbox mode")
+	}
+}
+
 func TestTurnStartParamsRejectsModeWithoutModel(t *testing.T) {
 	_, err := turnStartParams("thread-1", "Draft a plan", "", TurnStartOptions{CollaborationMode: "plan"})
 	if err == nil {

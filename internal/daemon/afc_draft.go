@@ -6,6 +6,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	"github.com/mideco-tech/codex-tg/internal/appserver"
 	"github.com/mideco-tech/codex-tg/internal/model"
 )
 
@@ -34,17 +35,17 @@ func (s *Service) dispatchAFCDraftMessage(ctx context.Context, draft model.AFCTo
 	if !created {
 		return afcDuplicateReceiptResponse(receipt), nil
 	}
-	return s.startClaimedAFCDraftLocked(ctx, claimed, receipt, text)
+	return s.startClaimedAFCDraftLocked(ctx, claimed, receipt, text, appserver.ThreadStartOptions{})
 }
 
-func (s *Service) startClaimedAFCDraftLocked(ctx context.Context, draft model.AFCTopicDraft, receipt model.AFCMessageReceipt, text string) (*DirectResponse, error) {
+func (s *Service) startClaimedAFCDraftLocked(ctx context.Context, draft model.AFCTopicDraft, receipt model.AFCMessageReceipt, text string, permissions appserver.ThreadStartOptions) (*DirectResponse, error) {
 	lease, err := s.afcWriter.ReserveProcess(ctx, "draft:"+randomToken())
 	if err != nil {
 		_ = s.store.ResetAFCTopicDraftMessage(ctx, draft, receipt)
 		return &DirectResponse{Text: fmt.Sprintf("AFC could not reserve the shared writer; this message was not dispatched: %v", err)}, nil
 	}
 	s.installAFCWriterLocked(lease)
-	threadPayload, startErr := lease.Process.ThreadStart(ctx, draft.CWD)
+	threadPayload, startErr := lease.Process.ThreadStart(ctx, draft.CWD, permissions)
 	if startErr != nil {
 		if afcDispatchAmbiguous(startErr, "") {
 			_ = s.afcWriter.MarkUnknown(lease)
@@ -93,7 +94,10 @@ func (s *Service) startClaimedAFCDraftLocked(ctx context.Context, draft model.AF
 	}); ok {
 		_, _ = namer.ThreadSetName(ctx, thread.ID, title)
 	}
-	result, turnErr := lease.Process.TurnStart(ctx, thread.ID, text, thread.CWD, s.turnStartOptions(ctx, "", &thread))
+	turnOptions := s.turnStartOptions(ctx, "", &thread)
+	turnOptions.ApprovalPolicy = permissions.ApprovalPolicy
+	turnOptions.SandboxMode = permissions.SandboxMode
+	result, turnErr := lease.Process.TurnStart(ctx, thread.ID, text, thread.CWD, turnOptions)
 	turnID := appserverThreadTurnID(result)
 	if turnErr != nil || strings.TrimSpace(turnID) == "" {
 		if afcDispatchAmbiguous(turnErr, turnID) {

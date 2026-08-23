@@ -58,6 +58,8 @@ func TestFromEnvReadsYMessengerLaunchRequestConfig(t *testing.T) {
 	t.Setenv("CTR_GO_YMESSENGER_REQUIRE_APPROVAL", "false")
 	t.Setenv("CTR_GO_EXTERNAL_REQUESTS_TOPIC_ID", "77")
 	t.Setenv("CTR_GO_EXTERNAL_REQUEST_DEFAULT_CWD", filepath.Join(t.TempDir(), "project"))
+	t.Setenv("CTR_GO_EXTERNAL_REQUEST_APPROVAL_POLICY", "never")
+	t.Setenv("CTR_GO_EXTERNAL_REQUEST_SANDBOX_MODE", "danger-full-access")
 
 	cfg := FromEnv()
 
@@ -75,6 +77,9 @@ func TestFromEnvReadsYMessengerLaunchRequestConfig(t *testing.T) {
 	}
 	if cfg.ExternalRequestsTopicID != 77 || cfg.ExternalRequestDefaultCWD == "" {
 		t.Fatalf("external request config = topic %d cwd %q", cfg.ExternalRequestsTopicID, cfg.ExternalRequestDefaultCWD)
+	}
+	if cfg.ExternalApprovalPolicy != "never" || cfg.ExternalSandboxMode != "danger-full-access" {
+		t.Fatalf("external request permissions = %q / %q", cfg.ExternalApprovalPolicy, cfg.ExternalSandboxMode)
 	}
 }
 
@@ -103,15 +108,21 @@ func TestValidateYMessengerRequiresEnabledFields(t *testing.T) {
 	}
 }
 
-func TestValidateYMessengerDoesNotRequireApprovalTopicWhenApprovalDisabled(t *testing.T) {
+func TestValidateYMessengerRequiresVisibilityTopicWhenApprovalDisabled(t *testing.T) {
 	t.Parallel()
 	cfg := Config{
 		YMessengerEnabled: true, YMessengerRobotLogin: "robot-example", YMessengerOAuthTeamToken: "token",
 		YMessengerAllowedSenders: []string{"alice"}, YMessengerPollInterval: 2 * time.Second,
 		YMessengerRequireApproval: false, AFCGroupID: -1001, ExternalRequestDefaultCWD: t.TempDir(),
 	}
+	if err := cfg.ValidateYMessenger(); err == nil {
+		t.Fatal("ValidateYMessenger succeeded without required Telegram visibility topic")
+	}
+	cfg.ExternalRequestsTopicID = 77
+	cfg.ExternalApprovalPolicy = "never"
+	cfg.ExternalSandboxMode = "danger-full-access"
 	if err := cfg.ValidateYMessenger(); err != nil {
-		t.Fatalf("ValidateYMessenger failed without approval topic: %v", err)
+		t.Fatalf("ValidateYMessenger(valid auto-start) failed: %v", err)
 	}
 }
 

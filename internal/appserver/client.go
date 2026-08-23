@@ -25,6 +25,7 @@ import (
 
 type Event = control.Event
 type TurnStartOptions = control.TurnStartOptions
+type ThreadStartOptions = control.ThreadStartOptions
 type ModelOption = control.ModelOption
 type CollaborationModeOption = control.CollaborationModeOption
 
@@ -490,6 +491,9 @@ func turnStartParams(threadID, message, cwd string, options TurnStartOptions) (m
 	if strings.TrimSpace(cwd) != "" {
 		params["cwd"] = cwd
 	}
+	if err := addPermissionParams(params, options.ApprovalPolicy, options.SandboxMode, true); err != nil {
+		return nil, err
+	}
 	mode := normalizeCollaborationMode(options.CollaborationMode)
 	if mode != "" {
 		model := strings.TrimSpace(options.Model)
@@ -788,7 +792,19 @@ func boolValue(value any) bool {
 	}
 }
 
-func (c *Client) ThreadStart(ctx context.Context, cwd string) (map[string]any, error) {
+func (c *Client) ThreadStart(ctx context.Context, cwd string, options ThreadStartOptions) (map[string]any, error) {
+	params, err := threadStartParams(cwd, options)
+	if err != nil {
+		return nil, err
+	}
+	result, err := c.Request(ctx, "thread/start", params)
+	if err != nil {
+		return nil, err
+	}
+	return asMap(result), nil
+}
+
+func threadStartParams(cwd string, options ThreadStartOptions) (map[string]any, error) {
 	params := map[string]any{
 		"experimentalRawEvents":  false,
 		"persistExtendedHistory": true,
@@ -796,11 +812,58 @@ func (c *Client) ThreadStart(ctx context.Context, cwd string) (map[string]any, e
 	if strings.TrimSpace(cwd) != "" {
 		params["cwd"] = cwd
 	}
-	result, err := c.Request(ctx, "thread/start", params)
-	if err != nil {
+	if err := addPermissionParams(params, options.ApprovalPolicy, options.SandboxMode, false); err != nil {
 		return nil, err
 	}
-	return asMap(result), nil
+	return params, nil
+}
+
+func addPermissionParams(params map[string]any, approvalPolicy, sandboxMode string, turn bool) error {
+	if value, err := appServerApprovalPolicy(approvalPolicy); err != nil {
+		return err
+	} else if value != "" {
+		params["approvalPolicy"] = value
+	}
+	if value, err := appServerSandboxMode(sandboxMode); err != nil {
+		return err
+	} else if value != "" {
+		if turn {
+			params["sandboxPolicy"] = map[string]any{"type": value}
+		} else {
+			params["sandbox"] = value
+		}
+	}
+	return nil
+}
+
+func appServerApprovalPolicy(value string) (string, error) {
+	switch strings.ToLower(strings.ReplaceAll(strings.TrimSpace(value), "_", "-")) {
+	case "":
+		return "", nil
+	case "never":
+		return "never", nil
+	case "on-request", "onrequest":
+		return "onRequest", nil
+	case "untrusted", "unless-trusted", "unlesstrusted":
+		return "unlessTrusted", nil
+	default:
+		return "", fmt.Errorf("unsupported approval policy %q", value)
+	}
+}
+
+func appServerSandboxMode(value string) (string, error) {
+	switch strings.ToLower(strings.ReplaceAll(strings.TrimSpace(value), "_", "-")) {
+	case "":
+		return "", nil
+	case "read-only", "readonly":
+		return "readOnly", nil
+	case "workspace-write", "workspacewrite":
+		return "workspaceWrite", nil
+	case "danger-full-access", "dangerfullaccess":
+		return "dangerFullAccess", nil
+	default:
+		return "", fmt.Errorf("unsupported sandbox mode %q", value)
+	}
 }
 
 func (c *Client) TurnInterrupt(ctx context.Context, threadID, turnID string) error {
