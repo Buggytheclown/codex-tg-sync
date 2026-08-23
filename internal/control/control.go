@@ -14,12 +14,14 @@ type TurnStartOptions struct {
 	Model             string
 	ReasoningEffort   string
 	ApprovalPolicy    string
+	ApprovalsReviewer string
 	SandboxMode       string
 }
 
 type ThreadStartOptions struct {
-	ApprovalPolicy string
-	SandboxMode    string
+	ApprovalPolicy    string
+	ApprovalsReviewer string
+	SandboxMode       string
 }
 
 type ModelOption struct {

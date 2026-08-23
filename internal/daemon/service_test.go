@@ -4957,6 +4957,7 @@ type turnCall struct {
 	model             string
 	reasoningEffort   string
 	approvalPolicy    string
+	approvalsReviewer string
 	sandboxMode       string
 }
 
@@ -5024,6 +5025,7 @@ func (s *stubSession) TurnStart(ctx context.Context, threadID, message, cwd stri
 		model:             options.Model,
 		reasoningEffort:   options.ReasoningEffort,
 		approvalPolicy:    options.ApprovalPolicy,
+		approvalsReviewer: options.ApprovalsReviewer,
 		sandboxMode:       options.SandboxMode,
 	})
 	return map[string]any{"turn": map[string]any{"id": "started-turn"}}, nil

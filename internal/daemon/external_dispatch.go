@@ -78,8 +78,9 @@ func (s *Service) dispatchExternalLaunchRequest(ctx context.Context, requestID s
 		return
 	}
 	permissions := appserver.ThreadStartOptions{
-		ApprovalPolicy: s.cfg.ExternalApprovalPolicy,
-		SandboxMode:    s.cfg.ExternalSandboxMode,
+		ApprovalPolicy:    s.cfg.ExternalApprovalPolicy,
+		ApprovalsReviewer: s.cfg.ExternalApprovalsReviewer,
+		SandboxMode:       s.cfg.ExternalSandboxMode,
 	}
 	response, dispatchErr := s.startClaimedAFCDraftLocked(ctx, claimed, receipt, request.Prompt, permissions)
 	storedReceipt, receiptErr := s.store.GetAFCReceipt(ctx, topicID, sourceMessageID)

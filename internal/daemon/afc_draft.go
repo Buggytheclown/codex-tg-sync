@@ -96,6 +96,7 @@ func (s *Service) startClaimedAFCDraftLocked(ctx context.Context, draft model.AF
 	}
 	turnOptions := s.turnStartOptions(ctx, "", &thread)
 	turnOptions.ApprovalPolicy = permissions.ApprovalPolicy
+	turnOptions.ApprovalsReviewer = permissions.ApprovalsReviewer
 	turnOptions.SandboxMode = permissions.SandboxMode
 	result, turnErr := lease.Process.TurnStart(ctx, thread.ID, text, thread.CWD, turnOptions)
 	turnID := appserverThreadTurnID(result)

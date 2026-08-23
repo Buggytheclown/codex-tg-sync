@@ -60,6 +60,7 @@ type Config struct {
 	ExternalRequestsTopicID     int64
 	ExternalRequestDefaultCWD   string
 	ExternalApprovalPolicy      string
+	ExternalApprovalsReviewer   string
 	ExternalSandboxMode         string
 	TelegramBotToken            string
 	AllowedUserIDs              []int64
@@ -166,6 +167,7 @@ func fromSource(source envSource) Config {
 		ExternalRequestsTopicID:     parseInt64(source.get("CTR_GO_EXTERNAL_REQUESTS_TOPIC_ID")),
 		ExternalRequestDefaultCWD:   source.path("CTR_GO_EXTERNAL_REQUEST_DEFAULT_CWD", defaultCWD),
 		ExternalApprovalPolicy:      strings.TrimSpace(source.get("CTR_GO_EXTERNAL_REQUEST_APPROVAL_POLICY")),
+		ExternalApprovalsReviewer:   strings.TrimSpace(source.get("CTR_GO_EXTERNAL_REQUEST_APPROVALS_REVIEWER")),
 		ExternalSandboxMode:         strings.TrimSpace(source.get("CTR_GO_EXTERNAL_REQUEST_SANDBOX_MODE")),
 		TelegramBotToken:            source.first("CTR_GO_TELEGRAM_BOT_TOKEN", "CTR_TELEGRAM_BOT_TOKEN"),
 		AllowedUserIDs:              parseInt64List(source.first("CTR_GO_ALLOWED_USER_IDS", "CTR_ALLOWED_USER_IDS")),
@@ -206,6 +208,7 @@ func (c Config) MarshalJSON() ([]byte, error) {
 		ExternalRequestsTopicID     int64   `json:"external_requests_topic_id,omitempty"`
 		ExternalRequestDefaultCWD   string  `json:"external_request_default_cwd,omitempty"`
 		ExternalApprovalPolicy      string  `json:"external_request_approval_policy,omitempty"`
+		ExternalApprovalsReviewer   string  `json:"external_request_approvals_reviewer,omitempty"`
 		ExternalSandboxMode         string  `json:"external_request_sandbox_mode,omitempty"`
 		HasTelegramToken            bool    `json:"telegram_configured"`
 		AllowedUserIDs              []int64 `json:"allowed_user_ids"`
@@ -240,6 +243,7 @@ func (c Config) MarshalJSON() ([]byte, error) {
 		ExternalRequestsTopicID:     c.ExternalRequestsTopicID,
 		ExternalRequestDefaultCWD:   c.ExternalRequestDefaultCWD,
 		ExternalApprovalPolicy:      c.ExternalApprovalPolicy,
+		ExternalApprovalsReviewer:   c.ExternalApprovalsReviewer,
 		ExternalSandboxMode:         c.ExternalSandboxMode,
 		HasTelegramToken:            c.TelegramBotToken != "",
 		AllowedUserIDs:              c.AllowedUserIDs,
@@ -293,6 +297,9 @@ func (c Config) ValidateYMessenger() error {
 	}
 	if !oneOf(c.ExternalApprovalPolicy, "", "never", "on-request", "untrusted") {
 		return fmt.Errorf("CTR_GO_EXTERNAL_REQUEST_APPROVAL_POLICY must be never, on-request, or untrusted")
+	}
+	if !oneOf(c.ExternalApprovalsReviewer, "", "user", "auto_review") {
+		return fmt.Errorf("CTR_GO_EXTERNAL_REQUEST_APPROVALS_REVIEWER must be user or auto_review")
 	}
 	if !oneOf(c.ExternalSandboxMode, "", "read-only", "workspace-write", "danger-full-access") {
 		return fmt.Errorf("CTR_GO_EXTERNAL_REQUEST_SANDBOX_MODE must be read-only, workspace-write, or danger-full-access")

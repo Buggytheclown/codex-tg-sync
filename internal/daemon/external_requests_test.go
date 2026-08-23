@@ -250,6 +250,7 @@ func TestDispatchExternalLaunchRequestCreatesAFCThreadTurnAndTopic(t *testing.T)
 	t.Parallel()
 	service := activeAFCService(t)
 	service.cfg.ExternalApprovalPolicy = "never"
+	service.cfg.ExternalApprovalsReviewer = "auto_review"
 	service.cfg.ExternalSandboxMode = "danger-full-access"
 	writer := &stubSession{threadStartResult: map[string]any{"thread": map[string]any{"id": "external-thread", "cwd": "/project"}}}
 	service.liveFactory = func() Session { return writer }
@@ -267,10 +268,10 @@ func TestDispatchExternalLaunchRequestCreatesAFCThreadTurnAndTopic(t *testing.T)
 	if len(writer.threadStartCalls) != 1 || writer.threadStartCalls[0] != "/project" || len(writer.turnStartCalls) != 1 || writer.turnStartCalls[0].message != request.Prompt {
 		t.Fatalf("thread starts=%#v turn starts=%#v", writer.threadStartCalls, writer.turnStartCalls)
 	}
-	if len(writer.threadStartOptions) != 1 || writer.threadStartOptions[0].ApprovalPolicy != "never" || writer.threadStartOptions[0].SandboxMode != "danger-full-access" {
+	if len(writer.threadStartOptions) != 1 || writer.threadStartOptions[0].ApprovalPolicy != "never" || writer.threadStartOptions[0].ApprovalsReviewer != "auto_review" || writer.threadStartOptions[0].SandboxMode != "danger-full-access" {
 		t.Fatalf("thread permissions=%#v", writer.threadStartOptions)
 	}
-	if writer.turnStartCalls[0].approvalPolicy != "never" || writer.turnStartCalls[0].sandboxMode != "danger-full-access" {
+	if writer.turnStartCalls[0].approvalPolicy != "never" || writer.turnStartCalls[0].approvalsReviewer != "auto_review" || writer.turnStartCalls[0].sandboxMode != "danger-full-access" {
 		t.Fatalf("turn permissions=%#v", writer.turnStartCalls[0])
 	}
 	userMessages := 0

@@ -491,7 +491,7 @@ func turnStartParams(threadID, message, cwd string, options TurnStartOptions) (m
 	if strings.TrimSpace(cwd) != "" {
 		params["cwd"] = cwd
 	}
-	if err := addPermissionParams(params, options.ApprovalPolicy, options.SandboxMode, true); err != nil {
+	if err := addPermissionParams(params, options.ApprovalPolicy, options.ApprovalsReviewer, options.SandboxMode, true); err != nil {
 		return nil, err
 	}
 	mode := normalizeCollaborationMode(options.CollaborationMode)
@@ -812,17 +812,22 @@ func threadStartParams(cwd string, options ThreadStartOptions) (map[string]any, 
 	if strings.TrimSpace(cwd) != "" {
 		params["cwd"] = cwd
 	}
-	if err := addPermissionParams(params, options.ApprovalPolicy, options.SandboxMode, false); err != nil {
+	if err := addPermissionParams(params, options.ApprovalPolicy, options.ApprovalsReviewer, options.SandboxMode, false); err != nil {
 		return nil, err
 	}
 	return params, nil
 }
 
-func addPermissionParams(params map[string]any, approvalPolicy, sandboxMode string, turn bool) error {
+func addPermissionParams(params map[string]any, approvalPolicy, approvalsReviewer, sandboxMode string, turn bool) error {
 	if value, err := appServerApprovalPolicy(approvalPolicy); err != nil {
 		return err
 	} else if value != "" {
 		params["approvalPolicy"] = value
+	}
+	if value, err := appServerApprovalsReviewer(approvalsReviewer); err != nil {
+		return err
+	} else if value != "" {
+		params["approvalsReviewer"] = value
 	}
 	if value, err := appServerSandboxMode(sandboxMode, turn); err != nil {
 		return err
@@ -834,6 +839,19 @@ func addPermissionParams(params map[string]any, approvalPolicy, sandboxMode stri
 		}
 	}
 	return nil
+}
+
+func appServerApprovalsReviewer(value string) (string, error) {
+	switch strings.ToLower(strings.ReplaceAll(strings.TrimSpace(value), "-", "_")) {
+	case "":
+		return "", nil
+	case "user":
+		return "user", nil
+	case "auto_review", "autoreview":
+		return "auto_review", nil
+	default:
+		return "", fmt.Errorf("unsupported approvals reviewer %q", value)
+	}
 }
 
 func appServerApprovalPolicy(value string) (string, error) {

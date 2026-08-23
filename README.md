@@ -214,6 +214,7 @@ Primary environment variables:
 - `CTR_GO_EXTERNAL_REQUESTS_TOPIC_ID` (permanent Telegram request/status topic id)
 - `CTR_GO_EXTERNAL_REQUEST_DEFAULT_CWD` (falls back to `CTR_GO_DEFAULT_CWD`)
 - `CTR_GO_EXTERNAL_REQUEST_APPROVAL_POLICY` (`never`, `on-request`, or `untrusted`; empty inherits the App Server default)
+- `CTR_GO_EXTERNAL_REQUEST_APPROVALS_REVIEWER` (`user` or `auto_review`; empty inherits the App Server default)
 - `CTR_GO_EXTERNAL_REQUEST_SANDBOX_MODE` (`read-only`, `workspace-write`, or `danger-full-access`; empty inherits the App Server default)
 - `CTR_GO_DEFAULT_CWD`
 - `CTR_GO_CODEX_CHATS_ROOT` (`~/Documents/Codex` by default)

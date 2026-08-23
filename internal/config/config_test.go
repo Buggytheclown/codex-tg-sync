@@ -59,6 +59,7 @@ func TestFromEnvReadsYMessengerLaunchRequestConfig(t *testing.T) {
 	t.Setenv("CTR_GO_EXTERNAL_REQUESTS_TOPIC_ID", "77")
 	t.Setenv("CTR_GO_EXTERNAL_REQUEST_DEFAULT_CWD", filepath.Join(t.TempDir(), "project"))
 	t.Setenv("CTR_GO_EXTERNAL_REQUEST_APPROVAL_POLICY", "never")
+	t.Setenv("CTR_GO_EXTERNAL_REQUEST_APPROVALS_REVIEWER", "auto_review")
 	t.Setenv("CTR_GO_EXTERNAL_REQUEST_SANDBOX_MODE", "danger-full-access")
 
 	cfg := FromEnv()
@@ -78,8 +79,8 @@ func TestFromEnvReadsYMessengerLaunchRequestConfig(t *testing.T) {
 	if cfg.ExternalRequestsTopicID != 77 || cfg.ExternalRequestDefaultCWD == "" {
 		t.Fatalf("external request config = topic %d cwd %q", cfg.ExternalRequestsTopicID, cfg.ExternalRequestDefaultCWD)
 	}
-	if cfg.ExternalApprovalPolicy != "never" || cfg.ExternalSandboxMode != "danger-full-access" {
-		t.Fatalf("external request permissions = %q / %q", cfg.ExternalApprovalPolicy, cfg.ExternalSandboxMode)
+	if cfg.ExternalApprovalPolicy != "never" || cfg.ExternalApprovalsReviewer != "auto_review" || cfg.ExternalSandboxMode != "danger-full-access" {
+		t.Fatalf("external request permissions = %q / %q / %q", cfg.ExternalApprovalPolicy, cfg.ExternalApprovalsReviewer, cfg.ExternalSandboxMode)
 	}
 }
 
