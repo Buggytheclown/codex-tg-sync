@@ -193,6 +193,12 @@ func (s *Store) initialize(ctx context.Context) error {
 		source_chat_id TEXT,
 		source_message_id INTEGER NOT NULL DEFAULT 0,
 		source_thread_id INTEGER NOT NULL DEFAULT 0,
+		ack_status TEXT,
+		ack_text TEXT,
+		ack_message_id INTEGER NOT NULL DEFAULT 0,
+		ack_attempts INTEGER NOT NULL DEFAULT 0,
+		ack_available_at TEXT,
+		ack_error TEXT,
 		reply_status TEXT,
 		reply_text TEXT,
 		reply_message_id INTEGER NOT NULL DEFAULT 0,
@@ -392,6 +398,12 @@ func (s *Store) initialize(ctx context.Context) error {
 		{"source_chat_id", `ALTER TABLE external_launch_requests ADD COLUMN source_chat_id TEXT`},
 		{"source_message_id", `ALTER TABLE external_launch_requests ADD COLUMN source_message_id INTEGER NOT NULL DEFAULT 0`},
 		{"source_thread_id", `ALTER TABLE external_launch_requests ADD COLUMN source_thread_id INTEGER NOT NULL DEFAULT 0`},
+		{"ack_status", `ALTER TABLE external_launch_requests ADD COLUMN ack_status TEXT`},
+		{"ack_text", `ALTER TABLE external_launch_requests ADD COLUMN ack_text TEXT`},
+		{"ack_message_id", `ALTER TABLE external_launch_requests ADD COLUMN ack_message_id INTEGER NOT NULL DEFAULT 0`},
+		{"ack_attempts", `ALTER TABLE external_launch_requests ADD COLUMN ack_attempts INTEGER NOT NULL DEFAULT 0`},
+		{"ack_available_at", `ALTER TABLE external_launch_requests ADD COLUMN ack_available_at TEXT`},
+		{"ack_error", `ALTER TABLE external_launch_requests ADD COLUMN ack_error TEXT`},
 		{"reply_status", `ALTER TABLE external_launch_requests ADD COLUMN reply_status TEXT`},
 		{"reply_text", `ALTER TABLE external_launch_requests ADD COLUMN reply_text TEXT`},
 		{"reply_message_id", `ALTER TABLE external_launch_requests ADD COLUMN reply_message_id INTEGER NOT NULL DEFAULT 0`},
@@ -408,6 +420,9 @@ func (s *Store) initialize(ctx context.Context) error {
 		return err
 	}
 	if _, err := s.db.ExecContext(ctx, `CREATE INDEX IF NOT EXISTS idx_external_reply_status_available ON external_launch_requests(reply_status, reply_available_at)`); err != nil {
+		return err
+	}
+	if _, err := s.db.ExecContext(ctx, `CREATE INDEX IF NOT EXISTS idx_external_ack_status_available ON external_launch_requests(ack_status, ack_available_at)`); err != nil {
 		return err
 	}
 	if _, err := s.db.ExecContext(ctx, `UPDATE afc_topics SET status_turn_id=(

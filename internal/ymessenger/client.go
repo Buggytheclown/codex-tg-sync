@@ -99,6 +99,20 @@ type Client struct {
 	httpClient     *http.Client
 }
 
+type HTTPStatusError struct {
+	Operation  string
+	StatusCode int
+}
+
+func (e *HTTPStatusError) Error() string {
+	return fmt.Sprintf("%s returned HTTP %d", e.Operation, e.StatusCode)
+}
+
+func isHistoryAuthorizationError(err error) bool {
+	var statusErr *HTTPStatusError
+	return errors.As(err, &statusErr) && (statusErr.StatusCode == http.StatusUnauthorized || statusErr.StatusCode == http.StatusForbidden)
+}
+
 type ClientOption func(*Client)
 
 func WithBaseURL(baseURL string) ClientOption {
@@ -155,7 +169,7 @@ func (c *Client) GetThreadRoot(ctx context.Context, chatID string, messageID int
 	defer response.Body.Close()
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
 		_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, 4096))
-		return nil, fmt.Errorf("YMessenger history returned HTTP %d", response.StatusCode)
+		return nil, &HTTPStatusError{Operation: "YMessenger history", StatusCode: response.StatusCode}
 	}
 	var result historyResponse
 	if err := json.NewDecoder(io.LimitReader(response.Body, 4<<20)).Decode(&result); err != nil {

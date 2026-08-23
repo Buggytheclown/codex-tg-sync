@@ -80,10 +80,21 @@ func (s *Service) renderExternalLaunchRequestsLocked(ctx context.Context, sender
 }
 
 func (s *Service) queueExternalReplyFromSnapshot(ctx context.Context, snapshot appserver.ThreadReadSnapshot) {
-	if !isTerminalStatus(snapshot.LatestTurnStatus) || strings.TrimSpace(snapshot.LatestTurnID) == "" || strings.TrimSpace(snapshot.LatestFinalText) == "" {
+	if !isTerminalStatus(snapshot.LatestTurnStatus) || strings.TrimSpace(snapshot.LatestTurnID) == "" {
 		return
 	}
-	queued, err := s.store.QueueExternalReply(ctx, snapshot.Thread.ID, snapshot.LatestTurnID, snapshot.LatestFinalText)
+	text := strings.TrimSpace(snapshot.LatestFinalText)
+	if text == "" {
+		switch strings.ToLower(strings.TrimSpace(snapshot.LatestTurnStatus)) {
+		case "failed", "error":
+			text = "The Codex turn failed before producing a final answer."
+		case "interrupted", "cancelled", "canceled", "aborted":
+			text = "The Codex turn was interrupted before producing a final answer."
+		default:
+			text = "The Codex turn ended without a final answer."
+		}
+	}
+	queued, err := s.store.QueueExternalReply(ctx, snapshot.Thread.ID, snapshot.LatestTurnID, text)
 	if err != nil {
 		s.logLifecycle("external_reply_queue_failed", lifecycleFields{"thread_id": snapshot.Thread.ID, "turn_id": snapshot.LatestTurnID, "error": err})
 		return
@@ -111,11 +122,25 @@ func (s *Service) processExternalReplyBatch(ctx context.Context) {
 	if sender == nil {
 		return
 	}
+	acks, err := s.store.ClaimExternalAckBatch(ctx, 10)
+	if err != nil {
+		s.logLifecycle("external_ack_claim_failed", lifecycleFields{"error": err})
+	} else {
+		for _, request := range acks {
+			s.deliverExternalMessage(ctx, sender, request, true)
+		}
+	}
 	requests, err := s.store.ClaimExternalReplyBatch(ctx, 10)
 	if err != nil {
 		s.logLifecycle("external_reply_claim_failed", lifecycleFields{"error": err})
 		return
 	}
+	for _, request := range requests {
+		s.deliverExternalMessage(ctx, sender, request, false)
+	}
+}
+
+func (s *Service) deliverExternalMessage(ctx context.Context, sender ExternalReplySender, request model.ExternalLaunchRequest, acknowledgement bool) {
 	maxAttempts := s.cfg.DeliveryMaxAttempts
 	if maxAttempts <= 0 {
 		maxAttempts = 5
@@ -124,21 +149,39 @@ func (s *Service) processExternalReplyBatch(ctx context.Context) {
 	if baseDelay <= 0 {
 		baseDelay = 5 * time.Second
 	}
-	for _, request := range requests {
-		messageID, sendErr := sender.SendExternalReply(ctx, request.SourceChatID, request.SourceMessageID, request.SourceThreadID, request.ReplyText)
-		if sendErr == nil {
-			sendErr = s.store.CompleteExternalReply(ctx, request.ID, messageID)
-		}
-		if sendErr == nil {
-			s.logLifecycle("external_reply_sent", lifecycleFields{"request_id": request.ID, "source": request.Source, "thread_id": request.ThreadID, "turn_id": request.TurnID})
-			continue
-		}
-		attempt := request.ReplyAttempts + 1
-		dead := attempt >= maxAttempts
-		backoff := baseDelay * time.Duration(1<<min(attempt-1, 4))
-		_ = s.store.FailExternalReply(ctx, request.ID, attempt, time.Now().UTC().Add(backoff), sendErr.Error(), dead)
-		s.logLifecycle("external_reply_failed", lifecycleFields{"request_id": request.ID, "source": request.Source, "attempt": attempt, "dead": dead, "error": sendErr})
+	text := request.ReplyText
+	attempts := request.ReplyAttempts
+	kind := "reply"
+	if acknowledgement {
+		text = request.AckText
+		attempts = request.AckAttempts
+		kind = "ack"
 	}
+	messageID, sendErr := sender.SendExternalReply(ctx, request.SourceChatID, request.SourceMessageID, request.SourceThreadID, text)
+	if acknowledgement {
+		if sendErr == nil {
+			sendErr = s.store.CompleteExternalAck(ctx, request.ID, messageID)
+		}
+	} else if sendErr == nil {
+		sendErr = s.store.CompleteExternalReply(ctx, request.ID, messageID)
+	}
+	if sendErr == nil {
+		s.logLifecycle("external_"+kind+"_sent", lifecycleFields{"request_id": request.ID, "source": request.Source, "thread_id": request.ThreadID, "turn_id": request.TurnID})
+		return
+	}
+	attempt := attempts + 1
+	dead := attempt >= maxAttempts
+	backoff := baseDelay * time.Duration(1<<min(attempt-1, 4))
+	if acknowledgement {
+		_ = s.store.FailExternalAck(ctx, request.ID, attempt, time.Now().UTC().Add(backoff), sendErr.Error(), dead)
+	} else {
+		_ = s.store.FailExternalReply(ctx, request.ID, attempt, time.Now().UTC().Add(backoff), sendErr.Error(), dead)
+	}
+	if dead {
+		s.reportHealthFailure(ctx, "external."+kind+"."+request.ID, "YMessenger "+kind+" delivery stopped retrying",
+			"Request "+request.ID+": "+sanitizeDiagnosticString(sendErr.Error()), "Check YMessenger connectivity, then inspect the external delivery backlog.")
+	}
+	s.logLifecycle("external_"+kind+"_failed", lifecycleFields{"request_id": request.ID, "source": request.Source, "attempt": attempt, "dead": dead, "error": sendErr})
 }
 
 func (s *Service) renderExternalLaunchRequest(ctx context.Context, sender Sender, request model.ExternalLaunchRequest) error {

@@ -4916,6 +4916,7 @@ type stubSession struct {
 	threadListCalls        int
 	threadListLimit        int
 	threadListCursor       string
+	threadListErr          error
 	threadReadID           string
 	threadReadIncludeTurns bool
 	models                 []appserver.ModelOption
@@ -4981,7 +4982,7 @@ func (s *stubSession) ThreadList(ctx context.Context, limit int, cursor string) 
 	s.threadListCalls++
 	s.threadListLimit = limit
 	s.threadListCursor = cursor
-	return s.threadListResult, nil
+	return s.threadListResult, s.threadListErr
 }
 func (s *stubSession) ThreadRead(ctx context.Context, threadID string, includeTurns bool) (map[string]any, error) {
 	s.threadReadID = threadID

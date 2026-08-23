@@ -271,12 +271,16 @@ approval buttons and are edited as the launch progresses.
 The poller accepts a message only when `from.login` is in
 `CTR_GO_YMESSENGER_ALLOWED_SENDERS` and the configured robot is present in
 `mentioned_users`. Source `chat_id` is deliberately not filtered. Accepted
-messages always appear in `Requests`; approval-gated requests include `Start`
+messages receive a durable acknowledgement and appear in `Requests`;
+approval-gated requests include `Start`
 and `Dismiss`, while automatic requests are informational only. Dispatch
 requires AFC to be active, creates one normal AFC session topic, then uses the
 existing AFC writer to perform `thread/start` and the first `turn/start`.
 Optional external-request permission settings are passed explicitly to both
 calls, so the launch does not depend on cached App Server defaults.
+An explicit robot mention from any other sender receives a static owner-only
+reply. It stores no Codex prompt and cannot create a Telegram approval or
+Codex session.
 
 For direct replies, the nested `reply_to_message` is included as untrusted
 context. For thread messages, the adapter uses the Bot API invariant that
@@ -284,17 +288,18 @@ context. For thread messages, the adapter uses the Bot API invariant that
 message on demand through Messenger History API. The configured robot OAuth
 token is reused with the History API `OAuth` authorization scheme; no user
 token or additional secret is required. History lookup runs only for an
-allowed explicit robot mention. A transient lookup failure leaves the update
-cursor unchanged for retry, while an absent root is reported explicitly and
-does not block later updates. The daemon does not cache unrelated chat
-messages.
+allowed explicit robot mention. History authorization failures leave the
+cursor unchanged. Other failures for one exact root retry twice, then advance
+with an explicit unavailable-context marker so one message cannot block all
+later updates. The daemon does not cache unrelated chat messages.
 
 The existing App Server subscription and authoritative `thread/read` snapshot
 remain the only source of the Codex final answer. A terminal final is queued in
 SQLite and sent through Bot API `sendText` with the source `chat_id`, invoking
-`message_id` as `reply_message_id`, and source `thread_id`. Only the final
-answer is returned to Messenger; commentary and tool output remain in the
-normal AFC topic.
+`message_id` as `reply_message_id`, and source `thread_id`. The terminal answer
+is returned to Messenger; a failed, interrupted, or empty terminal turn gets a
+short explicit fallback instead of silence. Commentary and tool output remain
+in the normal AFC topic.
 
 The update cursor and normalized request are committed in one SQLite
 transaction. Duplicate source messages and button presses are ignored. A
@@ -355,6 +360,10 @@ Desktop probably started a private App Server. Recover with this exact order:
 Every `codex-tg` restart intentionally resets AFC to `off` for the MVP. Existing
 Codex work continues in the shared runtime, but the old Telegram topics are
 cleaned up. Run `/sync on` in Control after the shared connection is healthy.
+The bridge applies the same boundary when its managed-daemon heartbeat detects
+a broken or half-open transport: connection status becomes false, Control gets
+one warning and one recovery notice, polling reconnects, and AFC remains off
+until the operator runs `/sync on` again. Prompts are never replayed.
 
 ## Verification
 

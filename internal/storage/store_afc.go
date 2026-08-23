@@ -91,6 +91,17 @@ func (s *Store) RecoverAFCWriterState(ctx context.Context) error {
 // touching non-AFC control-plane state. Unfinished receipts remain durable and
 // non-replayable for audit purposes.
 func (s *Store) ResetAFCOnStartup(ctx context.Context) (string, error) {
+	return s.resetAFCTransientState(ctx)
+}
+
+// ResetAFCOnTransportLoss applies the same deliberately lossy boundary as a
+// bot restart: Telegram synchronization is discarded, while Codex runtime
+// threads are neither interrupted nor replayed.
+func (s *Store) ResetAFCOnTransportLoss(ctx context.Context) (string, error) {
+	return s.resetAFCTransientState(ctx)
+}
+
+func (s *Store) resetAFCTransientState(ctx context.Context) (string, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return "", err

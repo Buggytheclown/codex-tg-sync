@@ -98,6 +98,7 @@ type Service struct {
 	externalReplySender         ExternalReplySender
 	logger                      *log.Logger
 	diagnosticMu                sync.Mutex
+	healthMu                    sync.Mutex
 	diagnosticWin               time.Time
 	diagnosticN                 int
 	diagnosticBy                map[string]int
@@ -113,6 +114,7 @@ type Service struct {
 	startupCleanupSessionID     string
 	startupFinished             bool
 	startupDone                 chan struct{}
+	lastPollHeartbeat           time.Time
 }
 
 const (
@@ -268,9 +270,10 @@ func (s *Service) Start(ctx context.Context) error {
 	_ = s.store.SetState(runCtx, "appserver.live_connected", "false")
 	_ = s.store.SetState(runCtx, "appserver.poll_connected", "false")
 	_, recoveryErr := s.store.RecoverStartingExternalLaunchRequests(runCtx)
+	_, ackRecoveryErr := s.store.RecoverSendingExternalAcks(runCtx)
 	_, replyRecoveryErr := s.store.RecoverSendingExternalReplies(runCtx)
 	cleanupSessionID, resetErr := s.store.ResetAFCOnStartup(runCtx)
-	err := errors.Join(recoveryErr, replyRecoveryErr, resetErr)
+	err := errors.Join(recoveryErr, ackRecoveryErr, replyRecoveryErr, resetErr)
 	if err != nil {
 		cancel()
 		s.mu.Lock()
@@ -948,12 +951,19 @@ func (s *Service) liveEventLoopCurrent(live Session, ch <-chan control.Event, ge
 func (s *Service) handleLiveEvent(ctx context.Context, live Session, event control.Event) {
 	if event.Channel == "transport_error" {
 		err := fmt.Errorf("app-server transport error: %v", event.Params)
+		s.mu.Lock()
+		if s.live == live {
+			s.liveConnected = false
+		}
+		s.mu.Unlock()
+		_ = s.store.SetState(ctx, "appserver.live_connected", "false")
 		_ = s.store.SetState(ctx, "appserver.live.last_error", sanitizeDiagnosticString(err.Error()))
 		s.logLifecycle("appserver_transport_error", lifecycleFields{
 			"params":      event.Params,
 			"stderr_tail": sanitizedStderrTail(live),
 		})
 		s.noteSessionError(ctx, "transport_error", err)
+		s.softResetAFCAfterTransportLoss(ctx, err)
 		return
 	}
 	if event.Channel == "transport_closed" {
@@ -966,6 +976,7 @@ func (s *Service) handleLiveEvent(ctx context.Context, live Session, event contr
 		})
 		if ctx.Err() == nil {
 			s.noteSessionError(ctx, "transport_closed", err)
+			s.softResetAFCAfterTransportLoss(ctx, err)
 		}
 		return
 	}
@@ -1328,6 +1339,7 @@ func (s *Service) controlLoop(ctx context.Context) {
 			_ = s.store.SetState(ctx, "control.repair_request", "")
 		} else {
 			s.reconcileSessions(ctx)
+			s.heartbeatPollSession(ctx)
 		}
 		select {
 		case <-ctx.Done():
@@ -1335,6 +1347,87 @@ func (s *Service) controlLoop(ctx context.Context) {
 		case <-ticker.C:
 		}
 	}
+}
+
+func (s *Service) heartbeatPollSession(ctx context.Context) {
+	if !strings.EqualFold(strings.TrimSpace(s.cfg.AppServerMode), string(appserver.TransportDaemon)) {
+		return
+	}
+	s.mu.Lock()
+	if time.Since(s.lastPollHeartbeat) < 10*time.Second {
+		s.mu.Unlock()
+		return
+	}
+	s.lastPollHeartbeat = time.Now()
+	poll, connected := s.poll, s.pollConnected
+	s.mu.Unlock()
+	if poll == nil || !connected {
+		return
+	}
+	timeout := s.cfg.RequestTimeout
+	if timeout <= 0 || timeout > 5*time.Second {
+		timeout = 5 * time.Second
+	}
+	requestCtx, cancel := context.WithTimeout(ctx, timeout)
+	_, err := poll.ThreadList(requestCtx, 1, "")
+	cancel()
+	if err == nil {
+		_ = s.store.SetState(ctx, "appserver.poll.last_heartbeat_at", time.Now().UTC().Format(time.RFC3339Nano))
+		s.reportHealthRecovered(ctx, "appserver.transport", "Shared Codex App Server connection recovered")
+		return
+	}
+	if ctx.Err() != nil {
+		return
+	}
+	s.mu.Lock()
+	if s.poll == poll {
+		s.pollConnected = false
+	}
+	s.mu.Unlock()
+	_ = s.store.SetState(ctx, "appserver.poll_connected", "false")
+	_ = s.store.SetState(ctx, "appserver.poll.last_error", sanitizeDiagnosticString(err.Error()))
+	s.softResetAFCAfterTransportLoss(ctx, err)
+	s.noteSessionError(ctx, "heartbeat", err)
+}
+
+func (s *Service) softResetAFCAfterTransportLoss(ctx context.Context, cause error) {
+	if !strings.EqualFold(strings.TrimSpace(s.cfg.AppServerMode), string(appserver.TransportDaemon)) || ctx.Err() != nil {
+		return
+	}
+	summary := "The shared App Server connection was lost. AFC was reset to off; unfinished Telegram receipts are unknown and no request was replayed."
+	if cause != nil {
+		summary += " " + sanitizeDiagnosticString(cause.Error())
+	}
+	s.reportHealthFailure(ctx, "appserver.transport", "Shared Codex App Server connection lost", summary, "Wait for reconnect, then run /sync on again.")
+	s.afcMu.Lock()
+	state, stateErr := s.store.GetAFCState(ctx)
+	if stateErr != nil || state.State == model.AFCStateOff || strings.TrimSpace(state.SessionID) == "" {
+		s.afcMu.Unlock()
+		if stateErr != nil {
+			s.logLifecycle("afc_transport_reset_failed", lifecycleFields{"error": stateErr})
+		}
+		return
+	}
+	sessionID, resetErr := s.store.ResetAFCOnTransportLoss(ctx)
+	if resetErr == nil {
+		if s.afcEventCancel != nil {
+			s.afcEventCancel()
+			s.afcEventCancel = nil
+		}
+		s.afcEventProcess = nil
+		s.afcEventGeneration = 0
+		s.afcSubscribedPollGeneration = 0
+		s.afcSubscribedThreads = map[string]struct{}{}
+		s.afcLeases = map[string]appserver.WriterLease[Session]{}
+	}
+	s.afcMu.Unlock()
+	if resetErr != nil {
+		s.logLifecycle("afc_transport_reset_failed", lifecycleFields{"error": resetErr})
+		return
+	}
+	_ = s.afcWriter.ForceClose()
+	s.cleanupAFCTopics(ctx, sessionID)
+	s.logLifecycle("afc_transport_reset", lifecycleFields{"session_id": sessionID, "error": cause})
 }
 
 func (s *Service) reconcileSessions(ctx context.Context) {
@@ -1520,7 +1613,11 @@ func (s *Service) processDeliveryBatch(ctx context.Context) {
 			continue
 		}
 		s.logTelegramRenderContainsNil(payload.ThreadID, payload.TurnID, "delivery", 0, payload.Text)
-		messageID, err := sender.SendMessage(ctx, item.ChatID, item.TopicID, payload.Text, payload.Buttons, silentSendOptions())
+		options := silentSendOptions()
+		if item.Kind == "health" {
+			options = notifySendOptions()
+		}
+		messageID, err := sender.SendMessage(ctx, item.ChatID, item.TopicID, payload.Text, payload.Buttons, options)
 		if err != nil {
 			attempt := item.RetryCount + 1
 			_ = s.store.RecordDeliveryAttempt(ctx, item.ID, attempt, "send_error", err.Error())

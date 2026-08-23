@@ -17,16 +17,18 @@ type UpdatesClient interface {
 type RequestSink interface {
 	ExternalSourceCursor(ctx context.Context, source string) (int64, error)
 	IngestExternalRequests(ctx context.Context, source string, cursor int64, requests []model.ExternalLaunchRequest) (int, error)
+	NoteExternalPollResult(ctx context.Context, source string, err error)
 }
 
 type Poller struct {
-	client UpdatesClient
-	sink   RequestSink
-	filter FilterConfig
+	client       UpdatesClient
+	sink         RequestSink
+	filter       FilterConfig
+	rootFailures map[string]int
 }
 
 func NewPoller(client UpdatesClient, sink RequestSink, filter FilterConfig) *Poller {
-	return &Poller{client: client, sink: sink, filter: filter}
+	return &Poller{client: client, sink: sink, filter: filter, rootFailures: make(map[string]int)}
 }
 
 func (p *Poller) PollOnce(ctx context.Context) error {
@@ -70,14 +72,27 @@ func (p *Poller) PollOnce(ctx context.Context) error {
 		}
 		message, lookupErr := p.client.GetThreadRoot(ctx, update.Chat.ID, update.Chat.ThreadID)
 		if lookupErr != nil {
-			return lookupErr
+			if isHistoryAuthorizationError(lookupErr) {
+				return lookupErr
+			}
+			p.rootFailures[key]++
+			if p.rootFailures[key] < 3 {
+				return lookupErr
+			}
+			// A single missing/broken thread root must not block all later updates
+			// forever. On the third local failure, preserve the explicit missing
+			// context marker and atomically advance the source cursor at ingest.
+			delete(p.rootFailures, key)
+			resolvedRoots[key] = struct{}{}
+			continue
 		}
+		delete(p.rootFailures, key)
 		resolvedRoots[key] = struct{}{}
 		if message != nil {
 			roots[key] = *message
 		}
 	}
-	_, err = p.sink.IngestExternalRequests(ctx, Source, maxUpdateID, RequestsFromUpdatesWithRoots(actionable, p.filter, roots))
+	_, err = p.sink.IngestExternalRequests(ctx, Source, maxUpdateID, RequestsFromUpdatesWithRoots(updates, p.filter, roots))
 	return err
 }
 
@@ -120,6 +135,7 @@ func (p *Poller) Run(ctx context.Context, interval time.Duration, onError func(e
 				onError(err)
 			}
 		}
+		p.sink.NoteExternalPollResult(ctx, Source, err)
 		timer := time.NewTimer(delay)
 		select {
 		case <-ctx.Done():

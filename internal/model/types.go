@@ -15,6 +15,7 @@ const (
 	ExternalLaunchDismissed       = "dismissed"
 	ExternalLaunchFailed          = "failed"
 	ExternalLaunchOutcomeUnknown  = "outcome_unknown"
+	ExternalLaunchRejectedSender  = "rejected_sender"
 	ExternalReplyPending          = "pending"
 	ExternalReplySending          = "sending"
 	ExternalReplySent             = "sent"
@@ -161,6 +162,12 @@ type ExternalLaunchRequest struct {
 	SourceChatID           string
 	SourceMessageID        int64
 	SourceThreadID         int64
+	AckStatus              string
+	AckText                string
+	AckMessageID           int64
+	AckAttempts            int
+	AckAvailableAt         TimeString
+	AckError               string
 	ReplyStatus            string
 	ReplyText              string
 	ReplyMessageID         int64

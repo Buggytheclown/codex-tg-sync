@@ -1,0 +1,69 @@
+# ADR-029: AFC Reliability And External Delivery Transparency
+
+- Status: accepted
+- Amends: ADR-027, ADR-028
+- Related: ADR-019, ADR-020, ADR-026
+
+## Context
+
+The reset-on-start AFC boundary is intentionally simple, but an in-process
+managed-daemon transport failure could still leave Telegram state looking
+active. YMessenger launch requests also had durable execution claims but no
+durable acknowledgement, and some terminal outcomes could remain visible only
+in logs. A repeatedly failing History root lookup could block every later
+update behind one message.
+
+## Decision
+
+- `external_launch_requests` has two fixed delivery slots: `ack_*` for the
+  source acknowledgement and `reply_*` for the terminal outcome. This is not a
+  generic outbox. Each slot is claimed conditionally, retried with bounded
+  backoff, recovered from `sending` after restart, and becomes `dead` after the
+  configured attempt limit.
+- Allowed YMessenger mentions persist their acknowledgement in the same
+  transaction as the request and source cursor. Dismissal, dispatch failure,
+  ambiguous dispatch recovery, and terminal App Server snapshots persist a
+  source reply. A terminal turn without final text gets a small explicit
+  fallback instead of silence.
+- An explicit robot mention from a disallowed sender persists only a
+  `rejected_sender` policy acknowledgement. It stores no Codex prompt, creates
+  no Telegram approval topic, and cannot enter auto-start or dispatch.
+- History authorization failures (`401`/`403`) remain global and never advance
+  the cursor. Other failures for one exact root retry twice; on the third
+  failure the request advances with an explicit unavailable-context marker so
+  unrelated later updates are not blocked forever.
+- Important failure episodes use namespaced `daemon_state` and the existing
+  durable Telegram delivery queue. One episode produces one Control warning
+  and one recovery notice rather than repeated warnings.
+- In managed-daemon mode, a periodic bounded `thread/list` heartbeat detects a
+  half-open poll connection. Transport loss makes the connection status false,
+  requests poll repair, and applies the ADR-027 reset boundary immediately:
+  AFC becomes `off`, old topics/drafts become cleanup-only, accepted receipts
+  become `unknown`, and no input is replayed. Closing bridge WebSocket clients
+  does not interrupt the authoritative Codex runtime.
+- Transport repair never re-enables AFC. A recovery notice tells the operator
+  to run `/sync on` explicitly.
+- Telegram captions are accepted as text. A supported message containing only
+  media receives an explicit plain-text-only response after normal
+  authorization checks.
+
+## Consequences
+
+Source delivery and Telegram projection state are inspectable and retryable
+without adding a new subsystem. The implementation accepts at-least-once
+network delivery at the crash boundary: the local slot prevents duplicate
+claims, but a remote service may accept a message immediately before the local
+completion write fails.
+
+A single missing History root can lose only that root context after three
+attempts; the user request remains explicit about the loss. Managed-daemon
+connection loss sacrifices Telegram continuity, matching process restart, in
+exchange for truthful state and no replay ambiguity.
+
+## Non-goals
+
+- Exactly-once delivery across remote API and SQLite commit boundaries.
+- Preserving or rebinding AFC topics across transport loss.
+- Automatically replaying prompts or re-enabling AFC.
+- A generic external outbox or separate health database schema.
+- Uploading Telegram or YMessenger attachments to Codex.

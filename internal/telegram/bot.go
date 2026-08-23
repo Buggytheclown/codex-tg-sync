@@ -312,18 +312,33 @@ func (b *Bot) handleUpdate(ctx context.Context, update Update) error {
 }
 
 func (b *Bot) handleMessage(ctx context.Context, message Message) error {
-	if message.From == nil || strings.TrimSpace(message.Text) == "" {
+	if message.From == nil {
+		return nil
+	}
+	text := telegramInboundText(message)
+	if text == "" && !telegramMessageHasUnsupportedMedia(message) {
 		return nil
 	}
 	replyTo := int64(0)
 	if message.ReplyToMessage != nil {
 		replyTo = message.ReplyToMessage.MessageID
 	}
-	response, err := b.service.HandleMessageWithID(ctx, message.Chat.ID, message.MessageThreadID, message.MessageID, message.From.ID, message.Text, replyTo)
+	response, err := b.service.HandleMessageWithID(ctx, message.Chat.ID, message.MessageThreadID, message.MessageID, message.From.ID, text, replyTo)
 	if err != nil {
 		return b.sendFailureMessage(ctx, message.Chat.ID, message.MessageThreadID, err)
 	}
 	return b.deliverDirectResponse(ctx, message.Chat.ID, message.MessageThreadID, response)
+}
+
+func telegramInboundText(message Message) string {
+	if text := strings.TrimSpace(message.Text); text != "" {
+		return text
+	}
+	return strings.TrimSpace(message.Caption)
+}
+
+func telegramMessageHasUnsupportedMedia(message Message) bool {
+	return len(message.Photo) > 0 || len(message.Document) > 0 || len(message.Voice) > 0 || len(message.Audio) > 0 || len(message.Video) > 0
 }
 
 func (b *Bot) handleCallback(ctx context.Context, callback CallbackQuery) error {

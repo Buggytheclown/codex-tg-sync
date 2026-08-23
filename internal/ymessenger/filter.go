@@ -11,6 +11,12 @@ import (
 
 const Source = "yandex_messenger"
 
+const (
+	acceptedReplyText  = "Request accepted by codex-tg. Waiting for the owner to approve or start it."
+	autoStartReplyText = "Request accepted by codex-tg. Starting a Codex session."
+	rejectedReplyText  = "This bot can only start Codex sessions for its owner. No Codex session was started."
+)
+
 type FilterConfig struct {
 	RobotLogin      string
 	AllowedSenders  []string
@@ -38,17 +44,32 @@ func RequestsFromUpdatesWithRoots(updates []Update, cfg FilterConfig, roots map[
 		if update.UpdateID < 0 || update.MessageID == 0 || strings.TrimSpace(update.Chat.ID) == "" || sender == "" || update.From.Robot || text == "" {
 			continue
 		}
-		if _, ok := allowed[sender]; !ok || !mentionsLogin(update.MentionedUsers, robotLogin) {
+		if !mentionsLogin(update.MentionedUsers, robotLogin) {
 			continue
 		}
 		externalID := fmt.Sprintf("%s:%d", strings.TrimSpace(update.Chat.ID), update.MessageID)
 		now := model.NowString()
+		if _, ok := allowed[sender]; !ok {
+			requests = append(requests, model.ExternalLaunchRequest{
+				ID: Source + ":" + externalID, Source: Source, ExternalID: externalID, Sender: sender,
+				Title: "Rejected Yandex Messenger request from " + sender, Status: model.ExternalLaunchRejectedSender,
+				SourceChatID: strings.TrimSpace(update.Chat.ID), SourceMessageID: update.MessageID, SourceThreadID: update.Chat.ThreadID,
+				AckStatus: model.ExternalReplyPending, AckText: rejectedReplyText, AckAvailableAt: now,
+				CreatedAt: now, UpdatedAt: now,
+			})
+			continue
+		}
+		ackText := acceptedReplyText
+		if !cfg.RequireApproval {
+			ackText = autoStartReplyText
+		}
 		requests = append(requests, model.ExternalLaunchRequest{
 			ID: Source + ":" + externalID, Source: Source, ExternalID: externalID, Sender: sender,
 			Title: "Yandex Messenger request from " + sender, SafePreview: preview(text, 240), Prompt: buildPrompt(update, roots),
 			CWD: strings.TrimSpace(cfg.DefaultCWD), Status: model.ExternalLaunchPendingApproval,
 			TelegramTopicID: cfg.TelegramTopicID, AutoStart: !cfg.RequireApproval,
 			SourceChatID: strings.TrimSpace(update.Chat.ID), SourceMessageID: update.MessageID, SourceThreadID: update.Chat.ThreadID,
+			AckStatus: model.ExternalReplyPending, AckText: ackText, AckAvailableAt: now,
 			CreatedAt: now, UpdatedAt: now,
 		})
 	}

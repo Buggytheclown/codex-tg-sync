@@ -133,6 +133,49 @@ func TestExternalReplyQueueIsIdempotentAndRetryable(t *testing.T) {
 	}
 }
 
+func TestExternalAckIsDurableRetryableAndRejectedRequestIsNotRendered(t *testing.T) {
+	t.Parallel()
+	store := openTestStore(t)
+	ctx := context.Background()
+	now := model.NowString()
+	request := model.ExternalLaunchRequest{
+		ID: "test:chat:rejected", Source: "test", ExternalID: "chat:rejected", Sender: "mallory",
+		Title: "Rejected request", Status: model.ExternalLaunchRejectedSender,
+		SourceChatID: "chat", SourceMessageID: 42,
+		AckStatus: model.ExternalReplyPending, AckText: "owner only", AckAvailableAt: now,
+		CreatedAt: now, UpdatedAt: now,
+	}
+	if _, err := store.IngestExternalLaunchRequests(ctx, "test", 1, []model.ExternalLaunchRequest{request}); err != nil {
+		t.Fatal(err)
+	}
+	telegram, err := store.ListExternalLaunchRequestsForTelegram(ctx, 10)
+	if err != nil || len(telegram) != 0 {
+		t.Fatalf("rejected request leaked to Telegram approval: %#v err=%v", telegram, err)
+	}
+	auto, err := store.ListExternalLaunchRequestsForAutoStart(ctx, 10)
+	if err != nil || len(auto) != 0 {
+		t.Fatalf("rejected request leaked to auto-start: %#v err=%v", auto, err)
+	}
+	batch, err := store.ClaimExternalAckBatch(ctx, 10)
+	if err != nil || len(batch) != 1 || batch[0].AckText != "owner only" {
+		t.Fatalf("ack batch=%#v err=%v", batch, err)
+	}
+	if err := store.FailExternalAck(ctx, request.ID, 1, time.Now().UTC().Add(-time.Second), "temporary", false); err != nil {
+		t.Fatal(err)
+	}
+	batch, err = store.ClaimExternalAckBatch(ctx, 10)
+	if err != nil || len(batch) != 1 || batch[0].AckAttempts != 1 {
+		t.Fatalf("retry ack batch=%#v err=%v", batch, err)
+	}
+	if err := store.CompleteExternalAck(ctx, request.ID, 99); err != nil {
+		t.Fatal(err)
+	}
+	stored, _ := store.GetExternalLaunchRequest(ctx, request.ID)
+	if stored.AckStatus != model.ExternalReplySent || stored.AckMessageID != 99 {
+		t.Fatalf("stored=%#v", stored)
+	}
+}
+
 func TestIngestExternalLaunchRequestsRejectsInvalidBatchWithoutCursorAdvance(t *testing.T) {
 	t.Parallel()
 	store := openTestStore(t)
@@ -170,6 +213,25 @@ func TestExternalLaunchRequestTransitionsAreConditional(t *testing.T) {
 	dismissed, err := store.DismissExternalLaunchRequest(ctx, request.ID)
 	if err != nil || dismissed {
 		t.Fatalf("dismiss after claim=%t err=%v, want false", dismissed, err)
+	}
+}
+
+func TestExternalDismissAtomicallyQueuesTerminalReply(t *testing.T) {
+	t.Parallel()
+	store := openTestStore(t)
+	ctx := context.Background()
+	request := testExternalLaunchRequest("test:chat:dismiss-reply")
+	request.SourceChatID = "chat"
+	request.SourceMessageID = 42
+	if _, err := store.IngestExternalLaunchRequests(ctx, "test", 1, []model.ExternalLaunchRequest{request}); err != nil {
+		t.Fatal(err)
+	}
+	if changed, err := store.DismissExternalLaunchRequest(ctx, request.ID); err != nil || !changed {
+		t.Fatalf("dismiss=%t err=%v", changed, err)
+	}
+	stored, err := store.GetExternalLaunchRequest(ctx, request.ID)
+	if err != nil || stored == nil || stored.Status != model.ExternalLaunchDismissed || stored.ReplyStatus != model.ExternalReplyPending || !strings.Contains(stored.ReplyText, "dismissed") {
+		t.Fatalf("dismissed request=%#v err=%v", stored, err)
 	}
 }
 

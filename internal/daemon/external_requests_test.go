@@ -170,6 +170,63 @@ func TestExternalFinalQueuesAndDeliversReplyToInvocation(t *testing.T) {
 	}
 }
 
+func TestExternalTerminalWithoutFinalQueuesExplicitFallback(t *testing.T) {
+	service := newTestService(t)
+	ctx := context.Background()
+	request := daemonExternalRequest("test:reply:no-final", "do work")
+	request.SourceChatID = "chat"
+	request.SourceMessageID = 42
+	if _, err := service.IngestExternalRequests(ctx, "test", 1, []model.ExternalLaunchRequest{request}); err != nil {
+		t.Fatal(err)
+	}
+	if claimed, _ := service.store.ClaimExternalLaunchRequest(ctx, request.ID); !claimed {
+		t.Fatal("request was not claimed")
+	}
+	if changed, err := service.store.CompleteExternalLaunchRequest(ctx, request.ID, model.ExternalLaunchSessionStarted, "thread", "turn", "", ""); err != nil || !changed {
+		t.Fatalf("complete=%t err=%v", changed, err)
+	}
+	snapshot := appserver.SnapshotFromThreadRead(afcCompletedPayload("thread", "turn", ""))
+	service.queueExternalReplyFromSnapshot(ctx, snapshot)
+	stored, err := service.store.GetExternalLaunchRequest(ctx, request.ID)
+	if err != nil || stored == nil || stored.ReplyStatus != model.ExternalReplyPending || !strings.Contains(stored.ReplyText, "without a final answer") {
+		t.Fatalf("terminal fallback=%#v err=%v", stored, err)
+	}
+}
+
+func TestRejectedExternalSenderGetsOnlyPolicyReplyAndCannotStartCodex(t *testing.T) {
+	service := activeAFCService(t)
+	ctx := context.Background()
+	writer := &stubSession{threadStartResult: map[string]any{"thread": map[string]any{"id": "must-not-start"}}}
+	service.liveFactory = func() Session { return writer }
+	telegram := &recordingSender{}
+	service.SetSender(telegram)
+	external := &recordingExternalReplySender{returnedMessage: 88}
+	service.SetExternalReplySender(external)
+	now := model.NowString()
+	request := model.ExternalLaunchRequest{
+		ID: "test:rejected:1", Source: "test", ExternalID: "rejected:1", Sender: "mallory",
+		Title: "Rejected request", Status: model.ExternalLaunchRejectedSender,
+		SourceChatID: "chat", SourceMessageID: 42,
+		AckStatus: model.ExternalReplyPending, AckText: "Owner only. No Codex session was started.", AckAvailableAt: now,
+		CreatedAt: now, UpdatedAt: now,
+	}
+	if _, err := service.IngestExternalRequests(ctx, "test", 1, []model.ExternalLaunchRequest{request}); err != nil {
+		t.Fatal(err)
+	}
+	service.processExternalLaunchRequests(ctx)
+	service.processExternalReplyBatch(ctx)
+	if external.text != request.AckText || external.replyMessageID != 42 {
+		t.Fatalf("policy reply=%#v", external)
+	}
+	if len(telegram.messages) != 0 || len(writer.threadStartCalls) != 0 || len(writer.turnStartCalls) != 0 {
+		t.Fatalf("rejected sender caused work: telegram=%#v threads=%#v turns=%#v", telegram.messages, writer.threadStartCalls, writer.turnStartCalls)
+	}
+	stored, _ := service.store.GetExternalLaunchRequest(ctx, request.ID)
+	if stored == nil || stored.Status != model.ExternalLaunchRejectedSender || stored.AckStatus != model.ExternalReplySent {
+		t.Fatalf("stored rejected request=%#v", stored)
+	}
+}
+
 func TestExternalLaunchApprovalCallbackFailsClosedAndStartClaimsOnce(t *testing.T) {
 	t.Parallel()
 	service := activeAFCService(t)

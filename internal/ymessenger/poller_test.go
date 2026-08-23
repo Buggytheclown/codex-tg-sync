@@ -42,6 +42,8 @@ type fakeRequestSink struct {
 	requests []model.ExternalLaunchRequest
 }
 
+func (f *fakeRequestSink) NoteExternalPollResult(context.Context, string, error) {}
+
 func (f *fakeRequestSink) ExternalSourceCursor(_ context.Context, _ string) (int64, error) {
 	return f.cursor, nil
 }
@@ -106,6 +108,46 @@ func TestPollOnceHistoryFailureDoesNotAdvanceCursor(t *testing.T) {
 	}
 	if sink.cursor != 7 || len(sink.requests) != 0 {
 		t.Fatalf("cursor=%d requests=%#v after history failure", sink.cursor, sink.requests)
+	}
+}
+
+func TestPollOnceSkipsOneBrokenThreadRootAfterThreeAttempts(t *testing.T) {
+	t.Parallel()
+	client := &fakeUpdatesClient{
+		updates: []Update{{UpdateID: 8, MessageID: 11, From: User{Login: "alice"}, Chat: Chat{ID: "chat", ThreadID: 9}, Text: "@robot-example inspect", MentionedUsers: []User{{Login: "robot-example"}}}},
+		rootErr: errors.New("history unavailable"),
+	}
+	sink := &fakeRequestSink{cursor: 7}
+	poller := NewPoller(client, sink, FilterConfig{RobotLogin: "robot-example", AllowedSenders: []string{"alice"}})
+	for attempt := 1; attempt <= 3; attempt++ {
+		err := poller.PollOnce(context.Background())
+		if attempt < 3 && err == nil {
+			t.Fatalf("attempt %d unexpectedly succeeded", attempt)
+		}
+		if attempt == 3 && err != nil {
+			t.Fatalf("third attempt did not degrade missing context: %v", err)
+		}
+	}
+	if sink.cursor != 8 || len(sink.requests) != 1 || !strings.Contains(sink.requests[0].Prompt, "Unavailable: History API") {
+		t.Fatalf("cursor=%d requests=%#v", sink.cursor, sink.requests)
+	}
+}
+
+func TestPollOnceNeverSkipsHistoryAuthorizationFailure(t *testing.T) {
+	t.Parallel()
+	client := &fakeUpdatesClient{
+		updates: []Update{{UpdateID: 8, MessageID: 11, From: User{Login: "alice"}, Chat: Chat{ID: "chat", ThreadID: 9}, Text: "@robot-example inspect", MentionedUsers: []User{{Login: "robot-example"}}}},
+		rootErr: &HTTPStatusError{Operation: "YMessenger history", StatusCode: 403},
+	}
+	sink := &fakeRequestSink{cursor: 7}
+	poller := NewPoller(client, sink, FilterConfig{RobotLogin: "robot-example", AllowedSenders: []string{"alice"}})
+	for attempt := 0; attempt < 4; attempt++ {
+		if err := poller.PollOnce(context.Background()); err == nil {
+			t.Fatalf("authorization failure skipped on attempt %d", attempt+1)
+		}
+	}
+	if sink.cursor != 7 || len(sink.requests) != 0 {
+		t.Fatalf("authorization failure advanced cursor=%d requests=%#v", sink.cursor, sink.requests)
 	}
 }
 

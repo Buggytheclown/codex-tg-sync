@@ -249,3 +249,42 @@ func TestBotDeliverDirectResponseSendsSilentMessage(t *testing.T) {
 		t.Fatalf("disable_notification = %#v, want true", captured["disable_notification"])
 	}
 }
+
+func TestTelegramInboundTextUsesCaptionAndDetectsUnsupportedMedia(t *testing.T) {
+	message := Message{Text: " ", Caption: " screenshot context ", Photo: []json.RawMessage{json.RawMessage(`{"file_id":"photo"}`)}}
+	if got := telegramInboundText(message); got != "screenshot context" {
+		t.Fatalf("telegramInboundText=%q", got)
+	}
+	if !telegramMessageHasUnsupportedMedia(message) {
+		t.Fatal("photo was not detected as media")
+	}
+}
+
+func TestBotUnsupportedMediaGetsExplicitReplyWithoutStartingCodex(t *testing.T) {
+	var captured map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(body, &captured)
+		_, _ = w.Write([]byte(`{"ok":true,"result":{"message_id":777,"chat":{"id":42,"type":"private"}}}`))
+	}))
+	defer server.Close()
+	root := t.TempDir()
+	service, err := daemon.New(config.Config{AllowedUserIDs: []int64{7}, Paths: config.Paths{
+		Home: root, DataDir: filepath.Join(root, "data"), LogDir: filepath.Join(root, "logs"), DBPath: filepath.Join(root, "data", "state.sqlite"),
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = service.Close() })
+	client := NewClient("token")
+	client.baseURL = server.URL
+	bot := &Bot{client: client, service: service}
+	if err := bot.handleMessage(context.Background(), Message{
+		MessageID: 5, From: &User{ID: 7}, Chat: Chat{ID: 42, Type: "private"}, Document: json.RawMessage(`{"file_id":"doc"}`),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if text, _ := captured["text"].(string); !strings.Contains(text, "Plain text messages only") {
+		t.Fatalf("reply=%#v", captured)
+	}
+}

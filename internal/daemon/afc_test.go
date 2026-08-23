@@ -1353,6 +1353,65 @@ func TestAFCActiveTopicMessageSteersCurrentTelegramTurn(t *testing.T) {
 	}
 }
 
+func TestAFCManagedSteerFallsBackToNewTurnAfterAuthoritativeIdle(t *testing.T) {
+	service := activeAFCService(t)
+	writer := &stubSession{}
+	service.liveFactory = func() Session { return writer }
+	ctx := context.Background()
+	if _, err := service.HandleMessageWithID(ctx, -1001, 11, 501, 123456789, "first", 0); err != nil {
+		t.Fatal(err)
+	}
+	writer.turnSteerErrs = []error{errors.New("map[code:-32600 message:no active turn to steer]")}
+	writer.threadReads = map[string]map[string]any{
+		"thread-1": afcCompletedPayload("thread-1", "started-turn", "done"),
+	}
+
+	response, err := service.HandleMessageWithID(ctx, -1001, 11, 502, 123456789, "next", 0)
+	if err != nil || response == nil || response.TurnID != "started-turn" || !strings.Contains(response.Text, "started") {
+		t.Fatalf("response=%#v err=%v", response, err)
+	}
+	if len(writer.turnSteerCalls) != 1 || len(writer.turnStartCalls) != 2 || writer.turnStartCalls[1].message != "next" {
+		t.Fatalf("steers=%#v starts=%#v", writer.turnSteerCalls, writer.turnStartCalls)
+	}
+	receipt, err := service.store.GetAFCReceipt(ctx, 11, 502)
+	if err != nil || receipt == nil || receipt.State != model.AFCReceiptDispatched {
+		t.Fatalf("receipt=%#v err=%v", receipt, err)
+	}
+}
+
+func TestAFCAuthoritativeSupersedingTurnReleasesStaleLocalLease(t *testing.T) {
+	service := activeAFCService(t)
+	writer := &stubSession{}
+	service.liveFactory = func() Session { return writer }
+	ctx := context.Background()
+	if _, err := service.HandleMessageWithID(ctx, -1001, 11, 501, 123456789, "first", 0); err != nil {
+		t.Fatal(err)
+	}
+	service.cfg.AppServerMode = string(appserver.TransportDaemon)
+	if service.afcWriter.Snapshot().Active != 1 {
+		t.Fatalf("writer before supersession=%#v", service.afcWriter.Snapshot())
+	}
+	state, err := service.store.GetAFCState(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	topic, err := service.store.GetActiveAFCTopic(ctx, -1001, 11)
+	if err != nil || topic == nil {
+		t.Fatalf("topic=%#v err=%v", topic, err)
+	}
+	forum := &fakeAFCForum{}
+	service.processAFCSnapshotLocked(ctx, state, forum, *topic, appserver.SnapshotFromThreadRead(
+		afcRunningPayloadWithCommentary("thread-1", "desktop-turn", "desktop work")), "afc_poll")
+
+	if snapshot := service.afcWriter.Snapshot(); snapshot.Active != 0 || snapshot.Unknown != 0 {
+		t.Fatalf("writer after supersession=%#v", snapshot)
+	}
+	updated, err := service.store.GetActiveAFCTopic(ctx, -1001, 11)
+	if err != nil || updated == nil || updated.ActiveTurnState != model.AFCTurnTerminal {
+		t.Fatalf("topic after supersession=%#v err=%v", updated, err)
+	}
+}
+
 func TestAFCSharedDaemonRestartUnknownReconcilesBeforeSteer(t *testing.T) {
 	service := activeAFCService(t)
 	service.cfg.AppServerMode = "daemon"

@@ -42,7 +42,8 @@ Contract notes:
 ADR: `docs/adr/ADR-026-shared-daemon-afc-sync.md`; design:
 `docs/plans/2026-08-16-afc-desktop-sync-mvp-design.md`.
 
-Restart boundary: `docs/adr/ADR-027-afc-reset-on-start-mvp.md`; design:
+Restart boundary: `docs/adr/ADR-027-afc-reset-on-start-mvp.md`; reliability
+amendment: `docs/adr/ADR-029-afc-reliability-and-external-delivery.md`; design:
 `docs/plans/2026-08-19-afc-reset-on-start-mvp-design.md`.
 
 Planned primary tests:
@@ -73,6 +74,14 @@ Planned primary tests:
   warns Control once when the configured shared daemon is unavailable.
 - `internal/daemon/afc_test.go::TestAFCStartupDoesNotWarnWhenSharedDaemonConnects`
   proves a healthy shared-daemon startup emits no warning.
+- `internal/daemon/afc_test.go::TestAFCManagedSteerFallsBackToNewTurnAfterAuthoritativeIdle`
+  proves stale `turn/steer` rejection re-reads authority and starts exactly one
+  replacement turn.
+- `internal/daemon/afc_test.go::TestAFCAuthoritativeSupersedingTurnReleasesStaleLocalLease`
+  proves an authoritative newer turn releases stale local AFC ownership.
+- `internal/daemon/health_test.go::TestDaemonHeartbeatFailureTruthfullyResetsAFCWithoutReplay`
+  proves a failed managed-daemon heartbeat reports disconnected state, resets
+  AFC to `off`, and queues a Control warning without replay.
 - `internal/daemon/afc_test.go` proves Stop interrupts current Desktop-origin
   and Telegram-origin turns through guarded authoritative coordinates.
 - `internal/daemon/afc_test.go::TestAFCLongFinalSplitsWithinTelegramLimit`
@@ -92,6 +101,9 @@ Contract notes:
   remains the durable catch-up source.
 - A `codex-tg` process restart resets AFC to `off`, cleans the previous Telegram
   session, and requires a manual `/sync on`; it does not interrupt Codex work.
+- Managed-daemon transport loss uses the same boundary. A heartbeat detects
+  half-open poll connections; repair reconnects polling but never re-enables
+  AFC automatically.
 - AFC active rejects legacy DM mutations before App Server access. Off does not
   restore legacy lifecycle; explicit later DM work may start lazily.
 - Long AFC Finals are split at Telegram's UTF-16 message boundary. The first
@@ -152,7 +164,8 @@ Contract notes:
 
 ## YMessenger Launch Requests
 
-ADR: `docs/adr/ADR-028-ymessenger-launch-requests.md`; feature brief:
+ADR: `docs/adr/ADR-028-ymessenger-launch-requests.md`; reliability amendment:
+`docs/adr/ADR-029-afc-reliability-and-external-delivery.md`; feature brief:
 `docs/process/ind-06-ymessenger-launch-requests-brief.md`.
 
 Primary tests:
@@ -170,20 +183,25 @@ Primary tests:
 - `internal/ymessenger/filter_test.go::TestRequestsFromUpdatesAcceptsAllowedMentionFromAnyChat`
 - `internal/ymessenger/filter_test.go::TestRequestsFromUpdatesBuildsExplicitReplyContextAndReplyTarget`
 - `internal/ymessenger/filter_test.go::TestRequestsFromUpdatesUsesHistoryThreadRootAndCanAutoStart`
-- `internal/ymessenger/filter_test.go::TestRequestsFromUpdatesRejectsUnauthorizedMissingMentionAndRobotSender`
+- `internal/ymessenger/filter_test.go::TestRequestsFromUpdatesRepliesToUnauthorizedMentionWithoutLaunch`
 - `internal/ymessenger/poller_test.go::TestPollOnceUsesPersistedCursorAndAdvancesPastIgnoredUpdates`
 - `internal/ymessenger/poller_test.go::TestPollOnceFailureDoesNotAdvanceCursorAndNextCallRetriesSameOffset`
 - `internal/ymessenger/poller_test.go::TestPollOnceResolvesActionableThreadRootFromHistory`
 - `internal/ymessenger/poller_test.go::TestPollOnceHistoryFailureDoesNotAdvanceCursor`
+- `internal/ymessenger/poller_test.go::TestPollOnceSkipsOneBrokenThreadRootAfterThreeAttempts`
+- `internal/ymessenger/poller_test.go::TestPollOnceNeverSkipsHistoryAuthorizationFailure`
 - `internal/storage/store_external_requests_test.go::TestIngestExternalLaunchRequestsCommitsRequestsAndCursorTogether`
 - `internal/storage/store_external_requests_test.go::TestOpenDropsLegacyExternalSourceMessageCacheAndPreservesRequests`
 - `internal/storage/store_external_requests_test.go::TestExternalReplyQueueIsIdempotentAndRetryable`
+- `internal/storage/store_external_requests_test.go::TestExternalAckIsDurableRetryableAndRejectedRequestIsNotRendered`
 - `internal/storage/store_external_requests_test.go::TestExternalLaunchRequestTransitionsAreConditional`
 - `internal/storage/store_external_requests_test.go::TestRecoverStartingExternalLaunchRequestsMarksOutcomeUnknown`
 - `internal/daemon/external_requests_test.go::TestExternalLaunchApprovalRendersOnceAndDismissEditsSameMessage`
 - `internal/daemon/external_requests_test.go::TestExternalLaunchApprovalCallbackFailsClosedAndStartClaimsOnce`
 - `internal/daemon/external_requests_test.go::TestExternalLaunchAutoStartSkipsApprovalAndClaimsDurably`
 - `internal/daemon/external_requests_test.go::TestExternalFinalQueuesAndDeliversReplyToInvocation`
+- `internal/daemon/external_requests_test.go::TestRejectedExternalSenderGetsOnlyPolicyReplyAndCannotStartCodex`
+- `internal/daemon/health_test.go::TestHealthEpisodeQueuesOneWarningAndOneRecovery`
 - `internal/daemon/external_requests_test.go::TestDispatchExternalLaunchRequestCreatesAFCThreadTurnAndTopic`
 - `internal/daemon/external_requests_test.go::TestDispatchExternalLaunchRequestDoesNotReplayAmbiguousThreadStart`
 - `internal/daemon/external_requests_test.go::TestDispatchExternalLaunchRequestLeavesPendingWhileAFCInactive`
@@ -195,13 +213,18 @@ Contract notes:
 - Yandex Messenger accepts configured senders in any source chat only when the
   configured robot is explicitly mentioned.
 - Thread roots are fetched on demand through History API with the configured
-  robot OAuth token; unrelated chat messages are not cached.
+  robot OAuth token; unrelated chat messages are not cached. Authorization
+  failures never advance the cursor. One root-local failure degrades to an
+  explicit unavailable marker after three attempts so it cannot block all
+  later updates forever.
 - The permanent approval topic is configured, never AFC-owned, and never
   deleted by AFC cleanup when approval is enabled.
 - Auto-start is opt-in; sender allowlisting and explicit robot mention remain
   mandatory in both modes.
-- Messenger receives only the exact terminal final, replied to the invoking
-  source message through durable delivery state.
+- Allowed mentions receive a durable acknowledgement and a durable terminal
+  outcome. A terminal turn without final text receives an explicit fallback.
+- A disallowed explicit mention receives one owner-only policy reply and cannot
+  create Telegram approval or Codex work.
 - Duplicate updates and callbacks are safe; ambiguous App Server dispatch is
   visible and non-replayable.
 

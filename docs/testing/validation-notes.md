@@ -4,6 +4,20 @@ This file captures validation nuances that are useful for agents and maintainers
 
 For feature-to-test ownership, see `docs/testing/regression-map.md`.
 
+## AFC reliability and external delivery transparency
+
+2026-08-23 Europe/Minsk: the ADR-029 slice was validated with targeted AFC,
+health, Telegram media, YMessenger filtering/polling, and SQLite delivery tests;
+50 repeated health-episode runs; race tests for `internal/daemon`,
+`internal/storage`, `internal/ymessenger`, and `internal/telegram`; full
+`go test ./...`; `go build -buildvcs=false ./...`; and `git diff --check`.
+The automated transport-reset test proves AFC becomes `off`, poll status becomes
+disconnected, old topics become inactive/cleanup targets, and a durable Control
+warning is queued without replay. Live Telegram/YMessenger readback and a real
+managed-daemon restart were not run because this session did not have the
+private bot, chat, and source credentials; release validation still requires
+that live contour.
+
 ## v0.5.0 control-plane architecture
 
 2026-05-18 PDT: v0.5.0 control-plane architecture validation added ADR-019, Control Plane docs, internal control interfaces, App Server capability mapping, normalized event contracts, and notification severity policy. The slice was validated with targeted `internal/control`, `internal/appserver`, and `internal/daemon` tests, full `go test ./...`, `go build -buildvcs=false ./...`, `git diff --check`, and targeted secret/local scans. Live Telegram E2E was not required because Telegram-visible behavior was not changed.

@@ -103,9 +103,6 @@ func (s *Service) dispatchExternalLaunchRequest(ctx context.Context, requestID s
 		status = model.ExternalLaunchFailed
 		errorType = "dispatch_rejected"
 		errorSummary = "AFC rejected the request before its first turn could start."
-		if response != nil && strings.TrimSpace(response.Text) != "" {
-			errorSummary = strings.TrimSpace(response.Text)
-		}
 	}
 	_, _ = s.store.CompleteExternalLaunchRequest(ctx, request.ID, status, threadID, "", errorType, errorSummary)
 	if status == model.ExternalLaunchFailed {

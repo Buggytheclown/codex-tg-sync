@@ -309,13 +309,45 @@ func (s *Service) steerManagedAFCTurnLocked(ctx context.Context, topic model.AFC
 		turnID = foundTurnID
 		result, err = lease.Process.TurnSteer(ctx, topic.ThreadID, turnID, text)
 	}
+	startedNewTurn := false
+	if result == nil && steerFailureMeansNoActiveTurn(err) {
+		current, readErr := readAuthoritativeAFCSnapshot(ctx, lease.Process, topic.ThreadID)
+		if readErr != nil {
+			err = readErr
+		} else if refreshedTurnID := activeTurnIDFromAFCSnapshot(current); refreshedTurnID != "" {
+			turnID = refreshedTurnID
+			result, err = lease.Process.TurnSteer(ctx, topic.ThreadID, turnID, text)
+		} else {
+			thread, _ := s.store.GetThread(ctx, topic.ThreadID)
+			cwd := ""
+			if thread != nil {
+				cwd = thread.CWD
+			}
+			startedNewTurn = true
+			result, err = lease.Process.TurnStart(ctx, topic.ThreadID, text, cwd, s.turnStartOptions(ctx, "", thread))
+		}
+	}
+	returnedTurnID := appserverThreadTurnID(result)
+	if returnedTurnID != "" {
+		turnID = returnedTurnID
+	}
 	if err != nil || result == nil {
+		if startedNewTurn && afcDispatchAmbiguous(err, returnedTurnID) {
+			_ = s.afcWriter.MarkUncertain(lease)
+			_ = s.store.MarkAFCDispatchFailure(ctx, receipt, model.AFCReceiptUnknown, model.AFCTurnUnknown, lease.Generation)
+			return &DirectResponse{Text: "AFC dispatch outcome is unknown. This Telegram message will never be replayed automatically."}, nil
+		}
 		_ = s.store.MarkAFCReceiptState(ctx, receipt, model.AFCReceiptRejected)
 		return &DirectResponse{Text: activeThreadReplyText(&model.Thread{ID: topic.ThreadID, Title: topic.Title, Status: "active", ActiveTurnID: turnID}, err)}, nil
 	}
 	if err := s.store.MarkAFCDispatchStateWithTelegramUser(ctx, receipt, model.AFCReceiptDispatched, turnID, model.AFCTurnActive, lease.Generation, afcUserTextFingerprint(turnID, text)); err != nil {
 		_ = s.store.MarkAFCReceiptState(ctx, receipt, model.AFCReceiptUnknown)
 		return &DirectResponse{Text: "AFC steered the turn but could not persist confirmation; outcome is unknown."}, nil
+	}
+	if startedNewTurn {
+		_ = s.markTelegramOriginTurnFromTelegram(ctx, topic.ThreadID, turnID, topic.ChatID, topic.TopicID)
+		s.startAFCTelegramOriginHotPoll(ctx, topic.ThreadID, turnID)
+		return &DirectResponse{Text: fmt.Sprintf("AFC turn started: %s", turnID), ThreadID: topic.ThreadID, TurnID: turnID}, nil
 	}
 	return &DirectResponse{Text: fmt.Sprintf("AFC input steered to active turn: %s", turnID), ThreadID: topic.ThreadID, TurnID: turnID}, nil
 }
@@ -861,7 +893,11 @@ func (s *Service) processAFCSnapshotLocked(ctx context.Context, state model.AFCS
 	activeTurnID := strings.TrimSpace(topic.ActiveTurnID)
 	currentTurnID := strings.TrimSpace(current.LatestTurnID)
 	if topic.ActiveTurnState == model.AFCTurnActive && activeTurnID != "" && currentTurnID != "" && currentTurnID != activeTurnID {
-		return
+		if !strings.EqualFold(strings.TrimSpace(s.cfg.AppServerMode), string(appserver.TransportDaemon)) ||
+			!s.releaseAFCTurnLeaseLocked(ctx, state, topic, activeTurnID) {
+			return
+		}
+		topic.ActiveTurnState = model.AFCTurnTerminal
 	}
 	if topic.ActiveTurnState == model.AFCTurnActive &&
 		activeTurnID != "" &&
@@ -883,22 +919,27 @@ func (s *Service) completeAFCTurnLocked(ctx context.Context, state model.AFCStat
 	if !isTerminalStatus(current.LatestTurnStatus) || strings.TrimSpace(current.LatestTurnID) == "" || current.LatestTurnID != topic.ActiveTurnID {
 		return
 	}
+	_ = s.releaseAFCTurnLeaseLocked(ctx, state, topic, current.LatestTurnID)
+}
+
+func (s *Service) releaseAFCTurnLeaseLocked(ctx context.Context, state model.AFCState, topic model.AFCTopic, turnID string) bool {
 	lease, ok := s.afcLeases[topic.ThreadID]
 	if !ok || lease.Generation != topic.WriterGeneration {
-		return
+		return false
 	}
-	if err := s.store.MarkAFCTerminal(ctx, state.SessionID, topic.ThreadID, current.LatestTurnID, topic.WriterGeneration); err != nil {
-		return
+	if err := s.store.MarkAFCTerminal(ctx, state.SessionID, topic.ThreadID, turnID, topic.WriterGeneration); err != nil {
+		return false
 	}
-	_ = s.store.ExpireAFCCallbackRoutes(ctx, topic.ThreadID, current.LatestTurnID)
+	_ = s.store.ExpireAFCCallbackRoutes(ctx, topic.ThreadID, turnID)
 	delete(s.afcLeases, topic.ThreadID)
 	if err := s.afcWriter.MarkTerminal(lease); err != nil {
-		return
+		return false
 	}
 	if s.afcWriter.Snapshot().State == appserver.WriterStopped && s.afcEventCancel != nil {
 		s.afcEventCancel()
 		s.afcEventCancel, s.afcEventProcess, s.afcEventGeneration = nil, nil, 0
 	}
+	return true
 }
 
 func (s *Service) persistAndDeliverAFCSnapshotLocked(ctx context.Context, forum AFCForum, topic model.AFCTopic, current appserver.ThreadReadSnapshot) {

@@ -3,6 +3,8 @@ package ymessenger
 import (
 	"strings"
 	"testing"
+
+	"github.com/mideco-tech/codex-tg/internal/model"
 )
 
 func TestRequestsFromUpdatesAcceptsAllowedMentionFromAnyChat(t *testing.T) {
@@ -45,6 +47,9 @@ func TestRequestsFromUpdatesBuildsExplicitReplyContextAndReplyTarget(t *testing.
 	if request.SourceChatID != "0/0/chat" || request.SourceMessageID != 10 || request.SourceThreadID != 0 || request.AutoStart {
 		t.Fatalf("request routing = %#v", request)
 	}
+	if request.AckStatus != model.ExternalReplyPending || !strings.Contains(request.AckText, "Waiting for the owner") {
+		t.Fatalf("request acknowledgement = %#v", request)
+	}
 }
 
 func TestRequestsFromUpdatesUsesHistoryThreadRootAndCanAutoStart(t *testing.T) {
@@ -60,7 +65,7 @@ func TestRequestsFromUpdatesUsesHistoryThreadRootAndCanAutoStart(t *testing.T) {
 	}
 }
 
-func TestRequestsFromUpdatesRejectsUnauthorizedMissingMentionAndRobotSender(t *testing.T) {
+func TestRequestsFromUpdatesRepliesToUnauthorizedMentionWithoutLaunch(t *testing.T) {
 	t.Parallel()
 	cfg := FilterConfig{RobotLogin: "robot-example", AllowedSenders: []string{"alice"}}
 	updates := []Update{
@@ -69,7 +74,15 @@ func TestRequestsFromUpdatesRejectsUnauthorizedMissingMentionAndRobotSender(t *t
 		{UpdateID: 3, MessageID: 12, From: User{Login: "alice", Robot: true}, Chat: Chat{ID: "chat"}, Text: "task", MentionedUsers: []User{{Login: "robot-example"}}},
 		{UpdateID: 4, MessageID: 13, From: User{Login: "alice"}, Chat: Chat{ID: "chat"}, Text: "   ", MentionedUsers: []User{{Login: "robot-example"}}},
 	}
-	if got := RequestsFromUpdates(updates, cfg); len(got) != 0 {
-		t.Fatalf("requests = %#v, want none", got)
+	got := RequestsFromUpdates(updates, cfg)
+	if len(got) != 1 {
+		t.Fatalf("requests = %#v, want one explicit rejection", got)
+	}
+	request := got[0]
+	if request.Status != model.ExternalLaunchRejectedSender || request.Prompt != "" || request.TelegramTopicID != 0 || request.AutoStart {
+		t.Fatalf("rejected request could launch Codex: %#v", request)
+	}
+	if request.AckStatus != model.ExternalReplyPending || !strings.Contains(request.AckText, "No Codex session was started") {
+		t.Fatalf("rejected request reply = %#v", request)
 	}
 }
