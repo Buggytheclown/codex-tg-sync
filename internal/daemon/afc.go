@@ -950,10 +950,25 @@ func (s *Service) persistAndDeliverAFCSnapshotLocked(ctx context.Context, forum 
 	_ = json.Unmarshal(compact.CompactJSON, &observed)
 	_ = s.store.UpsertThread(ctx, current.Thread)
 	_ = s.store.UpsertSnapshot(ctx, topic.ThreadID, compact)
+	currentTurnID := strings.TrimSpace(observed.LatestTurnID)
 	desiredTitle := strings.TrimSpace(current.Thread.Title)
 	if desiredTitle != "" && desiredTitle != current.Thread.ID {
 		desiredTitle = afcTopicTitle(current.Thread)
 		if desiredTitle != topic.Title && forum.RenameAFCTopic(ctx, topic.TopicID, desiredTitle) == nil {
+			if currentTurnID != "" &&
+				topic.StatusMessageID != 0 &&
+				strings.TrimSpace(topic.StatusTurnID) == currentTurnID &&
+				!isTerminalStatus(observed.LatestTurnStatus) {
+				oldStatusID := topic.StatusMessageID
+				reset, err := s.store.ResetAFCTopicStatusDelivery(ctx, topic.SessionID, topic.TopicID, oldStatusID, currentTurnID)
+				if err != nil || !reset {
+					return
+				}
+				_ = forum.DeleteAFCMessage(ctx, topic.TopicID, oldStatusID)
+				topic.StatusMessageID = 0
+				topic.StatusTurnID = ""
+				topic.LastRenderFP = ""
+			}
 			_ = s.store.UpdateAFCTopicTitle(ctx, topic.SessionID, topic.TopicID, desiredTitle)
 		}
 	}
@@ -966,7 +981,6 @@ func (s *Service) persistAndDeliverAFCSnapshotLocked(ctx context.Context, forum 
 	renderFP := afcFingerprint(tgformat.HashRendered(statusMessage))
 	statusID := topic.StatusMessageID
 	statusTurnID := strings.TrimSpace(topic.StatusTurnID)
-	currentTurnID := strings.TrimSpace(current.LatestTurnID)
 	newObservedTurn := statusTurnID != "" && currentTurnID != "" && statusTurnID != currentTurnID
 	var deliveryErr error
 	if statusID == 0 || newObservedTurn {

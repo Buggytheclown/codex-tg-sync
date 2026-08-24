@@ -5,7 +5,8 @@
 An AFC topic keeps one live `[Status]` message for the current turn. The live
 status is the last bridge message in the topic and is edited in place as
 progress changes, matching the useful legacy presentation behavior. It must not
-remain anchored above a later Telegram prompt or AFC dispatch acknowledgement.
+remain anchored above a later Telegram prompt, AFC dispatch acknowledgement, or
+Telegram service message produced by an AFC topic rename.
 
 Completed-turn history remains unchanged. A new turn still receives its own
 status message and final notification.
@@ -34,6 +35,13 @@ historical and is not deleted; normal new-turn delivery creates the new tail
 status. If deletion or the immediate read fails, delivery remains reset so the
 existing reconciliation/hot-poll loop retries without blocking the prompt.
 
+A successful topic rename follows the same active-turn reanchor rule. After the
+rename, the bridge clears and best-effort deletes only the status whose stored
+turn id matches the current non-terminal turn, then renders its replacement from
+the already persisted compact snapshot. Aggregate blocks and their effective
+timings therefore remain unchanged. A previous-turn or terminal status remains
+historical and is never deleted by rename reconciliation.
+
 The operation runs under the AFC presentation lock and is scoped by exact
 `chatId`, `topicId`, `threadId`, and `turnId`. Legacy panels, direct messages,
 final fingerprints, and writer ownership are unchanged.
@@ -52,6 +60,10 @@ final fingerprints, and writer ownership are unchanged.
 - New turn: previous-turn status is retained and a new status is appended.
 - Delete/read failure: dispatch remains successful and later reconciliation can
   recreate the status.
+- Active-turn rename: the old live status is deleted and one replacement is
+  sent after the rename service message with identical aggregate blocks and
+  effective block timings.
+- Previous-turn and terminal statuses are retained when a topic is renamed.
 - Legacy lifecycle tests remain unchanged.
 - Live Telegram readback verifies that a steer leaves `[Status]` last and later
   progress edits that same message.

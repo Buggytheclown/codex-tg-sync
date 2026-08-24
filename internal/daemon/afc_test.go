@@ -727,6 +727,109 @@ func TestAFCPassiveSyncReconcilesCodexThreadTitleToTopic(t *testing.T) {
 	}
 }
 
+func TestAFCTopicRenameReanchorsActiveStatusWithoutLosingAggregate(t *testing.T) {
+	service := activeAFCService(t)
+	ctx := context.Background()
+	now := time.Date(2026, time.August, 24, 12, 0, 0, 0, time.UTC)
+	service.now = func() time.Time { return now }
+	payload := afcRunningPayloadWithCommentaries("thread-1", "turn-1", "first block", "second block", "third block")
+	payload["thread"].(map[string]any)["title"] = "Topic"
+	poll := &stubSession{threadReads: map[string]map[string]any{"thread-1": payload}}
+	service.mu.Lock()
+	service.poll, service.pollConnected = poll, true
+	service.mu.Unlock()
+	forum := &fakeAFCForum{}
+	service.SetAFCForum(forum)
+
+	service.syncAFC(ctx)
+	if len(forum.sends) != 1 {
+		t.Fatalf("initial sends=%#v, want one aggregate status", forum.sends)
+	}
+	oldStatus := forum.sends[0]
+	before, err := service.store.GetSnapshot(ctx, "thread-1")
+	if err != nil || before == nil {
+		t.Fatalf("initial snapshot=%#v err=%v", before, err)
+	}
+	var beforeSnapshot appserver.ThreadReadSnapshot
+	if err := json.Unmarshal(before.CompactJSON, &beforeSnapshot); err != nil {
+		t.Fatal(err)
+	}
+
+	payload["thread"].(map[string]any)["title"] = "Renamed task"
+	service.syncAFC(ctx)
+
+	if len(forum.renames) != 1 || forum.renames[0].title != "Renamed task" {
+		t.Fatalf("renames=%#v", forum.renames)
+	}
+	if len(forum.messageDeletes) != 1 || forum.messageDeletes[0].messageID != oldStatus.messageID {
+		t.Fatalf("message deletes=%#v, want old status %d", forum.messageDeletes, oldStatus.messageID)
+	}
+	if len(forum.sends) != 2 || forum.sends[1].messageID == oldStatus.messageID {
+		t.Fatalf("sends=%#v, want fresh status after rename", forum.sends)
+	}
+	if forum.sends[1].text != oldStatus.text {
+		t.Fatalf("reanchored status changed\nbefore: %q\nafter:  %q", oldStatus.text, forum.sends[1].text)
+	}
+	for _, block := range []string{"first block", "second block", "third block"} {
+		if strings.Count(forum.sends[1].text, block) != 1 {
+			t.Fatalf("reanchored status=%q, want exactly one %q", forum.sends[1].text, block)
+		}
+	}
+	after, err := service.store.GetSnapshot(ctx, "thread-1")
+	if err != nil || after == nil {
+		t.Fatalf("updated snapshot=%#v err=%v", after, err)
+	}
+	var afterSnapshot appserver.ThreadReadSnapshot
+	if err := json.Unmarshal(after.CompactJSON, &afterSnapshot); err != nil {
+		t.Fatal(err)
+	}
+	if len(afterSnapshot.DetailItems) != len(beforeSnapshot.DetailItems) {
+		t.Fatalf("detail items changed from %d to %d", len(beforeSnapshot.DetailItems), len(afterSnapshot.DetailItems))
+	}
+	for index := range beforeSnapshot.DetailItems {
+		if afterSnapshot.DetailItems[index].ID != beforeSnapshot.DetailItems[index].ID ||
+			afterSnapshot.DetailItems[index].Text != beforeSnapshot.DetailItems[index].Text ||
+			afterSnapshot.DetailItems[index].StartedAt != beforeSnapshot.DetailItems[index].StartedAt {
+			t.Fatalf("detail item %d changed: before=%#v after=%#v", index, beforeSnapshot.DetailItems[index], afterSnapshot.DetailItems[index])
+		}
+	}
+	topic, err := service.store.GetActiveAFCTopic(ctx, -1001, 11)
+	if err != nil || topic == nil || topic.StatusMessageID != forum.sends[1].messageID || topic.StatusTurnID != "turn-1" {
+		t.Fatalf("topic=%#v err=%v, want reanchored turn-1 status", topic, err)
+	}
+}
+
+func TestAFCTopicRenameKeepsPreviousTurnStatusHistory(t *testing.T) {
+	service := activeAFCService(t)
+	ctx := context.Background()
+	payload := afcRunningPayloadWithCommentary("thread-1", "turn-1", "first turn")
+	payload["thread"].(map[string]any)["title"] = "Topic"
+	poll := &stubSession{threadReads: map[string]map[string]any{"thread-1": payload}}
+	service.mu.Lock()
+	service.poll, service.pollConnected = poll, true
+	service.mu.Unlock()
+	forum := &fakeAFCForum{}
+	service.SetAFCForum(forum)
+
+	service.syncAFC(ctx)
+	oldStatusID := forum.sends[0].messageID
+	secondTurn := afcRunningPayloadWithCommentary("thread-1", "turn-2", "second turn")
+	secondTurn["thread"].(map[string]any)["title"] = "Renamed task"
+	poll.threadReads["thread-1"] = secondTurn
+	service.syncAFC(ctx)
+
+	if len(forum.renames) != 1 || len(forum.messageDeletes) != 0 {
+		t.Fatalf("renames=%#v deletes=%#v, want rename without deleting previous turn", forum.renames, forum.messageDeletes)
+	}
+	if len(forum.sends) != 2 || forum.sends[1].messageID == oldStatusID || !strings.Contains(forum.sends[1].text, "second turn") {
+		t.Fatalf("sends=%#v, want retained turn-1 status and fresh turn-2 status", forum.sends)
+	}
+	topic, err := service.store.GetActiveAFCTopic(ctx, -1001, 11)
+	if err != nil || topic == nil || topic.StatusMessageID != forum.sends[1].messageID || topic.StatusTurnID != "turn-2" {
+		t.Fatalf("topic=%#v err=%v, want turn-2 status anchor", topic, err)
+	}
+}
+
 func TestAFCPresentationIgnoresStalePollTurnWhileAFCWriterIsActive(t *testing.T) {
 	service := activeAFCService(t)
 	ctx := context.Background()
