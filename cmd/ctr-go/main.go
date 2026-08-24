@@ -20,6 +20,7 @@ import (
 
 	"github.com/mideco-tech/codex-tg/internal/config"
 	"github.com/mideco-tech/codex-tg/internal/controlapi"
+	"github.com/mideco-tech/codex-tg/internal/cronpoller"
 	"github.com/mideco-tech/codex-tg/internal/daemon"
 	"github.com/mideco-tech/codex-tg/internal/telegram"
 	"github.com/mideco-tech/codex-tg/internal/version"
@@ -122,9 +123,29 @@ func runDaemon(cfg config.Config) error {
 		return err
 	}
 	startYMessengerPoller(ctx, cfg, service, logger)
+	startCronPoller(ctx, cfg, service, logger)
 	service.FinishStartup(ctx)
 	logger.Printf("ctr-go daemon running with %s", bot.String())
 	return bot.Run(ctx)
+}
+
+func startCronPoller(ctx context.Context, cfg config.Config, sink cronpoller.RequestSink, logger *log.Logger) {
+	poller := cronpoller.New(filepath.Join(cfg.Paths.Home, "cron.json"), cfg.ExternalRequestsTopicID, sink)
+	lastError := ""
+	go poller.Run(ctx, cronpoller.DefaultPollInterval, func(err error) {
+		if err == nil {
+			lastError = ""
+			return
+		}
+		currentError := telegram.SanitizeLogError(err)
+		if currentError == lastError {
+			return
+		}
+		lastError = currentError
+		if logger != nil {
+			logger.Printf("cron launch request poll failed: %s", currentError)
+		}
+	})
 }
 
 func startYMessengerPoller(ctx context.Context, cfg config.Config, sink ymessenger.RequestSink, logger *log.Logger) bool {

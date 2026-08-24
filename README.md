@@ -1,79 +1,53 @@
 # codex-tg: local Codex control plane
 
-Local control plane for OpenAI Codex App Server, built in Go, with Telegram as
-the first production adapter.
-
-`codex-tg` watches local Codex threads, keeps durable thread identity visible,
-routes operator input back to the right turn, and exposes high-signal controls
-such as Plan Mode prompts, Stop, Steer, Details, Tools file, and Get full log.
-The current adapter is Telegram; the v0.5 direction is a reusable local
-`codex-control` layer for future router agents, voice assistants, tray flows,
-and other private adapters.
+Local control plane for OpenAI Codex App Server, built in Go. Its supported
+Telegram surface is Sync mode: one private forum mirrors Codex Desktop chats as
+topics and keeps prompts, live status, approvals, input requests, and final
+answers attached to the correct Codex thread.
 
 ## Why codex-tg?
 
-- Local Codex control plane for OpenAI Codex App Server.
-- Control and observe Codex threads through adapters without exposing App Server to the internet.
-- Use Telegram today as a high-signal notification, reply, approval, and Details surface.
+- Mirror Codex Desktop chats into a private Telegram forum with `/sync on`.
+- Continue or stop the correct Codex turn from its Telegram topic.
+- Approve Codex and scheduled launch requests without exposing App Server to the internet.
 - Reuse your existing Codex setup: skills, MCP servers, plugins, repo instructions, and local workflows.
-- Thread-first routing keeps replies, tools, Plan Mode, Details, and Final cards attached to the right run.
-- Built toward long-running local coding-agent orchestration and future router-agent workflows.
+- Run local daily or weekly Codex prompts through the same durable approval flow.
+- Durable thread-first routing keeps every topic attached to the right local task.
 
 Current release: `v0.5.0`.
-
-![codex-tg Telegram Plan Mode demo](docs/assets/telegram-plan-mode-demo.png)
-
-The demo flow is documented in [docs/demo/telegram-plan-mode-demo.md](docs/demo/telegram-plan-mode-demo.md).
 
 ## Why It Matters
 
 - Keep local Codex work observable and controllable without exposing Codex App Server to the internet.
-- Give future router agents a stable local control surface for Codex threads, turns, approvals, events, and skills.
-- Use Telegram as a low-friction fallback and notification surface on unreliable or constrained networks.
+- Use Telegram as a low-friction synchronized control surface for local Codex work.
+- Reuse one durable launch path for Telegram, cron, and optional source adapters.
 - Preserve local-first ownership: Codex sessions, workspaces, SQLite state, and tokens stay on your machine.
 
 ## Remote Connections
 
 Official Codex Remote Connections cover the broad mobile remote-control
 workflow for Codex. `codex-tg` is not trying to replace that feature. The
-project direction is a local control layer and adapter system: Telegram remains
-useful for operator notifications, replies, approvals, Details, and logs, while
-future adapters can consume the same Codex control core.
-
-## Demo Screenshots
-
-**1. User request and Plan Mode**
-
-![User request and Plan Mode](docs/assets/telegram-plan-mode-demo-1-user-plan.png)
-
-**2. Tool execution and output**
-
-![Tool execution and output](docs/assets/telegram-plan-mode-demo-2-tool-output.png)
-
-**3. Final answer and Details**
-
-![Final answer and Details](docs/assets/telegram-plan-mode-demo-3-final-details.png)
+project direction is a local control layer and adapter system. Telegram Sync
+mode remains the operator surface, while cron and other private adapters feed
+the same durable launch lifecycle.
 
 ## Features
 
-- Thread-first routing over local Codex App Server.
-- Global observer for foreign GUI/CLI runs, with polling fallback through `thread/read`.
-- Telegram-origin live current tool rendering from App Server `item/*` events, while foreign GUI/CLI panels stay completed-tool only.
-- Stable visual identity per thread: emoji marker plus project/thread/run chips.
-- Explicit `New run -> [User] -> [commentary] -> [Tool] -> [Output] -> [Final]` chronology with status on the live commentary/final card.
-- Low-noise Telegram notifications: only `New run` (configurable), `[Plan]`, and `[Final]` are audible; live progress and exports are sent silently.
-- Plan Mode starts from Telegram via `/plan` or `/reply --plan`; if a thread remains in Plan Mode, the Plan Final Card offers `Turn off Plan` and `/stop` also arms the next normal turn to leave Plan Mode. `[Plan]` prompt-cards keep reply-first routing and structured buttons when Codex provides choices.
-- Final Card with Details pagination and on-demand Tools file export.
-- On-demand full log archive from Codex session JSONL.
-- SQLite-backed durable state for bindings, routes, callbacks, observer target, panels, and delivery metadata.
+- Sync lifecycle through `/sync on|off`, `/status`, `/refresh`, and non-destructive `/repair`.
+- One managed Telegram forum topic per synchronized Codex Desktop chat.
+- Plain-text topic messages start or steer the authoritative turn; `/stop` interrupts it.
+- Compact `[User]`, `[Status]`, `[Approval]`, `[Input]`, and `[Final]` messages.
+- Project and Chat creation through `/projects` and `/newchat` in Control.
+- Durable external launch requests with Telegram `Start` / `Dismiss` approval.
+- Reloadable JSON cron schedules with daily and weekly catch-up without backlog.
+- SQLite-backed topic identity, callbacks, launch requests, and delivery state.
 - macOS service installer with friendly first-run setup, user LaunchAgent management, and menu bar tray control.
-- v0.5 architecture direction: adapter-independent Codex Control Plane for router agents, voice adapters, and local private APIs.
 - Cross-platform Go daemon foundation for Windows, macOS, and Linux.
 
 ## Platform Status
 
-- Windows: actively tested with the local Codex App Server, Telegram Bot API, observer flows, and live E2E demo.
-- macOS: `v0.5.0` preserves the `v0.4.0` verified service/runtime path on macOS 26.3.1 arm64 with Go 1.26.2, and adds validated Codex Control Plane architecture, internal control interfaces, capability mapping, normalized event contracts, and notification severity policy.
+- Windows: tests and builds are supported; current Sync-mode live validation is macOS-focused.
+- macOS: primary service/runtime path, using a user LaunchAgent and the shared managed App Server.
 - Linux: CI runs tests/builds on Ubuntu; full local daemon/runtime validation is still pending.
 
 ## Quickstart
@@ -83,6 +57,8 @@ Prerequisites:
 - OpenAI Codex CLI with `codex app-server`.
 - A Telegram bot token from BotFather.
 - Your Telegram numeric user id.
+- A private Telegram forum supergroup containing only you and the bot; the bot
+  must be allowed to manage topics and delete messages.
 
 On macOS, download the latest `.pkg` from
 [GitHub Releases](https://github.com/mideco-tech/codex-tg/releases/latest),
@@ -134,15 +110,15 @@ $env:CTR_GO_DEFAULT_CWD = "C:\Users\you\Projects\Codex"
 In Telegram:
 
 ```text
-/start
-/observe all
-/threads
-/context
+/sync on
+/status
+/projects
 ```
 
-Start or continue a Codex thread from Codex GUI/CLI. `codex-tg` should create a `New run` card, a `[User]` card, live progress cards, and then send a final answer card with Details while cleaning up transient live cards.
-
-Set `CTR_GO_NOTIFY_NEW_RUN=off` to keep `New run` visible but silent. `[Plan]` prompts and `[Final]` cards still use normal Telegram notifications.
+`/sync on` reconciles recent Codex Desktop chats into forum topics. Send plain
+text in a task topic to start or steer its turn; use `/stop` in that topic to
+interrupt the active turn. The daemon intentionally resets Sync to `off` after
+a restart, so enable it again after the shared App Server is healthy.
 
 ## Runtime Commands
 
@@ -170,24 +146,21 @@ go run ./cmd/ctr-go repair
 go run ./cmd/ctr-go daemon run
 ```
 
-Telegram command menu:
+Supported Telegram command menu:
 
 - `/sync on|off` controls Sync mode
 - `/status`, `/refresh`
 - `/projects`, `/newchat`, `/stop`
 
-Legacy DM commands remain available as hidden compatibility handlers but are
-not advertised in the Telegram command menu.
+`/repair` is also accepted in Control and recreates bridge App Server sessions
+without deleting Codex threads. Sync mode in the configured private forum is
+the only supported Telegram product surface; direct-message command workflows
+outside that forum are unsupported.
 
-`/projects` opens cached project/workspace navigation sorted by the latest
-thread activity. Codex UI Chats from `Documents/Codex` are grouped under
-`Chats`: the main projects view shows recent Chat previews, `Open Chats` opens
-the full paginated Chat list, and choosing a Chat opens and binds its thread.
-Use `New thread` in a normal project menu to create a new thread in that
-project cwd. Use `/newchat <prompt>` to create a Codex UI Chat under
-`Documents/Codex/<date>/<prompt-slug>`. Use `/newthread <prompt>` when you need
-a thread without choosing a project or creating a Chat folder; App Server may
-still attach the daemon default cwd.
+`/projects` opens cached project/workspace navigation in Control. Choosing a
+project creates a ready Telegram draft topic; its first plain-text message
+creates the Codex thread and first turn. `/newchat` opens the same project
+picker for a dated Codex Chat.
 
 ## Configuration
 
@@ -203,7 +176,7 @@ Primary environment variables:
 - `CTR_GO_TELEGRAM_BOT_TOKEN`
 - `CTR_GO_ALLOWED_USER_IDS`
 - `CTR_GO_ALLOWED_CHAT_IDS`
-- `CTR_GO_AFC_GROUP_ID` (optional exact private forum supergroup for AFC)
+- `CTR_GO_AFC_GROUP_ID` (exact private forum supergroup used by Sync mode)
 - `CTR_GO_AFC_INITIAL_TOPIC_LIMIT` (`5` by default; initial `/sync on` snapshot only)
 - `CTR_GO_YMESSENGER_ENABLED` (`false` by default)
 - `CTR_GO_YMESSENGER_ROBOT_LOGIN` (required when the adapter is enabled)
@@ -218,7 +191,6 @@ Primary environment variables:
 - `CTR_GO_EXTERNAL_REQUEST_SANDBOX_MODE` (`read-only`, `workspace-write`, or `danger-full-access`; empty inherits the App Server default)
 - `CTR_GO_DEFAULT_CWD`
 - `CTR_GO_CODEX_CHATS_ROOT` (`~/Documents/Codex` by default)
-- `CTR_GO_NOTIFY_NEW_RUN` (`true` by default; set `false`/`off`/`0` to send `New run` silently)
 - `CTR_GO_LOG_ENABLED` (`true` by default; set `false`/`off`/`0` to discard daemon stdout logs)
 - `CTR_GO_DIAGNOSTIC_LOGS` (`true` by default; set `false`/`off`/`0` to keep normal bot logs but suppress structured `daemon_event` diagnostics)
 - `CTR_GO_OBSERVER_POLL_SECONDS`
@@ -237,32 +209,31 @@ Compatibility fallbacks:
 - `CTR_ALLOWED_USER_IDS`
 - `CTR_ALLOWED_CHAT_IDS`
 
-## AFC forum group
+## Telegram Sync mode
 
 Set `CTR_GO_AFC_GROUP_ID` to one private Telegram forum supergroup and configure
 exactly one `CTR_GO_ALLOWED_USER_IDS` value. The group must contain only that
 user and the bot; the bot must be able to manage topics and delete messages.
 Use `/sync on` in the built-in General topic. Activation validates the group and
 idempotently renames that built-in topic to `Control` before creating managed topics for
-five recent Codex threads by default. While AFC is active, reconciliation creates one
+five recent Codex threads by default. While Sync is active, reconciliation creates one
 topic for each newly discovered Desktop chat; `/refresh` triggers the same reconciliation
 immediately. Control advertises `/projects` and `/newchat`;
 either command creates a Telegram draft topic without holding an App Server
-writer. Send its first prompt only after the topic is ready: AFC creates the
+writer. Send its first prompt only after the topic is ready: Sync creates the
 Codex thread and first turn together, then renames the topic from that prompt.
 Messages sent while a topic turn is active steer that exact turn, and `/stop`
 targets the current shared-daemon turn regardless of whether Desktop or Telegram
-started it. While AFC is active, legacy DM mutations are disabled; `/help` and
-`/status` remain available. `/sync off` never
-restores the legacy observer automatically. Use `/sync off --force` only when AFC
-turns must be interrupted and drained.
+started it. `/sync off` drains safely and removes managed Telegram topics but
+does not delete Codex threads. Use `/sync off --force` only when active turns
+must be interrupted and drained.
 
 ### Yandex Messenger launch requests
 
 The optional Yandex Messenger adapter runs inside the same `codex-tg` daemon;
 the normal one-command startup does not change. Approval is secure by default.
 When it is enabled, create a permanent `Requests` topic manually in the
-configured AFC forum group and put its topic id in
+configured Sync forum group and put its topic id in
 `CTR_GO_EXTERNAL_REQUESTS_TOPIC_ID`. Every accepted request is rendered there
 as a durable status card. Set `CTR_GO_YMESSENGER_REQUIRE_APPROVAL=false` to
 start allowed explicit mentions automatically; auto-start cards have no
@@ -274,8 +245,8 @@ The poller accepts a message only when `from.login` is in
 messages receive a durable acknowledgement and appear in `Requests`;
 approval-gated requests include `Start`
 and `Dismiss`, while automatic requests are informational only. Dispatch
-requires AFC to be active, creates one normal AFC session topic, then uses the
-existing AFC writer to perform `thread/start` and the first `turn/start`.
+requires Sync to be active, creates one normal task topic, then uses the shared
+writer to perform `thread/start` and the first `turn/start`.
 Optional external-request permission settings are passed explicitly to both
 calls, so the launch does not depend on cached App Server defaults.
 An explicit robot mention from any other sender receives a static owner-only
@@ -283,7 +254,7 @@ reply. It stores no Codex prompt and cannot create a Telegram approval or
 Codex session.
 
 For direct replies, the nested `reply_to_message` is included as untrusted
-context. For thread messages, the adapter uses the Bot API invariant that
+context. For thread messages, the adapter uses the Messenger API invariant that
 `chat.thread_id` equals the root message timestamp and resolves that exact
 message on demand through Messenger History API. The configured robot OAuth
 token is reused with the History API `OAuth` authorization scheme; no user
@@ -293,13 +264,65 @@ cursor unchanged. Other failures for one exact root retry twice, then advance
 with an explicit unavailable-context marker so one message cannot block all
 later updates. The daemon does not cache unrelated chat messages.
 
+### Cron launch requests
+
+An optional `~/.codex-tg/cron.json` file can enqueue daily or weekly Codex launch
+requests through the same durable Telegram approval and Sync dispatch lifecycle.
+The daemon reloads the file every 30 seconds; a missing file disables the
+source, while invalid JSON or task configuration fails closed for that poll.
+
+The supported five-field subset is deliberately small:
+
+- daily: day-of-month, month, and day-of-week are `*`;
+- weekly: day-of-month and month are `*`, and day-of-week is one number or
+  three-letter weekday such as `1` or `MON`.
+
+A daily task creates at most one request per local calendar day. A weekly task
+creates at most one request per local calendar week and uses the scheduled
+weekday's date as its durable identity. Starting after the current period's
+slot catches up once; missed days or weeks never create a backlog.
+
+```json
+{
+  "version": 1,
+  "timezone": "Europe/Berlin",
+  "tasks": [
+    {
+      "id": "morning-project-brief",
+      "cron": "0 10 * * *",
+      "cwd": "/path/to/project",
+      "prompt": "Prepare the morning engineering brief.",
+      "model": "gpt-5.6-luna",
+      "reasoning_effort": "high",
+      "launch_policy": "telegram",
+      "enabled": true
+    },
+    {
+      "id": "weekly-project-radar",
+      "cron": "0 10 * * MON",
+      "cwd": "/path/to/another-project",
+      "prompt": "Prepare the weekly project radar.",
+      "model": "gpt-5.6-sol",
+      "reasoning_effort": "high",
+      "launch_policy": "telegram",
+      "enabled": true
+    }
+  ]
+}
+```
+
+`launch_policy` defaults to `telegram`, which requires the configured external
+requests topic and presents `Dismiss` / `Start`. Use `auto` for future requests
+that should enter the existing auto-start path. Existing pending requests are
+not rewritten after configuration changes.
+
 The existing App Server subscription and authoritative `thread/read` snapshot
 remain the only source of the Codex final answer. A terminal final is queued in
 SQLite and sent through Bot API `sendText` with the source `chat_id`, invoking
 `message_id` as `reply_message_id`, and source `thread_id`. The terminal answer
 is returned to Messenger; a failed, interrupted, or empty terminal turn gets a
 short explicit fallback instead of silence. Commentary and tool output remain
-in the normal AFC topic.
+in the normal Sync task topic.
 
 The update cursor and normalized request are committed in one SQLite
 transaction. Duplicate source messages and button presses are ignored. A
@@ -312,7 +335,7 @@ only in the private config and are omitted from status/doctor JSON.
 
 ### Shared App Server startup on macOS
 
-AFC daemon mode requires Codex Desktop and `codex-tg` to connect to the same
+Sync mode requires Codex Desktop and `codex-tg` to connect to the same
 managed App Server. The startup order matters.
 
 #### After every reboot
@@ -342,7 +365,7 @@ ctr-go status
 ```
 
 When installed with `--start-at-login`, `codex-tg` may start automatically
-before the managed daemon. In that case it stays fail-closed, resets AFC to
+before the managed daemon. In that case it stays fail-closed, resets Sync to
 `off`, and sends one warning to Control. It does not spawn a private App Server.
 Start the managed daemon, restart Desktop in local-daemon mode, and then run
 `/sync on`.
@@ -357,12 +380,12 @@ Desktop probably started a private App Server. Recover with this exact order:
 4. Run `ctr-go service restart`, verify `ctr-go status`, and send `/sync on` in
    Control.
 
-Every `codex-tg` restart intentionally resets AFC to `off` for the MVP. Existing
+Every `codex-tg` restart intentionally resets Sync to `off`. Existing
 Codex work continues in the shared runtime, but the old Telegram topics are
 cleaned up. Run `/sync on` in Control after the shared connection is healthy.
 The bridge applies the same boundary when its managed-daemon heartbeat detects
 a broken or half-open transport: connection status becomes false, Control gets
-one warning and one recovery notice, polling reconnects, and AFC remains off
+one warning and one recovery notice, polling reconnects, and Sync remains off
 until the operator runs `/sync on` again. Prompts are never replayed.
 
 ## Verification
@@ -376,24 +399,12 @@ Live Telegram readback E2E is documented in
 [tests/live_e2e/README.md](tests/live_e2e/README.md). It is intentionally
 gated by local env and is not part of `go test ./...`.
 
-Live demo for a screenshot:
-
-```powershell
-$env:CTR_DEMO_TELEGRAM_E2E = "1"
-$env:CTR_DEMO_TELEGRAM_CHAT_ID = "<telegram-chat-id>"
-$env:CTR_GO_TELEGRAM_BOT_TOKEN = "<telegram-bot-token>"
-$env:CTR_DEMO_KEEP_MESSAGES = "true"
-go test -tags demo_e2e ./tests -run TestTelegramPlanModeScreenshotDemo -count=1 -v
-```
-
-See [docs/demo/telegram-plan-mode-demo.md](docs/demo/telegram-plan-mode-demo.md) for the screenshot checklist.
-
 ## GitHub Metadata
 
 Suggested repository description:
 
 ```text
-Local Codex control plane with a Telegram adapter. Observe, approve, steer, and route Codex App Server threads without exposing App Server publicly.
+Sync local Codex Desktop chats with a private Telegram forum; steer, approve, and schedule Codex work without exposing App Server publicly.
 ```
 
 Suggested topics:
@@ -401,7 +412,7 @@ Suggested topics:
 ```text
 codex telegram telegram-bot telegram-ui openai-codex codex-cli
 codex-app-server codex-control-plane ai-agents coding-agent remote-control developer-tools
-local-first go macos windows linux plan-mode agent-observer router-agent
+local-first go macos windows linux telegram-forum cron scheduler
 ```
 
 ## Documentation
@@ -410,10 +421,8 @@ local-first go macos windows linux plan-mode agent-observer router-agent
 - [Control Plane](docs/wiki/Control-Plane.md)
 - [Quickstart](docs/wiki/Quickstart.md)
 - [Telegram UX](docs/wiki/Telegram-UX.md)
-- [Plan Mode](docs/wiki/Plan-Mode.md)
 - [Security](docs/wiki/Security.md)
 - [Operations](docs/wiki/Operations.md)
-- [Demo](docs/wiki/Demo.md)
 - [Changelog](CHANGELOG.md)
 - [Contract matrix](docs/research/contract-matrix.md)
 - [Validation notes](docs/testing/validation-notes.md)

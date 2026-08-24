@@ -315,6 +315,8 @@ func TestDispatchExternalLaunchRequestCreatesAFCThreadTurnAndTopic(t *testing.T)
 	service.SetAFCForum(forum)
 	request := daemonExternalRequest("test:dispatch:1", "run requested task")
 	request.Prompt = "Source: test\nUntrusted context for Codex only\n\nUser request:\n" + request.SafePreview
+	request.Model = "gpt-5.6-luna"
+	request.ReasoningEffort = "high"
 	request = prepareStartingExternalRequestRecord(t, service, request)
 
 	service.dispatchExternalLaunchRequest(context.Background(), request.ID)
@@ -330,6 +332,9 @@ func TestDispatchExternalLaunchRequestCreatesAFCThreadTurnAndTopic(t *testing.T)
 	}
 	if writer.turnStartCalls[0].approvalPolicy != "never" || writer.turnStartCalls[0].approvalsReviewer != "auto_review" || writer.turnStartCalls[0].sandboxMode != "danger-full-access" {
 		t.Fatalf("turn permissions=%#v", writer.turnStartCalls[0])
+	}
+	if writer.turnStartCalls[0].collaborationMode != "default" || writer.turnStartCalls[0].model != "gpt-5.6-luna" || writer.turnStartCalls[0].reasoningEffort != "high" {
+		t.Fatalf("turn execution settings=%#v", writer.turnStartCalls[0])
 	}
 	userMessages := 0
 	for _, sent := range forum.sends {

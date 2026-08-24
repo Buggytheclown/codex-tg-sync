@@ -17,6 +17,7 @@ func TestIngestExternalLaunchRequestsCommitsRequestsAndCursorTogether(t *testing
 	request := model.ExternalLaunchRequest{
 		ID: "yandex_messenger:chat:10", Source: "yandex_messenger", ExternalID: "chat:10", Sender: "alice",
 		Title: "Request from alice", SafePreview: "do work", Prompt: "do work", CWD: "/project",
+		Model: "gpt-5.6-luna", ReasoningEffort: "high",
 		Status: model.ExternalLaunchPendingApproval, TelegramTopicID: 77,
 		CreatedAt: model.NowString(), UpdatedAt: model.NowString(),
 	}
@@ -33,7 +34,7 @@ func TestIngestExternalLaunchRequestsCommitsRequestsAndCursorTogether(t *testing
 		t.Fatalf("cursor = %d, err=%v, want 12", cursor, err)
 	}
 	got, err := store.GetExternalLaunchRequest(ctx, request.ID)
-	if err != nil || got == nil || got.Prompt != "do work" {
+	if err != nil || got == nil || got.Prompt != "do work" || got.Model != "gpt-5.6-luna" || got.ReasoningEffort != "high" {
 		t.Fatalf("request = %#v, err=%v", got, err)
 	}
 

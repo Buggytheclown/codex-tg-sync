@@ -229,7 +229,7 @@ func (s *Service) dispatchAFCMessage(ctx context.Context, topic model.AFCTopic, 
 			if convertErr := s.store.ConvertEmptyAFCTopicToDraft(ctx, topic, draft, receipt, lease.Generation); convertErr == nil {
 				draft.State, draft.SourceMessageID = model.AFCDraftStarting, messageID
 				receipt.ThreadID = ""
-				return s.startClaimedAFCDraftLocked(ctx, draft, receipt, text, text, appserver.ThreadStartOptions{})
+				return s.startClaimedAFCDraftLocked(ctx, draft, receipt, text, text, appserver.ThreadStartOptions{}, appserver.TurnStartOptions{})
 			}
 			_ = s.store.MarkAFCDispatchFailure(ctx, receipt, model.AFCReceiptRejected, model.AFCTurnTerminal, lease.Generation)
 			return &DirectResponse{Text: "AFC found an empty pre-migration thread but could not convert it safely. The prompt was not sent."}, nil

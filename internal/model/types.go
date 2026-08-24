@@ -152,6 +152,8 @@ type ExternalLaunchRequest struct {
 	SourceURL              string
 	Prompt                 string
 	CWD                    string
+	Model                  string
+	ReasoningEffort        string
 	Status                 string
 	TelegramTopicID        int64
 	TelegramMessageID      int64

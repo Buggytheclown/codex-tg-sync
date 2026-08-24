@@ -53,9 +53,17 @@ func validateExternalLaunchRequest(request model.ExternalLaunchRequest, source s
 }
 
 func (s *Store) IngestExternalLaunchRequests(ctx context.Context, source string, cursor int64, requests []model.ExternalLaunchRequest) (int, error) {
+	return s.writeExternalLaunchRequests(ctx, source, requests, &cursor)
+}
+
+func (s *Store) EnqueueExternalLaunchRequests(ctx context.Context, source string, requests []model.ExternalLaunchRequest) (int, error) {
+	return s.writeExternalLaunchRequests(ctx, source, requests, nil)
+}
+
+func (s *Store) writeExternalLaunchRequests(ctx context.Context, source string, requests []model.ExternalLaunchRequest, cursor *int64) (int, error) {
 	source = strings.TrimSpace(source)
-	if source == "" || cursor < 0 {
-		return 0, errors.New("external source and non-negative cursor are required")
+	if source == "" || (cursor != nil && *cursor < 0) {
+		return 0, errors.New("external source and non-negative cursor are required when advancing a cursor")
 	}
 	for _, request := range requests {
 		if err := validateExternalLaunchRequest(request, source); err != nil {
@@ -75,17 +83,17 @@ func (s *Store) IngestExternalLaunchRequests(ctx context.Context, source string,
 		}
 		result, err := tx.ExecContext(ctx, `
 		INSERT INTO external_launch_requests(
-			id, source, external_id, sender, title, safe_preview, source_url, prompt, cwd, status,
+			id, source, external_id, sender, title, safe_preview, source_url, prompt, cwd, model, reasoning_effort, status,
 			telegram_topic_id, telegram_message_id, telegram_rendered_status, thread_id, turn_id,
 			auto_start, source_chat_id, source_message_id, source_thread_id,
 			ack_status, ack_text, ack_message_id, ack_attempts, ack_available_at, ack_error,
 			reply_status, reply_text,
 			reply_message_id, reply_attempts, reply_available_at, reply_error,
 			error_type, error_summary, created_at, updated_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(source, external_id) DO NOTHING`,
 			request.ID, request.Source, request.ExternalID, request.Sender, request.Title, nullable(request.SafePreview), nullable(request.SourceURL),
-			request.Prompt, nullable(request.CWD), request.Status, request.TelegramTopicID, request.TelegramMessageID,
+			request.Prompt, nullable(request.CWD), nullable(request.Model), nullable(request.ReasoningEffort), request.Status, request.TelegramTopicID, request.TelegramMessageID,
 			nullable(telegramRenderedStatus), nullable(request.ThreadID), nullable(request.TurnID), boolToInt(request.AutoStart),
 			nullable(request.SourceChatID), request.SourceMessageID, request.SourceThreadID,
 			nullable(request.AckStatus), nullable(request.AckText), request.AckMessageID, request.AckAttempts, nullable(string(request.AckAvailableAt)), nullable(request.AckError),
@@ -101,12 +109,14 @@ func (s *Store) IngestExternalLaunchRequests(ctx context.Context, source string,
 		}
 		created += int(rows)
 	}
-	now := model.NowString()
-	if _, err := tx.ExecContext(ctx, `
+	if cursor != nil {
+		now := model.NowString()
+		if _, err := tx.ExecContext(ctx, `
 	INSERT INTO daemon_state(key, value, updated_at) VALUES (?, ?, ?)
 	ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at`,
-		externalSourceCursorKey(source), strconv.FormatInt(cursor, 10), now); err != nil {
-		return 0, err
+			externalSourceCursorKey(source), strconv.FormatInt(*cursor, 10), now); err != nil {
+			return 0, err
+		}
 	}
 	if err := tx.Commit(); err != nil {
 		return 0, err
@@ -205,7 +215,8 @@ func (s *Store) ListExternalLaunchRequestsForAutoStart(ctx context.Context, limi
 }
 
 const externalLaunchRequestColumns = `
-	id, source, external_id, sender, title, coalesce(safe_preview,''), coalesce(source_url,''), prompt, coalesce(cwd,''), status,
+	id, source, external_id, sender, title, coalesce(safe_preview,''), coalesce(source_url,''), prompt, coalesce(cwd,''),
+	coalesce(model,''), coalesce(reasoning_effort,''), status,
 	telegram_topic_id, telegram_message_id, coalesce(telegram_rendered_status,''), coalesce(thread_id,''), coalesce(turn_id,''),
 	auto_start, coalesce(source_chat_id,''), source_message_id, source_thread_id,
 	coalesce(ack_status,''), coalesce(ack_text,''), ack_message_id, ack_attempts, coalesce(ack_available_at,''), coalesce(ack_error,''),
@@ -219,7 +230,7 @@ type rowScanner interface {
 func scanExternalLaunchRequest(scanner rowScanner, request *model.ExternalLaunchRequest) error {
 	var autoStart int
 	err := scanner.Scan(&request.ID, &request.Source, &request.ExternalID, &request.Sender, &request.Title, &request.SafePreview,
-		&request.SourceURL, &request.Prompt, &request.CWD, &request.Status, &request.TelegramTopicID, &request.TelegramMessageID,
+		&request.SourceURL, &request.Prompt, &request.CWD, &request.Model, &request.ReasoningEffort, &request.Status, &request.TelegramTopicID, &request.TelegramMessageID,
 		&request.TelegramRenderedStatus, &request.ThreadID, &request.TurnID, &autoStart, &request.SourceChatID,
 		&request.SourceMessageID, &request.SourceThreadID,
 		&request.AckStatus, &request.AckText, &request.AckMessageID, &request.AckAttempts, &request.AckAvailableAt, &request.AckError,

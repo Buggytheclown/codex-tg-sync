@@ -21,6 +21,15 @@ func (s *Service) ExternalSourceCursor(ctx context.Context, source string) (int6
 
 func (s *Service) IngestExternalRequests(ctx context.Context, source string, cursor int64, requests []model.ExternalLaunchRequest) (int, error) {
 	created, err := s.store.IngestExternalRequests(ctx, source, cursor, requests)
+	return s.finishExternalRequestIngest(ctx, requests, created, err)
+}
+
+func (s *Service) EnqueueExternalRequests(ctx context.Context, source string, requests []model.ExternalLaunchRequest) (int, error) {
+	created, err := s.store.EnqueueExternalLaunchRequests(ctx, source, requests)
+	return s.finishExternalRequestIngest(ctx, requests, created, err)
+}
+
+func (s *Service) finishExternalRequestIngest(ctx context.Context, requests []model.ExternalLaunchRequest, created int, err error) (int, error) {
 	if err == nil && created > 0 {
 		for _, request := range requests {
 			if strings.Contains(request.Prompt, "Unavailable: History API did not return the thread root message.") {

@@ -31,6 +31,15 @@ rechecks pending approvals, and refreshes tracked thread snapshots. It does not
 restart `codex-tg`, start a missing managed App Server daemon, or change AFC
 on/off state.
 
+## Cron Requests
+
+Create `~/.codex-tg/cron.json` to enable daily or weekly scheduled launch requests. The
+daemon reloads it every 30 seconds, so normal edits do not require a restart.
+Use `launch_policy: telegram` for the existing `Dismiss` / `Start` approval
+flow, or `auto` for future auto-start requests. Invalid configuration creates
+no request; inspect the daemon log before correcting the file. An unchanged
+configuration error is logged once instead of every poll.
+
 ## macOS Service
 
 ```powershell

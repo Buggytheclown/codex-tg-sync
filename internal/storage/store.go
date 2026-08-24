@@ -183,6 +183,8 @@ func (s *Store) initialize(ctx context.Context) error {
 		source_url TEXT,
 		prompt TEXT NOT NULL,
 		cwd TEXT,
+		model TEXT,
+		reasoning_effort TEXT,
 		status TEXT NOT NULL,
 		telegram_topic_id INTEGER NOT NULL,
 		telegram_message_id INTEGER NOT NULL DEFAULT 0,
@@ -410,6 +412,8 @@ func (s *Store) initialize(ctx context.Context) error {
 		{"reply_attempts", `ALTER TABLE external_launch_requests ADD COLUMN reply_attempts INTEGER NOT NULL DEFAULT 0`},
 		{"reply_available_at", `ALTER TABLE external_launch_requests ADD COLUMN reply_available_at TEXT`},
 		{"reply_error", `ALTER TABLE external_launch_requests ADD COLUMN reply_error TEXT`},
+		{"model", `ALTER TABLE external_launch_requests ADD COLUMN model TEXT`},
+		{"reasoning_effort", `ALTER TABLE external_launch_requests ADD COLUMN reasoning_effort TEXT`},
 	}
 	for _, column := range externalColumns {
 		if err := s.ensureColumn(ctx, "external_launch_requests", column.name, column.sql); err != nil {

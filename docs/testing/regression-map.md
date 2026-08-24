@@ -228,6 +228,32 @@ Contract notes:
 - Duplicate updates and callbacks are safe; ambiguous App Server dispatch is
   visible and non-replayable.
 
+## Cron Launch Requests
+
+ADR: `docs/adr/ADR-030-cron-launch-requests.md`; feature brief:
+`docs/process/cron-launch-requests-brief.md`.
+
+Primary tests:
+
+- `internal/cronpoller/poller_test.go::TestPollOnceEnqueuesOneTelegramApprovalRequestAfterDailyCronTime`
+- `internal/cronpoller/poller_test.go::TestPollOnceAfterFiveMissedDaysCreatesOnlyCurrentDayRequest`
+- `internal/cronpoller/poller_test.go::TestPollOnceBeforeDailyCronTimeWaitsForToday`
+- `internal/cronpoller/poller_test.go::TestPollOnceWeeklyScheduleCatchesUpOnceForCurrentWeek`
+- `internal/cronpoller/poller_test.go::TestPollOnceWeeklyScheduleWaitsForCurrentWeekSlot`
+- `internal/cronpoller/poller_test.go::TestPollOnceAutoPolicySkipsTelegramLaunchApproval`
+- `internal/cronpoller/poller_test.go::TestPollOnceFailsClosedForInvalidOrUnsupportedSchedule`
+- `internal/storage/store_external_requests_test.go::TestIngestExternalLaunchRequestsCommitsRequestsAndCursorTogether`
+- `internal/daemon/external_requests_test.go::TestDispatchExternalLaunchRequestCreatesAFCThreadTurnAndTopic`
+
+Contract notes:
+
+- A due task owns one `(cron, task-id:scheduled-local-date)` identity across pending,
+  dismissed, failed, started, and completed states.
+- Missing days or weeks never create a backlog, and same-period daemon restarts
+  cannot create another request.
+- Cron execution settings are request-local and must not change global Codex
+  model or reasoning settings.
+
 ## Distribution And Local Config
 
 ADR: `docs/adr/ADR-017-release-binaries-and-init.md` and

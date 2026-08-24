@@ -35,10 +35,10 @@ func (s *Service) dispatchAFCDraftMessage(ctx context.Context, draft model.AFCTo
 	if !created {
 		return afcDuplicateReceiptResponse(receipt), nil
 	}
-	return s.startClaimedAFCDraftLocked(ctx, claimed, receipt, text, text, appserver.ThreadStartOptions{})
+	return s.startClaimedAFCDraftLocked(ctx, claimed, receipt, text, text, appserver.ThreadStartOptions{}, appserver.TurnStartOptions{})
 }
 
-func (s *Service) startClaimedAFCDraftLocked(ctx context.Context, draft model.AFCTopicDraft, receipt model.AFCMessageReceipt, text, titleText string, permissions appserver.ThreadStartOptions) (*DirectResponse, error) {
+func (s *Service) startClaimedAFCDraftLocked(ctx context.Context, draft model.AFCTopicDraft, receipt model.AFCMessageReceipt, text, titleText string, permissions appserver.ThreadStartOptions, execution appserver.TurnStartOptions) (*DirectResponse, error) {
 	lease, err := s.afcWriter.ReserveProcess(ctx, "draft:"+randomToken())
 	if err != nil {
 		_ = s.store.ResetAFCTopicDraftMessage(ctx, draft, receipt)
@@ -98,6 +98,11 @@ func (s *Service) startClaimedAFCDraftLocked(ctx context.Context, draft model.AF
 	turnOptions.ApprovalPolicy = permissions.ApprovalPolicy
 	turnOptions.ApprovalsReviewer = permissions.ApprovalsReviewer
 	turnOptions.SandboxMode = permissions.SandboxMode
+	if strings.TrimSpace(execution.Model) != "" || strings.TrimSpace(execution.ReasoningEffort) != "" {
+		turnOptions.CollaborationMode = collaborationModeDefault
+		turnOptions.Model = strings.TrimSpace(execution.Model)
+		turnOptions.ReasoningEffort = strings.TrimSpace(execution.ReasoningEffort)
+	}
 	result, turnErr := lease.Process.TurnStart(ctx, thread.ID, text, thread.CWD, turnOptions)
 	turnID := appserverThreadTurnID(result)
 	if turnErr != nil || strings.TrimSpace(turnID) == "" {

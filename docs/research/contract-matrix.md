@@ -130,6 +130,20 @@ Local HTTP adapter:
 - `GET /v1/threads/{thread_id}?include_turns=true|false` delegates to App Server `thread/read`.
 - State-changing HTTP operations are out of scope for the first router-agent API slice.
 
+## Cron Launch Requests
+
+ADR: `docs/adr/ADR-030-cron-launch-requests.md`; feature brief:
+`docs/process/cron-launch-requests-brief.md`.
+
+- `~/.codex-tg/cron.json` is an optional, reloadable in-process source config.
+- Five-field cron expressions support daily schedules or exactly one weekday.
+- Cron identity is `<task-id>:<scheduled local YYYY-MM-DD>` under source `cron`;
+  every request state consumes that period's identity after restart.
+- Missed periods coalesce into the current day or week's request after its slot.
+- Telegram launch approval is the default; `auto` affects future requests only.
+- Explicit model and reasoning effort travel with the durable launch request
+  and do not mutate global Telegram settings.
+
 ## Telegram Adapter Contract
 
 - AFC Control exposes `/sync on|off` for lifecycle, `/refresh` to trigger the
