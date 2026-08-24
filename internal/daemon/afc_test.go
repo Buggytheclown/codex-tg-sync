@@ -2279,12 +2279,30 @@ func TestAFCDraftDefinitiveFirstTurnFailureReturnsTopicToDraft(t *testing.T) {
 func TestAFCControlHelpListsNewTaskCommands(t *testing.T) {
 	service := activeAFCService(t)
 	response, err := service.HandleMessageWithID(context.Background(), -1001, 1, 903, 123456789, "/threads", 0)
-	if err != nil || response == nil || !strings.Contains(response.Text, "/projects") || !strings.Contains(response.Text, "/newchat") {
+	if err != nil || response == nil || !strings.Contains(response.Text, "/projects") || !strings.Contains(response.Text, "/newchat") || !strings.Contains(response.Text, "/repair") {
 		t.Fatalf("response=%#v err=%v", response, err)
 	}
 	status, err := service.HandleMessageWithID(context.Background(), -1001, 1, 904, 123456789, "/status", 0)
-	if err != nil || status == nil || !strings.Contains(status.Text, "New task commands: /projects, /newchat") {
+	if err != nil || status == nil || !strings.Contains(status.Text, "New task commands: /projects, /newchat") || !strings.Contains(status.Text, "Repair command: /repair") {
 		t.Fatalf("status=%#v err=%v", status, err)
+	}
+}
+
+func TestAFCControlRepairRequestsSoftSessionRepair(t *testing.T) {
+	service := activeAFCService(t)
+	ctx := context.Background()
+
+	response, err := service.HandleMessageWithID(ctx, -1001, 1, 905, 123456789, "/repair@assistant_bot", 0)
+	if err != nil || response == nil || !strings.Contains(response.Text, "sessions will be recreated") {
+		t.Fatalf("response=%#v err=%v", response, err)
+	}
+	request, err := service.store.GetState(ctx, "control.repair_request")
+	if err != nil || !strings.HasSuffix(request, "|telegram") {
+		t.Fatalf("repair request=%q err=%v", request, err)
+	}
+	state, err := service.store.GetAFCState(ctx)
+	if err != nil || state.State != model.AFCStateActive {
+		t.Fatalf("AFC state=%#v err=%v, want unchanged active state", state, err)
 	}
 }
 

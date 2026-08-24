@@ -624,6 +624,7 @@ Primary tests:
 - `internal/daemon/afc_test.go::TestAFCDirectDeliveryDeleteFailureStillCreatesTailStatus`
 - `internal/daemon/afc_test.go::TestAFCTopicRenameReanchorsActiveStatusWithoutLosingAggregate`
 - `internal/daemon/afc_test.go::TestAFCTopicRenameKeepsPreviousTurnStatusHistory`
+- `internal/daemon/afc_test.go::TestAFCControlRepairRequestsSoftSessionRepair`
 - `internal/daemon/afc_test.go::TestAFCPresentationIgnoresStalePollTurnWhileAFCWriterIsActive`
 - `internal/daemon/afc_test.go::TestAFCStatusAggregatesCommentaryBlocksInOneMessage`
 - `internal/daemon/afc_test.go::TestAFCStatusUpdatesSameBlockWithoutDuplicatingAndExcludesTools`
@@ -684,6 +685,8 @@ Contract notes:
   Telegram's rename service message. The replacement is rendered from the
   persisted compact snapshot, preserving every aggregate block and its timing;
   previous-turn and terminal Status history remains intact.
+- AFC Control `/repair` queues the same non-destructive App Server session
+  repair as legacy DM and does not change AFC lifecycle state.
 - Telegram-origin AFC turns use the legacy bounded hot-poll cadence and preserve
   live tool state internally without putting tool/output items into the aggregate
   status or creating legacy panels and bindings.

@@ -117,10 +117,15 @@ func (s *Service) handleAFCMessage(ctx context.Context, topicID, messageID, user
 			return s.afcStatus(ctx)
 		case len(fields) == 1 && fields[0] == "/refresh":
 			return s.syncAFCCommand(ctx)
+		case len(fields) == 1 && fields[0] == "/repair":
+			if err := s.RequestRepair(ctx, "telegram"); err != nil {
+				return nil, err
+			}
+			return &DirectResponse{Text: "Repair requested. App-server sessions will be recreated in the background."}, nil
 		case len(fields) == 1 && (fields[0] == "/projects" || fields[0] == "/newchat"):
 			return s.afcProjectsMenu(ctx, topicID)
 		default:
-			return &DirectResponse{Text: "Sync Control accepts /sync on, /sync off, /status, /refresh, /projects, and /newchat. Legacy commands are disabled in this group."}, nil
+			return &DirectResponse{Text: "Sync Control accepts /sync on, /sync off, /status, /refresh, /repair, /projects, and /newchat. Legacy commands are disabled in this group."}, nil
 		}
 	}
 	topic, err := s.store.GetActiveAFCTopic(ctx, s.cfg.AFCGroupID, topicID)
@@ -572,7 +577,7 @@ func (s *Service) afcStatus(ctx context.Context) (*DirectResponse, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &DirectResponse{Text: fmt.Sprintf("AFC state: %s\nSession: %s\nInitial topic limit: %d\nConnected topics: %d\nReady drafts: %d\nRefresh command: /refresh\nNew task commands: /projects, /newchat\nActivation summary: %s",
+	return &DirectResponse{Text: fmt.Sprintf("AFC state: %s\nSession: %s\nInitial topic limit: %d\nConnected topics: %d\nReady drafts: %d\nRefresh command: /refresh\nRepair command: /repair\nNew task commands: /projects, /newchat\nActivation summary: %s",
 		state.State, state.SessionID, afcInitialTopicLimit(s.cfg.AFCInitialTopicLimit), countConnectedAFCTopics(topics), countReadyAFCDrafts(drafts), strings.TrimSpace(state.ActivationSummaryJSON))}, nil
 }
 

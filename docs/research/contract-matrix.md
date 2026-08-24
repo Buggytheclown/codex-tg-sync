@@ -132,8 +132,10 @@ Local HTTP adapter:
 
 ## Telegram Adapter Contract
 
-- AFC Control exposes `/sync on|off` for lifecycle and `/refresh` to trigger the same idempotent Desktop-chat
-  reconciliation that normally runs on the observer poll interval.
+- AFC Control exposes `/sync on|off` for lifecycle, `/refresh` to trigger the
+  same idempotent Desktop-chat reconciliation that normally runs on the
+  observer poll interval, and `/repair` to request the same non-destructive App
+  Server session repair available in legacy DM.
 - While AFC is activating, active, or draining, legacy DM `/help` and `/status`
   remain read-only but every legacy Telegram mutation is rejected before an
   App Server call. `/sync off` does not restart legacy lifecycle; a later

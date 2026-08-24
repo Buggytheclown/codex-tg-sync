@@ -26,6 +26,11 @@ In Telegram:
 /repair
 ```
 
+Repair is non-destructive: it recreates the bridge's App Server poll session,
+rechecks pending approvals, and refreshes tracked thread snapshots. It does not
+restart `codex-tg`, start a missing managed App Server daemon, or change AFC
+on/off state.
+
 ## macOS Service
 
 ```powershell
