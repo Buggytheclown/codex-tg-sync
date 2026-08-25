@@ -1004,7 +1004,6 @@ func (c *Client) openDaemonWebSocket(ctx context.Context) (io.WriteCloser, io.Re
 	if err != nil {
 		return nil, nil, fmt.Errorf("connect app-server daemon socket %q: %w", socketPath, err)
 	}
-	conn.SetReadLimit(16 * 1024 * 1024)
 	connection := &websocketConnection{conn: conn}
 	return &websocketWriteCloser{connection: connection}, &websocketReadCloser{connection: connection}, nil
 }
@@ -1044,28 +1043,33 @@ func (c *Client) readStdout(generation uint64) {
 	if stdout == nil {
 		return
 	}
-	scanner := bufio.NewScanner(stdout)
-	scanner.Buffer(make([]byte, 0, 64*1024), 16*1024*1024)
-	for scanner.Scan() {
+	reader := bufio.NewReaderSize(stdout, 64*1024)
+	for {
+		line, err := reader.ReadBytes('\n')
+		if len(bytes.TrimSpace(line)) > 0 {
+			if !c.isStartedGeneration(generation) {
+				return
+			}
+			var payload map[string]any
+			if decodeErr := json.Unmarshal(bytes.TrimSpace(line), &payload); decodeErr != nil {
+				c.broadcast(Event{Channel: "transport_error", Params: map[string]any{"stream": "stdout", "generation": generation, "error": decodeErr.Error(), "line_len": len(line), "stderr_tail": c.StderrTail()}})
+			} else {
+				c.handlePayload(payload, generation)
+			}
+		}
+		if err == nil {
+			continue
+		}
 		if !c.isStartedGeneration(generation) {
 			return
 		}
-		line := scanner.Bytes()
-		var payload map[string]any
-		if err := json.Unmarshal(line, &payload); err != nil {
-			c.broadcast(Event{Channel: "transport_error", Params: map[string]any{"stream": "stdout", "generation": generation, "error": err.Error(), "line_len": len(line), "stderr_tail": c.StderrTail()}})
-			continue
+		if !errors.Is(err, io.EOF) {
+			c.broadcast(Event{Channel: "transport_error", Params: map[string]any{"stream": "stdout", "generation": generation, "error": err.Error(), "stderr_tail": c.StderrTail()}})
+			return
 		}
-		c.handlePayload(payload, generation)
-	}
-	if !c.isStartedGeneration(generation) {
+		c.broadcast(Event{Channel: "transport_closed", Params: map[string]any{"stream": "stdout", "generation": generation, "reason": "eof", "stderr_tail": c.StderrTail()}})
 		return
 	}
-	if err := scanner.Err(); err != nil {
-		c.broadcast(Event{Channel: "transport_error", Params: map[string]any{"stream": "stdout", "generation": generation, "error": err.Error(), "stderr_tail": c.StderrTail()}})
-		return
-	}
-	c.broadcast(Event{Channel: "transport_closed", Params: map[string]any{"stream": "stdout", "generation": generation, "reason": "eof", "stderr_tail": c.StderrTail()}})
 }
 
 func (c *Client) isStartedGeneration(generation uint64) bool {

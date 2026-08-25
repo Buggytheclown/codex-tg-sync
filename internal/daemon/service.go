@@ -269,11 +269,12 @@ func (s *Service) Start(ctx context.Context) error {
 	_ = s.store.SetState(runCtx, "daemon.last_error", "")
 	_ = s.store.SetState(runCtx, "appserver.live_connected", "false")
 	_ = s.store.SetState(runCtx, "appserver.poll_connected", "false")
+	repairResetErr := s.resetRepairRequestOnStartup(runCtx)
 	_, recoveryErr := s.store.RecoverStartingExternalLaunchRequests(runCtx)
 	_, ackRecoveryErr := s.store.RecoverSendingExternalAcks(runCtx)
 	_, replyRecoveryErr := s.store.RecoverSendingExternalReplies(runCtx)
 	cleanupSessionID, resetErr := s.store.ResetAFCOnStartup(runCtx)
-	err := errors.Join(recoveryErr, ackRecoveryErr, replyRecoveryErr, resetErr)
+	err := errors.Join(repairResetErr, recoveryErr, ackRecoveryErr, replyRecoveryErr, resetErr)
 	if err != nil {
 		cancel()
 		s.mu.Lock()
@@ -809,6 +810,10 @@ func (s *Service) RequestRepair(ctx context.Context, reason string) error {
 	return s.store.SetState(ctx, "control.repair_request", fmt.Sprintf("%s|%s", now, reason))
 }
 
+func (s *Service) resetRepairRequestOnStartup(ctx context.Context) error {
+	return s.store.SetState(ctx, "control.repair_request", "")
+}
+
 func (s *Service) IsAllowed(userID, chatID int64) bool {
 	if s.isAFCGroup(chatID) {
 		return len(s.cfg.AllowedUserIDs) == 1 && s.cfg.AllowedUserIDs[0] == userID
@@ -1336,7 +1341,10 @@ func (s *Service) controlLoop(ctx context.Context) {
 				"reason":       reason,
 				"requested_at": at,
 			})
-			_ = s.store.SetState(ctx, "control.repair_request", "")
+			current, _ := s.store.GetState(ctx, "control.repair_request")
+			if current == value {
+				_ = s.store.SetState(ctx, "control.repair_request", "")
+			}
 		} else {
 			s.reconcileSessions(ctx)
 			s.heartbeatPollSession(ctx)
@@ -1359,7 +1367,7 @@ func (s *Service) heartbeatPollSession(ctx context.Context) {
 		return
 	}
 	s.lastPollHeartbeat = time.Now()
-	poll, connected := s.poll, s.pollConnected
+	poll, connected, generation := s.poll, s.pollConnected, s.pollGeneration
 	s.mu.Unlock()
 	if poll == nil || !connected {
 		return
@@ -1387,7 +1395,7 @@ func (s *Service) heartbeatPollSession(ctx context.Context) {
 	_ = s.store.SetState(ctx, "appserver.poll_connected", "false")
 	_ = s.store.SetState(ctx, "appserver.poll.last_error", sanitizeDiagnosticString(err.Error()))
 	s.softResetAFCAfterTransportLoss(ctx, err)
-	s.noteSessionError(ctx, "heartbeat", err)
+	s.notePollSessionError(ctx, "heartbeat", poll, generation, err)
 }
 
 func (s *Service) softResetAFCAfterTransportLoss(ctx context.Context, cause error) {
@@ -1473,6 +1481,7 @@ func (s *Service) syncThreads(ctx context.Context, limit int) {
 	s.mu.RLock()
 	poll := s.poll
 	pollConnected := s.pollConnected
+	pollGeneration := s.pollGeneration
 	s.mu.RUnlock()
 	var client Session
 	if pollConnected {
@@ -1492,7 +1501,7 @@ func (s *Service) syncThreads(ctx context.Context, limit int) {
 		result, err := client.ThreadList(requestCtx, min(pageSize, remaining), cursor)
 		cancel()
 		if err != nil {
-			s.noteSessionError(ctx, "thread_list", err)
+			s.notePollSessionError(ctx, "thread_list", client, pollGeneration, err)
 			return
 		}
 		threads := appserver.ThreadsFromList(result)
@@ -1515,6 +1524,7 @@ func (s *Service) pollTracked(ctx context.Context) {
 	s.mu.RLock()
 	poll := s.poll
 	connected := s.pollConnected
+	pollGeneration := s.pollGeneration
 	s.mu.RUnlock()
 	if !connected || poll == nil {
 		return
@@ -1563,7 +1573,7 @@ func (s *Service) pollTracked(ctx context.Context) {
 				s.logThreadReadSkipped(thread.ID, "thread_not_loaded")
 				continue
 			}
-			s.noteSessionError(ctx, "thread_read", err)
+			s.notePollSessionError(ctx, "thread_read", poll, pollGeneration, err)
 			continue
 		}
 		current := appserver.SnapshotFromThreadRead(payload)
@@ -3309,6 +3319,30 @@ func (s *Service) noteSessionError(ctx context.Context, operation string, err er
 		return
 	}
 	_ = s.RequestRepair(ctx, operation)
+}
+
+func (s *Service) notePollSessionError(ctx context.Context, operation string, poll Session, generation uint64, err error) {
+	if err == nil {
+		return
+	}
+	s.sessionMu.Lock()
+	s.mu.RLock()
+	currentPoll := s.poll
+	currentGeneration := s.pollGeneration
+	current := currentPoll == poll && currentGeneration == generation
+	s.mu.RUnlock()
+	if !current {
+		s.sessionMu.Unlock()
+		s.logLifecycle("appserver_session_error_stale", lifecycleFields{
+			"operation":          operation,
+			"error":              err,
+			"generation":         generation,
+			"current_generation": currentGeneration,
+		})
+		return
+	}
+	s.noteSessionError(ctx, operation, err)
+	s.sessionMu.Unlock()
 }
 
 func (s *Service) setError(ctx context.Context, err error) {

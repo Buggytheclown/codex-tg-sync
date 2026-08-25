@@ -112,6 +112,88 @@ func TestDaemonTransportConnectsDirectlyOverUnixWebSocket(t *testing.T) {
 	}
 }
 
+func TestDaemonTransportKeepsConnectionAfterLargeThreadRead(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Unix sockets are platform-specific")
+	}
+	root, err := os.MkdirTemp("/tmp", "codex-tg-large-ws-")
+	if err != nil {
+		t.Fatalf("MkdirTemp failed: %v", err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(root) })
+	socketPath := filepath.Join(root, "app-server.sock")
+	listener, err := net.Listen("unix", socketPath)
+	if err != nil {
+		t.Fatalf("Listen(unix) failed: %v", err)
+	}
+	upgrader := websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }}
+	serverErrors := make(chan error, 1)
+	server := &http.Server{Handler: http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		conn, upgradeErr := upgrader.Upgrade(writer, request, nil)
+		if upgradeErr != nil {
+			serverErrors <- upgradeErr
+			return
+		}
+		defer conn.Close()
+		for {
+			var payload map[string]any
+			if readErr := conn.ReadJSON(&payload); readErr != nil {
+				serverErrors <- readErr
+				return
+			}
+			id, hasID := payload["id"]
+			if !hasID {
+				continue
+			}
+			result := map[string]any{}
+			if payload["method"] == "thread/read" {
+				result["thread"] = map[string]any{
+					"id":    "large-thread",
+					"turns": []any{map[string]any{"id": "turn", "items": []any{map[string]any{"text": strings.Repeat("x", 17*1024*1024)}}}},
+				}
+			}
+			if writeErr := conn.WriteJSON(map[string]any{"id": id, "result": result}); writeErr != nil {
+				serverErrors <- writeErr
+				return
+			}
+		}
+	})}
+	go func() {
+		if serveErr := server.Serve(listener); serveErr != nil && serveErr != http.ErrServerClosed {
+			serverErrors <- serveErr
+		}
+	}()
+	t.Cleanup(func() { _ = server.Close() })
+
+	client := NewClientWithTransport("codex", TransportConfig{
+		Mode:       TransportDaemon,
+		SocketPath: socketPath,
+	}, t.TempDir(), 3*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := client.Start(ctx); err != nil {
+		t.Fatalf("Start failed: %v", err)
+	}
+	t.Cleanup(func() { _ = client.Close() })
+
+	result, err := client.ThreadRead(ctx, "large-thread", true)
+	if err != nil {
+		t.Fatalf("large ThreadRead failed: %v", err)
+	}
+	thread, _ := result["thread"].(map[string]any)
+	if thread["id"] != "large-thread" {
+		t.Fatalf("large ThreadRead result = %#v", result)
+	}
+	if _, err := client.ThreadList(ctx, 1, ""); err != nil {
+		t.Fatalf("ThreadList after large frame failed: %v", err)
+	}
+	select {
+	case serverErr := <-serverErrors:
+		t.Fatalf("WebSocket server failed: %v", serverErr)
+	default:
+	}
+}
+
 func TestBuildCommandKeepsSpawnedListenTransport(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("command args are platform-specific")

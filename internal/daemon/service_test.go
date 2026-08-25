@@ -3463,6 +3463,70 @@ func TestEnsureSessionsStartsOnlyPollSession(t *testing.T) {
 	}
 }
 
+func TestStartupRepairResetDiscardsRequestFromPreviousProcess(t *testing.T) {
+	service := newTestService(t)
+	ctx := context.Background()
+	if err := service.store.SetState(ctx, "control.repair_request", "2026-08-25T10:00:00Z|heartbeat"); err != nil {
+		t.Fatalf("SetState(control.repair_request) failed: %v", err)
+	}
+
+	if err := service.resetRepairRequestOnStartup(ctx); err != nil {
+		t.Fatalf("resetRepairRequestOnStartup failed: %v", err)
+	}
+	value, err := service.store.GetState(ctx, "control.repair_request")
+	if err != nil {
+		t.Fatalf("GetState(control.repair_request) failed: %v", err)
+	}
+	if value != "" {
+		t.Fatalf("control.repair_request = %q, want empty after process startup", value)
+	}
+}
+
+func TestStalePollSessionErrorDoesNotRequestRepair(t *testing.T) {
+	service := newTestService(t)
+	ctx := context.Background()
+	logs := captureServiceLogs(service)
+	oldPoll := &stubSession{}
+	currentPoll := &stubSession{}
+	service.mu.Lock()
+	service.poll = currentPoll
+	service.pollConnected = true
+	service.pollGeneration = 4
+	service.mu.Unlock()
+
+	service.notePollSessionError(ctx, "thread_read", oldPoll, 3, errors.New("websocket: close sent"))
+
+	value, err := service.store.GetState(ctx, "control.repair_request")
+	if err != nil {
+		t.Fatalf("GetState(control.repair_request) failed: %v", err)
+	}
+	if value != "" {
+		t.Fatalf("repair request = %q, want stale session error ignored", value)
+	}
+	requireLogContains(t, logs.String(), `"event":"appserver_session_error_stale"`)
+}
+
+func TestCurrentPollSessionErrorRequestsRepair(t *testing.T) {
+	service := newTestService(t)
+	ctx := context.Background()
+	poll := &stubSession{}
+	service.mu.Lock()
+	service.poll = poll
+	service.pollConnected = true
+	service.pollGeneration = 4
+	service.mu.Unlock()
+
+	service.notePollSessionError(ctx, "thread_read", poll, 4, errors.New("websocket: close sent"))
+
+	value, err := service.store.GetState(ctx, "control.repair_request")
+	if err != nil {
+		t.Fatalf("GetState(control.repair_request) failed: %v", err)
+	}
+	if !strings.HasSuffix(value, "|thread_read") {
+		t.Fatalf("repair request = %q, want current session repair", value)
+	}
+}
+
 func TestBootstrapTrackedStateDoesNotResumeLegacyThreads(t *testing.T) {
 	service := newTestService(t)
 	ctx := context.Background()

@@ -54,6 +54,9 @@ Planned primary tests:
   WebSocket on the Unix socket without spawning a process, spawned mode keeps
   `app-server --listen`, and `thread/resume` contains only `threadId`;
   serialized App Server messages omit the unsupported `jsonrpc` header.
+- `internal/appserver/client_test.go::TestDaemonTransportKeepsConnectionAfterLargeThreadRead`
+  proves a large local `thread/read` response does not close the shared-daemon
+  WebSocket and later requests still succeed on the same connection.
 - `internal/daemon/afc_test.go` proves AFC-active legacy mutations fail before
   App Server access and explicit post-off legacy work remains lazy.
 - `internal/daemon/afc_test.go` proves initial activation uses the configured
@@ -82,6 +85,13 @@ Planned primary tests:
 - `internal/daemon/health_test.go::TestDaemonHeartbeatFailureTruthfullyResetsAFCWithoutReplay`
   proves a failed managed-daemon heartbeat reports disconnected state, resets
   AFC to `off`, and queues a Control warning without replay.
+- `internal/daemon/service_test.go::TestStartupRepairResetDiscardsRequestFromPreviousProcess`
+  proves a process restart does not execute a stale repair request against the
+  newly opened poll session.
+- `internal/daemon/service_test.go::TestStalePollSessionErrorDoesNotRequestRepair`
+  and `TestCurrentPollSessionErrorRequestsRepair` prove only the current poll
+  generation can request another repair, preventing reconnect storms while
+  preserving recovery from a real current-session failure.
 - `internal/daemon/afc_test.go` proves Stop interrupts current Desktop-origin
   and Telegram-origin turns through guarded authoritative coordinates.
 - `internal/daemon/afc_test.go::TestAFCLongFinalSplitsWithinTelegramLimit`
