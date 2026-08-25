@@ -85,6 +85,18 @@ Planned primary tests:
 - `internal/daemon/health_test.go::TestDaemonHeartbeatFailureTruthfullyResetsAFCWithoutReplay`
   proves a failed managed-daemon heartbeat reports disconnected state, resets
   AFC to `off`, and queues a Control warning without replay.
+- `internal/daemon/health_test.go::TestHealthEpisodeQueuesOneWarningAndOneRecovery`
+  proves health warnings and recoveries are queued for Telegram General without
+  an invalid forum thread id.
+- `internal/daemon/health_test.go::TestHealthDeliveryFallsBackToGeneralForInvalidTopic`
+  proves a legacy health delivery targeting a missing topic retries once in
+  General instead of becoming a silent dead letter.
+- `internal/daemon/health_test.go::TestStatusShowsHeartbeatDeadLettersAndOpenHealthIncidents`,
+  `internal/daemon/afc_test.go::TestAFCControlHelpListsNewTaskCommands`, and
+  `internal/storage/store_test.go::TestDeliveryQueueDeadCount` prove both
+  regular and active-AFC `/status` expose app-server heartbeat age, open
+  incidents, and dead delivery count rather than showing only the retryable
+  backlog.
 - `internal/daemon/service_test.go::TestStartupRepairResetDiscardsRequestFromPreviousProcess`
   proves a process restart does not execute a stale repair request against the
   newly opened poll session.
@@ -114,6 +126,9 @@ Contract notes:
 - Managed-daemon transport loss uses the same boundary. A heartbeat detects
   half-open poll connections; repair reconnects polling but never re-enables
   AFC automatically.
+- Health and startup warnings are sent to Telegram General by omitting the
+  forum topic id. A stale persisted health topic falls back to General when
+  Telegram reports `message thread not found`.
 - AFC active rejects legacy DM mutations before App Server access. Off does not
   restore legacy lifecycle; explicit later DM work may start lazily.
 - Long AFC Finals are split at Telegram's UTF-16 message boundary. The first

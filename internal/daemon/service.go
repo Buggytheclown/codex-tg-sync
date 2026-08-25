@@ -592,6 +592,7 @@ func (s *Service) StatusSnapshot(ctx context.Context, chatID, topicID int64) (st
 		fmt.Sprintf("Cached threads: %d", threadCount),
 		fmt.Sprintf("Delivery backlog: %d", backlog),
 	}
+	lines = append(lines, s.healthStatusLines(ctx, time.Now().UTC())...)
 	switch {
 	case configured && globalObserver != nil && globalObserver.Enabled:
 		lines = append(lines, fmt.Sprintf("Global observer: on -> %s", model.ChatKey(globalObserver.ChatID, globalObserver.TopicID)))
@@ -1627,7 +1628,14 @@ func (s *Service) processDeliveryBatch(ctx context.Context) {
 		if item.Kind == "health" {
 			options = notifySendOptions()
 		}
-		messageID, err := sender.SendMessage(ctx, item.ChatID, item.TopicID, payload.Text, payload.Buttons, options)
+		deliveryTopicID := item.TopicID
+		messageID, err := sender.SendMessage(ctx, item.ChatID, deliveryTopicID, payload.Text, payload.Buttons, options)
+		if err != nil && item.Kind == "health" && deliveryTopicID != afcGeneralSendTopicID && isMessageThreadNotFoundError(err) {
+			attempt := item.RetryCount + 1
+			_ = s.store.RecordDeliveryAttempt(ctx, item.ID, attempt, "general_fallback", err.Error())
+			deliveryTopicID = afcGeneralSendTopicID
+			messageID, err = sender.SendMessage(ctx, item.ChatID, deliveryTopicID, payload.Text, payload.Buttons, options)
+		}
 		if err != nil {
 			attempt := item.RetryCount + 1
 			_ = s.store.RecordDeliveryAttempt(ctx, item.ID, attempt, "send_error", err.Error())
@@ -1642,7 +1650,7 @@ func (s *Service) processDeliveryBatch(ctx context.Context) {
 		if payload.ThreadID != "" {
 			_ = s.store.PutMessageRoute(ctx, model.MessageRoute{
 				ChatID:    item.ChatID,
-				TopicID:   item.TopicID,
+				TopicID:   deliveryTopicID,
 				MessageID: messageID,
 				ThreadID:  payload.ThreadID,
 				TurnID:    payload.TurnID,
@@ -1652,6 +1660,10 @@ func (s *Service) processDeliveryBatch(ctx context.Context) {
 			})
 		}
 	}
+}
+
+func isMessageThreadNotFoundError(err error) bool {
+	return err != nil && strings.Contains(strings.ToLower(err.Error()), "message thread not found")
 }
 
 func (s *Service) handleCommand(ctx context.Context, chatID, topicID int64, raw string, replyToMessageID int64) (*DirectResponse, error) {

@@ -946,6 +946,12 @@ func (s *Store) DeliveryQueueBacklog(ctx context.Context) (int, error) {
 	return count, row.Scan(&count)
 }
 
+func (s *Store) DeliveryQueueDeadCount(ctx context.Context) (int, error) {
+	row := s.db.QueryRowContext(ctx, `SELECT count(*) FROM delivery_queue WHERE status = 'dead'`)
+	var count int
+	return count, row.Scan(&count)
+}
+
 func (s *Store) SetState(ctx context.Context, key, value string) error {
 	_, err := s.db.ExecContext(ctx, `
 	INSERT INTO daemon_state(key, value, updated_at) VALUES (?, ?, ?)

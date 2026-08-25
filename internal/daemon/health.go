@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -75,10 +76,56 @@ func (s *Service) enqueueControlNotice(ctx context.Context, eventID, text string
 	}
 	payload := model.DeliveryPayload{Text: strings.TrimSpace(text), EventID: eventID}
 	_ = s.store.EnqueueDelivery(ctx, model.DeliveryQueueItem{
-		EventID: eventID, ChatKey: model.ChatKey(s.cfg.AFCGroupID, afcControlTopicID), ChatID: s.cfg.AFCGroupID,
-		TopicID: afcControlTopicID, Kind: "health", Status: model.DeliveryStatusPending,
+		EventID: eventID, ChatKey: model.ChatKey(s.cfg.AFCGroupID, afcGeneralSendTopicID), ChatID: s.cfg.AFCGroupID,
+		TopicID: afcGeneralSendTopicID, Kind: "health", Status: model.DeliveryStatusPending,
 		AvailableAt: model.NowString(), PayloadJSON: storage.MustJSON(payload), CreatedAt: model.NowString(), UpdatedAt: model.NowString(),
 	})
+}
+
+func openHealthIncidentNames(state map[string]string) []string {
+	var names []string
+	for key, raw := range state {
+		if !strings.HasPrefix(key, "health.") {
+			continue
+		}
+		var episode healthEpisode
+		if json.Unmarshal([]byte(raw), &episode) == nil && episode.Open {
+			names = append(names, strings.TrimPrefix(key, "health."))
+		}
+	}
+	sort.Strings(names)
+	return names
+}
+
+func formatHeartbeatStatus(raw string, now time.Time) string {
+	at, err := time.Parse(time.RFC3339Nano, strings.TrimSpace(raw))
+	if err != nil {
+		return "never"
+	}
+	age := now.Sub(at)
+	if age < 0 {
+		age = 0
+	}
+	state := "fresh"
+	if age > 30*time.Second {
+		state = "stale"
+	}
+	return fmt.Sprintf("%s ago (%s)", age.Round(time.Second), state)
+}
+
+func (s *Service) healthStatusLines(ctx context.Context, now time.Time) []string {
+	deadDeliveries, _ := s.store.DeliveryQueueDeadCount(ctx)
+	daemonState, _ := s.store.ListState(ctx)
+	openIncidents := openHealthIncidentNames(daemonState)
+	incidentSummary := "none"
+	if len(openIncidents) > 0 {
+		incidentSummary = strings.Join(openIncidents, ", ")
+	}
+	return []string{
+		fmt.Sprintf("Dead deliveries: %d", deadDeliveries),
+		fmt.Sprintf("App-server heartbeat: %s", formatHeartbeatStatus(daemonState["appserver.poll.last_heartbeat_at"], now)),
+		fmt.Sprintf("Open health incidents: %s", incidentSummary),
+	}
 }
 
 func (s *Service) loadHealthEpisode(ctx context.Context, key string) healthEpisode {

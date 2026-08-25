@@ -3,6 +3,7 @@ package storage
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"path/filepath"
 	"testing"
 	"time"
@@ -247,6 +248,42 @@ func TestDeliveryQueueClaimRetryAndComplete(t *testing.T) {
 	}
 	if backlog != 1 {
 		t.Fatalf("DeliveryQueueBacklog = %d, want 1", backlog)
+	}
+}
+
+func TestDeliveryQueueDeadCount(t *testing.T) {
+	store := openTestStore(t)
+	ctx := context.Background()
+	for index := 0; index < 2; index++ {
+		if err := store.EnqueueDelivery(ctx, model.DeliveryQueueItem{
+			EventID:     fmt.Sprintf("dead-%d", index),
+			ChatKey:     model.ChatKey(123456789, int64(index)),
+			ChatID:      123456789,
+			TopicID:     int64(index),
+			Kind:        "health",
+			Status:      model.DeliveryStatusPending,
+			AvailableAt: model.NowString(),
+			PayloadJSON: `{"text":"warning"}`,
+			CreatedAt:   model.NowString(),
+			UpdatedAt:   model.NowString(),
+		}); err != nil {
+			t.Fatalf("EnqueueDelivery[%d] failed: %v", index, err)
+		}
+	}
+	batch, err := store.ClaimDeliveryBatch(ctx, 10)
+	if err != nil || len(batch) != 2 {
+		t.Fatalf("ClaimDeliveryBatch = %#v, err=%v", batch, err)
+	}
+	if err := store.FailDelivery(ctx, batch[0].ID, 5, time.Now().UTC(), "failed", true); err != nil {
+		t.Fatalf("FailDelivery(dead) failed: %v", err)
+	}
+	if err := store.CompleteDelivery(ctx, batch[1].ID); err != nil {
+		t.Fatalf("CompleteDelivery failed: %v", err)
+	}
+
+	count, err := store.DeliveryQueueDeadCount(ctx)
+	if err != nil || count != 1 {
+		t.Fatalf("DeliveryQueueDeadCount = %d, err=%v, want 1", count, err)
 	}
 }
 

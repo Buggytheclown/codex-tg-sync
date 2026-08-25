@@ -2065,7 +2065,7 @@ func TestAFCStartupResetsSessionCleansTopicsAndWarnsOnceWhenDaemonUnavailable(t 
 	if len(forum.deletes) != 2 || forum.deletes[0] != 11 || forum.deletes[1] != 12 {
 		t.Fatalf("deletes=%v", forum.deletes)
 	}
-	if len(forum.sends) != 1 || forum.sends[0].topicID != afcControlTopicID ||
+	if len(forum.sends) != 1 || forum.sends[0].topicID != afcGeneralSendTopicID ||
 		!strings.Contains(forum.sends[0].text, "Shared Codex App Server is unavailable") ||
 		!strings.Contains(forum.sends[0].text, "/sync on") {
 		t.Fatalf("startup warnings=%#v", forum.sends)
@@ -2283,7 +2283,11 @@ func TestAFCControlHelpListsNewTaskCommands(t *testing.T) {
 		t.Fatalf("response=%#v err=%v", response, err)
 	}
 	status, err := service.HandleMessageWithID(context.Background(), -1001, 1, 904, 123456789, "/status", 0)
-	if err != nil || status == nil || !strings.Contains(status.Text, "New task commands: /projects, /newchat") || !strings.Contains(status.Text, "Repair command: /repair") {
+	if err != nil || status == nil || !strings.Contains(status.Text, "New task commands: /projects, /newchat") ||
+		!strings.Contains(status.Text, "Repair command: /repair") ||
+		!strings.Contains(status.Text, "Dead deliveries:") ||
+		!strings.Contains(status.Text, "App-server heartbeat:") ||
+		!strings.Contains(status.Text, "Open health incidents:") {
 		t.Fatalf("status=%#v err=%v", status, err)
 	}
 }

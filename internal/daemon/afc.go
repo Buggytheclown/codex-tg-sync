@@ -19,7 +19,10 @@ import (
 	"github.com/mideco-tech/codex-tg/internal/tgformat"
 )
 
-const afcControlTopicID = int64(1)
+const (
+	afcControlTopicID     = int64(1)
+	afcGeneralSendTopicID = int64(0)
+)
 
 // AFCForum is deliberately scoped to the configured AFC group. Its
 // implementation must not accept a chat id, so daemon code cannot accidentally
@@ -577,8 +580,9 @@ func (s *Service) afcStatus(ctx context.Context) (*DirectResponse, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &DirectResponse{Text: fmt.Sprintf("AFC state: %s\nSession: %s\nInitial topic limit: %d\nConnected topics: %d\nReady drafts: %d\nRefresh command: /refresh\nRepair command: /repair\nNew task commands: /projects, /newchat\nActivation summary: %s",
-		state.State, state.SessionID, afcInitialTopicLimit(s.cfg.AFCInitialTopicLimit), countConnectedAFCTopics(topics), countReadyAFCDrafts(drafts), strings.TrimSpace(state.ActivationSummaryJSON))}, nil
+	health := strings.Join(s.healthStatusLines(ctx, time.Now().UTC()), "\n")
+	return &DirectResponse{Text: fmt.Sprintf("AFC state: %s\nSession: %s\nInitial topic limit: %d\nConnected topics: %d\nReady drafts: %d\n%s\nRefresh command: /refresh\nRepair command: /repair\nNew task commands: /projects, /newchat\nActivation summary: %s",
+		state.State, state.SessionID, afcInitialTopicLimit(s.cfg.AFCInitialTopicLimit), countConnectedAFCTopics(topics), countReadyAFCDrafts(drafts), health, strings.TrimSpace(state.ActivationSummaryJSON))}, nil
 }
 
 func (s *Service) syncAFC(ctx context.Context) {
@@ -1189,7 +1193,7 @@ func (s *Service) finishStartup(ctx context.Context, cleanupSessionID string) {
 		"1. Start the managed daemon: codex app-server daemon start\n" +
 		"2. Restart Codex Desktop in local-daemon mode.\n" +
 		"3. Restart codex-tg, then run /sync on in Control."}
-	if _, err := forum.SendAFCMessage(ctx, afcControlTopicID, message, false); err != nil {
+	if _, err := forum.SendAFCMessage(ctx, afcGeneralSendTopicID, message, false); err != nil {
 		s.logLifecycle("afc_startup_warning_failed", lifecycleFields{"error": err})
 		return
 	}
