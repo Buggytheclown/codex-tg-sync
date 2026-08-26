@@ -85,5 +85,7 @@ dead or half-open App Server transport can still look connected.
 - [x] AFC terminal-boundary input is steered or starts exactly one new turn.
 - [x] Authoritative supersession releases stale local AFC ownership.
 - [x] Health warnings and recovery notices are durable and deduplicated.
+- [x] Sleep-sized polling gaps and short network transitions do not create
+      flapping warnings or out-of-order recovery notices.
 - [x] Managed-daemon transport loss makes status truthful, resets AFC to off,
       never replays input, and reconnects the poll session.

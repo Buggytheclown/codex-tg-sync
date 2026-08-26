@@ -38,7 +38,9 @@ daemon reloads it every 30 seconds, so normal edits do not require a restart.
 Use `launch_policy: telegram` for the existing `Dismiss` / `Start` approval
 flow, or `auto` for future auto-start requests. Invalid configuration creates
 no request; inspect the daemon log before correcting the file. An unchanged
-configuration error is logged once instead of every poll.
+configuration error is logged once instead of every poll. Catch-up waits for
+four minutes of continuous runtime after startup or a sleep-sized gap. Set an
+optional positive duration such as `max_lateness: "2h"` to skip stale slots.
 
 ## macOS Service
 

@@ -25,6 +25,13 @@ ownership and recovery rules.
   Monday-based calendar week. Missed periods are not replayed. Startup after
   the current period's slot creates one catch-up request; startup before it
   waits.
+- The in-process runner requires four minutes of continuous polling after
+  startup or a polling gap longer than 90 seconds before evaluating due work.
+  This keeps short laptop DarkWake windows from creating launch requests while
+  the host network is only partially available.
+- A task may set `max_lateness` to a positive Go duration such as `2h`. When
+  present, a scheduled occurrence older than that bound is skipped. Omitting
+  the field preserves period-wide catch-up.
 - Cron external identity is `<task-id>:<scheduled local YYYY-MM-DD>`. The
   existing unique `(source, external_id)` constraint enforces at most one
   durable request per task and period across every request state and restart.
@@ -41,7 +48,8 @@ The scheduler has no cursor, run table, new queue, or new worker. SQLite launch
 request identity is the only period deduplication authority, while App Server
 remains authoritative for threads and turns.
 
-The one-day-or-one-week restriction keeps catch-up deterministic. Monthly,
+The one-day-or-one-week restriction keeps catch-up deterministic. Resume
+stabilization can delay an on-time request by four minutes. Monthly,
 multiple-weekday, multiple-run-per-period, and replay-all semantics require a
 separate decision rather than silently changing this contract.
 

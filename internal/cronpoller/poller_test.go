@@ -85,6 +85,49 @@ func TestPollOnceAfterFiveMissedDaysCreatesOnlyCurrentDayRequest(t *testing.T) {
 	}
 }
 
+func TestPollOnceHonorsOptionalMaxLateness(t *testing.T) {
+	path := writeCronConfig(t, strings.Replace(dailyConfig("telegram"), `"enabled": true`, `"max_lateness": "2h",
+    "enabled": true`, 1))
+	sink := &fakeRequestSink{}
+	poller := New(path, 77, sink)
+	poller.now = func() time.Time { return time.Date(2026, 8, 24, 12, 1, 0, 0, time.UTC) }
+
+	created, err := poller.PollOnce(context.Background())
+	if err != nil || created != 0 {
+		t.Fatalf("late poll created=%d err=%v, want skipped", created, err)
+	}
+	poller.now = func() time.Time { return time.Date(2026, 8, 25, 11, 59, 0, 0, time.UTC) }
+	created, err = poller.PollOnce(context.Background())
+	if err != nil || created != 1 {
+		t.Fatalf("in-window poll created=%d err=%v, want 1", created, err)
+	}
+}
+
+func TestResumeGateWaitsForContinuousRuntimeBeforeCronCatchup(t *testing.T) {
+	path := writeCronConfig(t, dailyConfig("telegram"))
+	sink := &fakeRequestSink{}
+	poller := New(path, 77, sink)
+	base := time.Date(2026, 8, 24, 10, 5, 0, 0, time.UTC)
+
+	poller.now = func() time.Time { return base }
+	created, err := poller.pollOnceAfterResume(context.Background())
+	if err != nil || created != 0 {
+		t.Fatalf("first resumed poll created=%d err=%v, want warm-up", created, err)
+	}
+	for elapsed := 30 * time.Second; elapsed < resumeGrace; elapsed += 30 * time.Second {
+		poller.now = func() time.Time { return base.Add(elapsed) }
+		created, err = poller.pollOnceAfterResume(context.Background())
+		if err != nil || created != 0 {
+			t.Fatalf("warm-up at %s created=%d err=%v", elapsed, created, err)
+		}
+	}
+	poller.now = func() time.Time { return base.Add(resumeGrace) }
+	created, err = poller.pollOnceAfterResume(context.Background())
+	if err != nil || created != 1 {
+		t.Fatalf("stable runtime created=%d err=%v, want 1", created, err)
+	}
+}
+
 func TestPollOnceBeforeDailyCronTimeWaitsForToday(t *testing.T) {
 	path := writeCronConfig(t, dailyConfig("telegram"))
 	sink := &fakeRequestSink{}
@@ -167,6 +210,8 @@ func TestPollOnceFailsClosedForInvalidOrUnsupportedSchedule(t *testing.T) {
 		{name: "monthly schedule", body: strings.Replace(dailyConfig("telegram"), "0 10 * * *", "0 10 1 * *", 1), want: "daily or weekly"},
 		{name: "multiple weekdays", body: strings.Replace(dailyConfig("telegram"), "0 10 * * *", "0 10 * * 1,3", 1), want: "one weekday"},
 		{name: "bad policy", body: strings.Replace(dailyConfig("telegram"), `"telegram"`, `"sometimes"`, 1), want: "launch_policy"},
+		{name: "bad max lateness", body: strings.Replace(dailyConfig("telegram"), `"enabled": true`, `"max_lateness": "later",
+    "enabled": true`, 1), want: "max_lateness"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

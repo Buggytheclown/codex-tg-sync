@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -198,6 +199,54 @@ func TestListThreadsFiltersInternalAppServerThreads(t *testing.T) {
 	}
 	if _, ok := grouped["memories"]; ok {
 		t.Fatalf("project groups include internal memories project: %#v", grouped)
+	}
+}
+
+func TestThreadAndSnapshotPersistenceRedactsTelegramBotCredentials(t *testing.T) {
+	t.Parallel()
+
+	store := openTestStore(t)
+	ctx := context.Background()
+	credential := "bot123456789:" + "example_secret-token"
+	raw := json.RawMessage(fmt.Sprintf(`{"id":"thread-secret","url":"https://api.telegram.org/%s/getUpdates"}`, credential))
+	thread := model.Thread{
+		ID:          "thread-secret",
+		Title:       "Secret fixture",
+		ProjectName: "codex-tg",
+		UpdatedAt:   1,
+		Raw:         raw,
+	}
+	if err := store.UpsertThread(ctx, thread); err != nil {
+		t.Fatalf("UpsertThread failed: %v", err)
+	}
+	loadedThread, err := store.GetThread(ctx, thread.ID)
+	if err != nil {
+		t.Fatalf("GetThread failed: %v", err)
+	}
+	if strings.Contains(string(loadedThread.Raw), credential) || !strings.Contains(string(loadedThread.Raw), "bot<redacted>") {
+		t.Fatalf("thread raw JSON was not redacted: %s", loadedThread.Raw)
+	}
+	var decodedThread map[string]any
+	if err := json.Unmarshal(loadedThread.Raw, &decodedThread); err != nil {
+		t.Fatalf("redacted thread raw JSON is invalid: %v", err)
+	}
+
+	snapshot := model.ThreadSnapshotState{
+		CompactJSON: json.RawMessage(fmt.Sprintf(`{"tool_output":"request failed at https://api.telegram.org/%s/sendMessage"}`, credential)),
+	}
+	if err := store.UpsertSnapshot(ctx, thread.ID, snapshot); err != nil {
+		t.Fatalf("UpsertSnapshot failed: %v", err)
+	}
+	loadedSnapshot, err := store.GetSnapshot(ctx, thread.ID)
+	if err != nil {
+		t.Fatalf("GetSnapshot failed: %v", err)
+	}
+	if strings.Contains(string(loadedSnapshot.CompactJSON), credential) || !strings.Contains(string(loadedSnapshot.CompactJSON), "bot<redacted>") {
+		t.Fatalf("snapshot compact JSON was not redacted: %s", loadedSnapshot.CompactJSON)
+	}
+	var decodedSnapshot map[string]any
+	if err := json.Unmarshal(loadedSnapshot.CompactJSON, &decodedSnapshot); err != nil {
+		t.Fatalf("redacted snapshot compact JSON is invalid: %v", err)
 	}
 }
 

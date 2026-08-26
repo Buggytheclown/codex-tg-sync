@@ -280,7 +280,9 @@ The supported five-field subset is deliberately small:
 A daily task creates at most one request per local calendar day. A weekly task
 creates at most one request per local calendar week and uses the scheduled
 weekday's date as its durable identity. Starting after the current period's
-slot catches up once; missed days or weeks never create a backlog.
+slot catches up once; missed days or weeks never create a backlog. After daemon
+startup or a sleep-sized polling gap, catch-up waits for four minutes of
+continuous runtime so a short laptop DarkWake does not create a request.
 
 ```json
 {
@@ -295,6 +297,7 @@ slot catches up once; missed days or weeks never create a backlog.
       "model": "gpt-5.6-luna",
       "reasoning_effort": "high",
       "launch_policy": "telegram",
+      "max_lateness": "2h",
       "enabled": true
     },
     {
@@ -314,7 +317,9 @@ slot catches up once; missed days or weeks never create a backlog.
 `launch_policy` defaults to `telegram`, which requires the configured external
 requests topic and presents `Dismiss` / `Start`. Use `auto` for future requests
 that should enter the existing auto-start path. Existing pending requests are
-not rewritten after configuration changes.
+not rewritten after configuration changes. Optional `max_lateness` accepts a
+positive Go duration such as `30m` or `2h`; an older occurrence is skipped.
+Omitting it keeps catch-up available for the full local day or week.
 
 The existing App Server subscription and authoritative `thread/read` snapshot
 remain the only source of the Codex final answer. A terminal final is queued in

@@ -31,8 +31,9 @@ const (
 )
 
 var (
-	tokenLikeDiagnosticPattern = regexp.MustCompile(`(?i)\b(bot|token|api[_-]?hash|password|secret)[=:/ ]+[A-Za-z0-9:_\-.]{8,}`)
-	localFileDiagnosticPattern = regexp.MustCompile(`(?:/|[A-Za-z]:\\)[^\s"'<>]*(?:\.sock|\.session|\.sqlite|\.env)\b`)
+	tokenLikeDiagnosticPattern        = regexp.MustCompile(`(?i)\b(bot|token|api[_-]?hash|password|secret)[=:/ ]+[A-Za-z0-9:_\-.]{8,}`)
+	telegramBotTokenDiagnosticPattern = regexp.MustCompile(`bot[0-9]+:[A-Za-z0-9_-]+`)
+	localFileDiagnosticPattern        = regexp.MustCompile(`(?:/|[A-Za-z]:\\)[^\s"'<>]*(?:\.sock|\.session|\.sqlite|\.env)\b`)
 )
 
 func discardDiagnosticLogger() *log.Logger {
@@ -426,6 +427,7 @@ func sanitizeDiagnosticString(value string) string {
 	if home, err := os.UserHomeDir(); err == nil && home != "" {
 		value = strings.ReplaceAll(value, home, "~")
 	}
+	value = telegramBotTokenDiagnosticPattern.ReplaceAllString(value, "bot<redacted>")
 	value = tokenLikeDiagnosticPattern.ReplaceAllString(value, "$1=<redacted>")
 	value = localFileDiagnosticPattern.ReplaceAllString(value, "<local-file>")
 	if len(value) > 2000 {

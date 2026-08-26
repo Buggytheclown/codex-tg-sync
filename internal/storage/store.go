@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
 
@@ -16,6 +17,12 @@ import (
 
 type Store struct {
 	db *sql.DB
+}
+
+var telegramBotCredentialPattern = regexp.MustCompile(`bot[0-9]+:[A-Za-z0-9_-]+`)
+
+func redactTelegramBotCredentials(value []byte) []byte {
+	return telegramBotCredentialPattern.ReplaceAll(value, []byte("bot<redacted>"))
 }
 
 func Open(path string) (*Store, error) {
@@ -496,6 +503,7 @@ func (s *Store) UpsertThread(ctx context.Context, thread model.Thread) error {
 	if len(raw) == 0 {
 		raw = []byte("{}")
 	}
+	raw = redactTelegramBotCredentials(raw)
 	_, err := s.db.ExecContext(ctx, `
 	INSERT INTO threads(thread_id, title, cwd, project_name, directory_name, updated_at, status, last_preview, active_turn_id, preferred_model, permissions_mode, archived, raw_json)
 	VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -585,6 +593,7 @@ func (s *Store) UpsertSnapshot(ctx context.Context, threadID string, snapshot mo
 	if err != nil {
 		return err
 	}
+	payload = redactTelegramBotCredentials(payload)
 	updatedAt := string(model.NowString())
 	_, err = s.db.ExecContext(ctx, `
 	INSERT INTO thread_snapshots(
@@ -917,6 +926,23 @@ func (s *Store) ClaimDeliveryBatch(ctx context.Context, limit int) ([]model.Deli
 func (s *Store) CompleteDelivery(ctx context.Context, queueID int64) error {
 	_, err := s.db.ExecContext(ctx, `UPDATE delivery_queue SET status = ?, updated_at = ? WHERE id = ?`, model.DeliveryStatusDelivered, string(model.NowString()), queueID)
 	return err
+}
+
+func (s *Store) SupersedeDelivery(ctx context.Context, queueID int64) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE delivery_queue SET status = ?, updated_at = ? WHERE id = ?`, model.DeliveryStatusSuperseded, string(model.NowString()), queueID)
+	return err
+}
+
+func (s *Store) DeliveryStatusForEvent(ctx context.Context, eventID, chatKey string) (string, error) {
+	row := s.db.QueryRowContext(ctx, `SELECT status FROM delivery_queue WHERE event_id = ? AND chat_key = ?`, strings.TrimSpace(eventID), strings.TrimSpace(chatKey))
+	var status string
+	if err := row.Scan(&status); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return "", nil
+		}
+		return "", err
+	}
+	return status, nil
 }
 
 func (s *Store) FailDelivery(ctx context.Context, queueID int64, retryCount int, availableAt time.Time, errText string, dead bool) error {

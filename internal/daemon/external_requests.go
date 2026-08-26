@@ -181,14 +181,15 @@ func (s *Service) deliverExternalMessage(ctx context.Context, sender ExternalRep
 	attempt := attempts + 1
 	dead := attempt >= maxAttempts
 	backoff := baseDelay * time.Duration(1<<min(attempt-1, 4))
+	safeError := sanitizeDiagnosticString(sendErr.Error())
 	if acknowledgement {
-		_ = s.store.FailExternalAck(ctx, request.ID, attempt, time.Now().UTC().Add(backoff), sendErr.Error(), dead)
+		_ = s.store.FailExternalAck(ctx, request.ID, attempt, time.Now().UTC().Add(backoff), safeError, dead)
 	} else {
-		_ = s.store.FailExternalReply(ctx, request.ID, attempt, time.Now().UTC().Add(backoff), sendErr.Error(), dead)
+		_ = s.store.FailExternalReply(ctx, request.ID, attempt, time.Now().UTC().Add(backoff), safeError, dead)
 	}
 	if dead {
 		s.reportHealthFailure(ctx, "external."+kind+"."+request.ID, "YMessenger "+kind+" delivery stopped retrying",
-			"Request "+request.ID+": "+sanitizeDiagnosticString(sendErr.Error()), "Check YMessenger connectivity, then inspect the external delivery backlog.")
+			"Request "+request.ID+": "+safeError, "Check YMessenger connectivity, then inspect the external delivery backlog.")
 	}
 	s.logLifecycle("external_"+kind+"_failed", lifecycleFields{"request_id": request.ID, "source": request.Source, "attempt": attempt, "dead": dead, "error": sendErr})
 }

@@ -72,6 +72,7 @@ const (
 	DeliveryStatusDelivered  = "delivered"
 	DeliveryStatusRetry      = "retry"
 	DeliveryStatusDead       = "dead"
+	DeliveryStatusSuperseded = "superseded"
 
 	CallbackStatusActive  = "active"
 	CallbackStatusExpired = "expired"
@@ -369,19 +370,22 @@ type MessageRoute struct {
 }
 
 type DeliveryPayload struct {
-	Mode      string         `json:"mode,omitempty"`
-	Text      string         `json:"text,omitempty"`
-	ThreadID  string         `json:"thread_id,omitempty"`
-	TurnID    string         `json:"turn_id,omitempty"`
-	ItemID    string         `json:"item_id,omitempty"`
-	EventID   string         `json:"event_id,omitempty"`
-	MessageID int64          `json:"message_id,omitempty"`
-	FileName  string         `json:"file_name,omitempty"`
-	FilePath  string         `json:"file_path,omitempty"`
-	Caption   string         `json:"caption,omitempty"`
-	PanelID   int64          `json:"panel_id,omitempty"`
-	PanelRole string         `json:"panel_role,omitempty"`
-	Buttons   [][]ButtonSpec `json:"buttons,omitempty"`
+	Mode            string         `json:"mode,omitempty"`
+	Text            string         `json:"text,omitempty"`
+	ThreadID        string         `json:"thread_id,omitempty"`
+	TurnID          string         `json:"turn_id,omitempty"`
+	ItemID          string         `json:"item_id,omitempty"`
+	EventID         string         `json:"event_id,omitempty"`
+	MessageID       int64          `json:"message_id,omitempty"`
+	FileName        string         `json:"file_name,omitempty"`
+	FilePath        string         `json:"file_path,omitempty"`
+	Caption         string         `json:"caption,omitempty"`
+	PanelID         int64          `json:"panel_id,omitempty"`
+	PanelRole       string         `json:"panel_role,omitempty"`
+	Buttons         [][]ButtonSpec `json:"buttons,omitempty"`
+	HealthKey       string         `json:"health_key,omitempty"`
+	HealthEpisodeID string         `json:"health_episode_id,omitempty"`
+	HealthState     string         `json:"health_state,omitempty"`
 }
 
 type DeliveryQueueItem struct {

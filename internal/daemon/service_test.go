@@ -3712,6 +3712,44 @@ func TestTransportErrorDiagnosticSanitizesPrivateFields(t *testing.T) {
 	}
 }
 
+func TestLifecycleDiagnosticSanitizesTelegramBotURL(t *testing.T) {
+	service := newTestService(t)
+	logs := captureServiceLogs(service)
+	credential := "bot123456789:" + "secret-token"
+	service.logLifecycle("telegram_send_failed", lifecycleFields{
+		"error": errors.New(`Post "https://api.telegram.org/` + credential + `/sendMessage": context deadline exceeded`),
+	})
+
+	got := logs.String()
+	requireLogContains(t, got, `redacted`)
+	if strings.Contains(got, "secret-token") || strings.Contains(got, "bot123456789") {
+		t.Fatalf("diagnostic log leaked Telegram credential: %s", got)
+	}
+}
+
+func TestDeliveryFailureSanitizesTelegramCredentialInSQLite(t *testing.T) {
+	service := newTestService(t)
+	service.cfg.DeliveryMaxAttempts = 5
+	ctx := context.Background()
+	credential := "bot123456789:" + "secret-token"
+	service.SetSender(&recordingSender{sendErrs: []error{errors.New(`Post "https://api.telegram.org/` + credential + `/sendMessage": timeout`)}})
+	if err := service.store.EnqueueDelivery(ctx, model.DeliveryQueueItem{
+		EventID: "test:sanitize-delivery", ChatKey: model.ChatKey(-1001, 0), ChatID: -1001,
+		Kind: "test", Status: model.DeliveryStatusPending, PayloadJSON: `{"text":"test"}`,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	service.processDeliveryBatch(ctx)
+	items, err := service.store.ClaimDeliveryBatch(ctx, 10)
+	if err != nil || len(items) != 1 {
+		t.Fatalf("retry items=%#v err=%v", items, err)
+	}
+	if strings.Contains(items[0].LastError, credential) || !strings.Contains(items[0].LastError, "redacted") {
+		t.Fatalf("persisted delivery error was not sanitized: %q", items[0].LastError)
+	}
+}
+
 func TestDiagnosticLogsAreRateLimited(t *testing.T) {
 	service := newTestService(t)
 	logs := captureServiceLogs(service)

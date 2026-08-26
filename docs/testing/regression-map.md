@@ -88,6 +88,18 @@ Planned primary tests:
 - `internal/daemon/health_test.go::TestHealthEpisodeQueuesOneWarningAndOneRecovery`
   proves health warnings and recoveries are queued for Telegram General without
   an invalid forum thread id.
+- `internal/daemon/health_test.go::TestExternalPollHealthIgnoresResumeFlappingUntilContinuouslyAwake`
+  proves laptop resume gaps, short failures, and unstable successes do not flap
+  Control health state.
+- `internal/daemon/health_test.go::TestHealthRecoveryDoesNotOvertakeUndeliveredWarning`
+  proves a closed episode whose warning never reached Telegram is superseded
+  instead of rendering a recovery before its warning.
+- `internal/daemon/service_test.go::TestLifecycleDiagnosticSanitizesTelegramBotURL`
+  and `TestDeliveryFailureSanitizesTelegramCredentialInSQLite` prove Bot API
+  credentials are redacted from both lifecycle logs and durable retry errors.
+- `internal/storage/store_test.go::TestThreadAndSnapshotPersistenceRedactsTelegramBotCredentials`
+  proves raw App Server thread and snapshot projections cannot reintroduce a
+  credential from historical task content.
 - `internal/daemon/health_test.go::TestHealthDeliveryFallsBackToGeneralForInvalidTopic`
   proves a legacy health delivery targeting a missing topic retries once in
   General instead of becoming a silent dead letter.
@@ -263,6 +275,8 @@ Primary tests:
 - `internal/cronpoller/poller_test.go::TestPollOnceEnqueuesOneTelegramApprovalRequestAfterDailyCronTime`
 - `internal/cronpoller/poller_test.go::TestPollOnceAfterFiveMissedDaysCreatesOnlyCurrentDayRequest`
 - `internal/cronpoller/poller_test.go::TestPollOnceBeforeDailyCronTimeWaitsForToday`
+- `internal/cronpoller/poller_test.go::TestPollOnceHonorsOptionalMaxLateness`
+- `internal/cronpoller/poller_test.go::TestResumeGateWaitsForContinuousRuntimeBeforeCronCatchup`
 - `internal/cronpoller/poller_test.go::TestPollOnceWeeklyScheduleCatchesUpOnceForCurrentWeek`
 - `internal/cronpoller/poller_test.go::TestPollOnceWeeklyScheduleWaitsForCurrentWeekSlot`
 - `internal/cronpoller/poller_test.go::TestPollOnceAutoPolicySkipsTelegramLaunchApproval`
@@ -276,6 +290,9 @@ Contract notes:
   dismissed, failed, started, and completed states.
 - Missing days or weeks never create a backlog, and same-period daemon restarts
   cannot create another request.
+- Runtime polling must remain continuous for four minutes after startup or a
+  sleep-sized gap before catch-up is evaluated. Optional `max_lateness` bounds
+  how long the current period remains eligible.
 - Cron execution settings are request-local and must not change global Codex
   model or reasoning settings.
 

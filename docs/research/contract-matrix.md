@@ -139,7 +139,9 @@ ADR: `docs/adr/ADR-030-cron-launch-requests.md`; feature brief:
 - Five-field cron expressions support daily schedules or exactly one weekday.
 - Cron identity is `<task-id>:<scheduled local YYYY-MM-DD>` under source `cron`;
   every request state consumes that period's identity after restart.
-- Missed periods coalesce into the current day or week's request after its slot.
+- Missed periods coalesce into the current day or week's request after its slot;
+  catch-up waits for continuous runtime after a sleep-sized gap and may be
+  bounded by optional `max_lateness`.
 - Telegram launch approval is the default; `auto` affects future requests only.
 - Explicit model and reasoning effort travel with the durable launch request
   and do not mutate global Telegram settings.

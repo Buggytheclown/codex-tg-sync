@@ -497,14 +497,14 @@ func (s *Service) activateAFC(ctx context.Context, userID int64) (*DirectRespons
 				summary.Unknown = append(summary.Unknown, entry)
 				summary.Items[rank].Telegram = "create outcome unknown"
 			}
-			summary.Items[rank].Error = createErr.Error()
+			summary.Items[rank].Error = sanitizeDiagnosticString(createErr.Error())
 			continue
 		}
 		if err := s.store.UpsertAFCTopic(ctx, model.AFCTopic{SessionID: sessionID, ChatID: s.cfg.AFCGroupID,
 			TopicID: topicID, ThreadID: thread.ID, Rank: rank + 1, Title: title, TelegramState: model.AFCTopicConnected}); err != nil {
 			_ = forum.DeleteAFCTopic(ctx, topicID)
 			summary.Failed = append(summary.Failed, fmt.Sprintf("%s: persist: %s", thread.ID, err))
-			summary.Items[rank].Telegram, summary.Items[rank].Error = "binding failed", err.Error()
+			summary.Items[rank].Telegram, summary.Items[rank].Error = "binding failed", sanitizeDiagnosticString(err.Error())
 			continue
 		}
 		summary.Created++
@@ -604,7 +604,7 @@ func (s *Service) syncAFCCommand(ctx context.Context) (*DirectResponse, error) {
 	defer s.afcMu.Unlock()
 	result, err := s.syncAFCLocked(ctx)
 	if err != nil {
-		return &DirectResponse{Text: "AFC sync failed: " + err.Error()}, nil
+		return &DirectResponse{Text: "AFC sync failed: " + sanitizeDiagnosticString(err.Error())}, nil
 	}
 	return &DirectResponse{Text: fmt.Sprintf("AFC sync complete. discovered: %d, discovery failures: %d, connected: %d, subscription failures: %d, read failures: %d",
 		result.Discovered, result.DiscoveryFailures, result.Connected, result.SubscriptionFailures, result.ReadFailures)}, nil

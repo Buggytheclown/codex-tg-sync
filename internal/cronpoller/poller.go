@@ -18,8 +18,10 @@ import (
 )
 
 const (
-	Source              = "cron"
-	DefaultPollInterval = 30 * time.Second
+	Source               = "cron"
+	DefaultPollInterval  = 30 * time.Second
+	resumeObservationGap = 90 * time.Second
+	resumeGrace          = 4 * time.Minute
 )
 
 var taskIDPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
@@ -33,8 +35,9 @@ const (
 )
 
 type taskSchedule struct {
-	schedule robfigcron.Schedule
-	period   schedulePeriod
+	schedule    robfigcron.Schedule
+	period      schedulePeriod
+	maxLateness time.Duration
 }
 
 type RequestSink interface {
@@ -56,6 +59,7 @@ type Task struct {
 	ReasoningEffort string `json:"reasoning_effort"`
 	LaunchPolicy    string `json:"launch_policy"`
 	Enabled         bool   `json:"enabled"`
+	MaxLateness     string `json:"max_lateness,omitempty"`
 }
 
 type Poller struct {
@@ -63,6 +67,8 @@ type Poller struct {
 	telegramTopicID int64
 	sink            RequestSink
 	now             func() time.Time
+	lastRunAt       time.Time
+	resumeReadyAt   time.Time
 }
 
 func New(path string, telegramTopicID int64, sink RequestSink) *Poller {
@@ -91,6 +97,9 @@ func (p *Poller) PollOnce(ctx context.Context) (int, error) {
 		if !task.Enabled || !due {
 			continue
 		}
+		if schedules[i].maxLateness > 0 && now.Sub(slot) > schedules[i].maxLateness {
+			continue
+		}
 		requests = append(requests, requestForTask(task, p.telegramTopicID, now, slot))
 	}
 	if len(requests) == 0 {
@@ -104,7 +113,7 @@ func (p *Poller) Run(ctx context.Context, interval time.Duration, onResult func(
 		interval = DefaultPollInterval
 	}
 	for {
-		_, err := p.PollOnce(ctx)
+		_, err := p.pollOnceAfterResume(ctx)
 		if onResult != nil {
 			onResult(err)
 		}
@@ -116,6 +125,18 @@ func (p *Poller) Run(ctx context.Context, interval time.Duration, onResult func(
 		case <-timer.C:
 		}
 	}
+}
+
+func (p *Poller) pollOnceAfterResume(ctx context.Context) (int, error) {
+	now := p.now()
+	if p.lastRunAt.IsZero() || now.Before(p.lastRunAt) || now.Sub(p.lastRunAt) > resumeObservationGap {
+		p.resumeReadyAt = now.Add(resumeGrace)
+	}
+	p.lastRunAt = now
+	if now.Before(p.resumeReadyAt) {
+		return 0, nil
+	}
+	return p.PollOnce(ctx)
 }
 
 func parseFile(data []byte, telegramTopicID int64) (File, *time.Location, []taskSchedule, error) {
@@ -148,6 +169,7 @@ func parseFile(data []byte, telegramTopicID int64) (File, *time.Location, []task
 		task.Model = strings.TrimSpace(task.Model)
 		task.ReasoningEffort = normalizeEffort(task.ReasoningEffort)
 		task.LaunchPolicy = strings.ToLower(strings.TrimSpace(task.LaunchPolicy))
+		task.MaxLateness = strings.TrimSpace(task.MaxLateness)
 		if task.LaunchPolicy == "" {
 			task.LaunchPolicy = "telegram"
 		}
@@ -185,7 +207,14 @@ func parseFile(data []byte, telegramTopicID int64) (File, *time.Location, []task
 		if err != nil {
 			return File{}, nil, nil, fmt.Errorf("cron task %q schedule: %w", task.ID, err)
 		}
-		schedules[i] = taskSchedule{schedule: schedule, period: period}
+		maxLateness := time.Duration(0)
+		if task.MaxLateness != "" {
+			maxLateness, err = time.ParseDuration(task.MaxLateness)
+			if err != nil || maxLateness <= 0 {
+				return File{}, nil, nil, fmt.Errorf("cron task %q max_lateness must be a positive duration", task.ID)
+			}
+		}
+		schedules[i] = taskSchedule{schedule: schedule, period: period, maxLateness: maxLateness}
 	}
 	return file, location, schedules, nil
 }

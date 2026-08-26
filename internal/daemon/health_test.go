@@ -34,6 +34,87 @@ func TestHealthEpisodeQueuesOneWarningAndOneRecovery(t *testing.T) {
 	}
 }
 
+func TestExternalPollHealthIgnoresResumeFlappingUntilContinuouslyAwake(t *testing.T) {
+	service := activeAFCService(t)
+	ctx := context.Background()
+	base := time.Date(2026, 8, 26, 7, 0, 0, 0, time.UTC)
+
+	for elapsed := time.Duration(0); elapsed < externalPollResumeGrace+externalPollFailureDelay; elapsed += 30 * time.Second {
+		service.now = func() time.Time { return base.Add(elapsed) }
+		service.NoteExternalPollResult(ctx, "yandex_messenger", errors.New("dial tcp: no route to host"))
+	}
+	items, err := service.store.ClaimDeliveryBatch(ctx, 10)
+	if err != nil || len(items) != 0 {
+		t.Fatalf("resume warm-up queued alerts=%#v err=%v", items, err)
+	}
+
+	service.now = func() time.Time { return base.Add(externalPollResumeGrace + externalPollFailureDelay) }
+	service.NoteExternalPollResult(ctx, "yandex_messenger", errors.New("dial tcp: no route to host"))
+	items, err = service.store.ClaimDeliveryBatch(ctx, 10)
+	if err != nil || len(items) != 1 || !strings.Contains(items[0].PayloadJSON, "network connectivity") {
+		t.Fatalf("stable failure alert=%#v err=%v", items, err)
+	}
+	if err := service.store.CompleteDelivery(ctx, items[0].ID); err != nil {
+		t.Fatal(err)
+	}
+
+	for elapsed := time.Duration(0); elapsed < externalPollRecoveryDelay; elapsed += 10 * time.Second {
+		service.now = func() time.Time { return base.Add(externalPollResumeGrace + externalPollFailureDelay + elapsed) }
+		service.NoteExternalPollResult(ctx, "yandex_messenger", nil)
+	}
+	items, err = service.store.ClaimDeliveryBatch(ctx, 10)
+	if err != nil || len(items) != 0 {
+		t.Fatalf("unstable recovery queued alerts=%#v err=%v", items, err)
+	}
+	service.now = func() time.Time {
+		return base.Add(externalPollResumeGrace + externalPollFailureDelay + externalPollRecoveryDelay)
+	}
+	service.NoteExternalPollResult(ctx, "yandex_messenger", nil)
+	items, err = service.store.ClaimDeliveryBatch(ctx, 10)
+	if err != nil || len(items) != 1 || !strings.Contains(items[0].PayloadJSON, "polling recovered") {
+		t.Fatalf("stable recovery=%#v err=%v", items, err)
+	}
+}
+
+func TestHealthRecoveryDoesNotOvertakeUndeliveredWarning(t *testing.T) {
+	service := activeAFCService(t)
+	ctx := context.Background()
+	sender := &recordingSender{}
+	service.SetSender(sender)
+
+	service.reportHealthFailure(ctx, "ymessenger.poll", "YMessenger polling failed", "network unavailable", "wait")
+	service.reportHealthRecovered(ctx, "ymessenger.poll", "YMessenger polling recovered")
+	service.processDeliveryBatch(ctx)
+
+	if len(sender.messages) != 0 {
+		t.Fatalf("messages=%#v, want closed undelivered episode suppressed", sender.messages)
+	}
+	backlog, err := service.store.DeliveryQueueBacklog(ctx)
+	if err != nil || backlog != 0 {
+		t.Fatalf("DeliveryQueueBacklog=%d err=%v, want 0", backlog, err)
+	}
+}
+
+func TestOlderHealthRecoveryIsSupersededByNewEpisode(t *testing.T) {
+	service := activeAFCService(t)
+	ctx := context.Background()
+	sender := &recordingSender{}
+	service.SetSender(sender)
+
+	service.reportHealthFailure(ctx, "ymessenger.poll", "failed", "first", "wait")
+	service.processDeliveryBatch(ctx)
+	if len(sender.messages) != 1 {
+		t.Fatalf("first warning messages=%#v", sender.messages)
+	}
+	service.reportHealthRecovered(ctx, "ymessenger.poll", "recovered")
+	service.reportHealthFailure(ctx, "ymessenger.poll", "failed", "second", "wait")
+	service.processDeliveryBatch(ctx)
+
+	if len(sender.messages) != 2 || !strings.Contains(sender.messages[1].text, "second") {
+		t.Fatalf("messages=%#v, want first warning then new warning only", sender.messages)
+	}
+}
+
 func TestHealthDeliveryFallsBackToGeneralForInvalidTopic(t *testing.T) {
 	service := newTestService(t)
 	ctx := context.Background()

@@ -33,8 +33,19 @@ update behind one message.
   failure the request advances with an explicit unavailable-context marker so
   unrelated later updates are not blocked forever.
 - Important failure episodes use namespaced `daemon_state` and the existing
-  durable Telegram delivery queue. One episode produces one Control warning
-  and one recovery notice rather than repeated warnings.
+  durable Telegram delivery queue. External polling waits through a four-minute
+  resume warm-up, requires one minute of continuous failure, and requires 30
+  seconds of continuous success before recovery. A polling gap longer than 90
+  seconds resets the warm-up, treating sleep and DarkWake as unknown rather
+  than failed service time.
+- Health deliveries carry their episode identity. A stale warning is
+  superseded instead of sent, and a recovery is sent only when its matching
+  warning was already delivered. This prevents delayed queue retries from
+  rendering recovery before failure or replaying an older episode after a
+  newer one.
+- Diagnostic events, durable delivery retry metadata, and raw App Server thread
+  and snapshot projections sanitize Telegram Bot API credentials before writing
+  logs or SQLite.
 - In managed-daemon mode, a periodic bounded `thread/list` heartbeat detects a
   half-open poll connection. Transport loss makes the connection status false,
   requests poll repair, and applies the ADR-027 reset boundary immediately:
@@ -59,6 +70,11 @@ A single missing History root can lose only that root context after three
 attempts; the user request remains explicit about the loss. Managed-daemon
 connection loss sacrifices Telegram continuity, matching process restart, in
 exchange for truthful state and no replay ambiguity.
+
+Short network transitions after host resume are intentionally not operator
+incidents. A persistent external polling outage may take up to five minutes
+after resume to become visible, trading alert latency for a stable Control
+signal on laptops.
 
 ## Non-goals
 

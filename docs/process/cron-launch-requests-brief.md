@@ -61,3 +61,5 @@ Server dispatch remain authoritative.
 - [x] Telegram approval is the default and can be changed to auto-start in JSON.
 - [x] The configured cwd, model, reasoning effort, and prompt reach Codex.
 - [x] A weekly task catches up once after its weekday slot and never replays missed weeks.
+- [x] Catch-up waits for continuous runtime after a sleep-sized polling gap.
+- [x] Optional `max_lateness` can bound same-period catch-up.

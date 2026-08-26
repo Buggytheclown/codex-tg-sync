@@ -1619,8 +1619,14 @@ func (s *Service) processDeliveryBatch(ctx context.Context) {
 	for _, item := range items {
 		var payload model.DeliveryPayload
 		if err := json.Unmarshal([]byte(item.PayloadJSON), &payload); err != nil {
-			_ = s.store.RecordDeliveryAttempt(ctx, item.ID, item.RetryCount+1, "decode_error", err.Error())
-			_ = s.store.FailDelivery(ctx, item.ID, item.RetryCount+1, time.Now().UTC().Add(s.cfg.DeliveryRetryBase), err.Error(), true)
+			safeError := sanitizeDiagnosticString(err.Error())
+			_ = s.store.RecordDeliveryAttempt(ctx, item.ID, item.RetryCount+1, "decode_error", safeError)
+			_ = s.store.FailDelivery(ctx, item.ID, item.RetryCount+1, time.Now().UTC().Add(s.cfg.DeliveryRetryBase), safeError, true)
+			continue
+		}
+		if item.Kind == "health" && !s.healthDeliveryIsCurrent(ctx, item, payload) {
+			_ = s.store.RecordDeliveryAttempt(ctx, item.ID, item.RetryCount+1, "superseded", "")
+			_ = s.store.SupersedeDelivery(ctx, item.ID)
 			continue
 		}
 		s.logTelegramRenderContainsNil(payload.ThreadID, payload.TurnID, "delivery", 0, payload.Text)
@@ -1632,16 +1638,17 @@ func (s *Service) processDeliveryBatch(ctx context.Context) {
 		messageID, err := sender.SendMessage(ctx, item.ChatID, deliveryTopicID, payload.Text, payload.Buttons, options)
 		if err != nil && item.Kind == "health" && deliveryTopicID != afcGeneralSendTopicID && isMessageThreadNotFoundError(err) {
 			attempt := item.RetryCount + 1
-			_ = s.store.RecordDeliveryAttempt(ctx, item.ID, attempt, "general_fallback", err.Error())
+			_ = s.store.RecordDeliveryAttempt(ctx, item.ID, attempt, "general_fallback", sanitizeDiagnosticString(err.Error()))
 			deliveryTopicID = afcGeneralSendTopicID
 			messageID, err = sender.SendMessage(ctx, item.ChatID, deliveryTopicID, payload.Text, payload.Buttons, options)
 		}
 		if err != nil {
 			attempt := item.RetryCount + 1
-			_ = s.store.RecordDeliveryAttempt(ctx, item.ID, attempt, "send_error", err.Error())
+			safeError := sanitizeDiagnosticString(err.Error())
+			_ = s.store.RecordDeliveryAttempt(ctx, item.ID, attempt, "send_error", safeError)
 			dead := attempt >= s.cfg.DeliveryMaxAttempts
 			backoff := s.cfg.DeliveryRetryBase * time.Duration(1<<min(attempt-1, 4))
-			_ = s.store.FailDelivery(ctx, item.ID, attempt, time.Now().UTC().Add(backoff), err.Error(), dead)
+			_ = s.store.FailDelivery(ctx, item.ID, attempt, time.Now().UTC().Add(backoff), safeError, dead)
 			s.setError(ctx, err)
 			continue
 		}
@@ -1659,6 +1666,32 @@ func (s *Service) processDeliveryBatch(ctx context.Context) {
 				CreatedAt: model.NowString(),
 			})
 		}
+	}
+}
+
+func (s *Service) healthDeliveryIsCurrent(ctx context.Context, item model.DeliveryQueueItem, payload model.DeliveryPayload) bool {
+	key := healthKey(payload.HealthKey)
+	episodeID := strings.TrimSpace(payload.HealthEpisodeID)
+	state := strings.TrimSpace(payload.HealthState)
+	if key == "" || episodeID == "" || state == "" {
+		return true
+	}
+	episode := s.loadHealthEpisode(ctx, "health."+key)
+	if episode.EpisodeID != episodeID {
+		return false
+	}
+	switch state {
+	case "open":
+		return episode.Open
+	case "recovered":
+		if episode.Open {
+			return false
+		}
+		openEventID := "health:" + key + ":" + episodeID + ":open"
+		status, err := s.store.DeliveryStatusForEvent(ctx, openEventID, item.ChatKey)
+		return err == nil && status == model.DeliveryStatusDelivered
+	default:
+		return false
 	}
 }
 
