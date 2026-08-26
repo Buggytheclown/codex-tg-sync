@@ -14,8 +14,8 @@ operator-visible diagnostic.
   editable-message contract.
 - Reuse the shared `tgformat` UTF-16-aware splitter with the Telegram message
   limit instead of adding another length implementation.
-- Put `✅ [Final]` on the first chunk only. Continuation chunks contain only
-  continuation text.
+- Put `✅ [Final]` on every chunk. Telegram previews the latest topic message,
+  so a headerless continuation hides the completed state in the topic list.
 - Send chunks in order and update `last_final_fp` only after every chunk is
   accepted by the Bot API.
 - Log a sanitized delivery warning with thread, turn, topic, and chunk
@@ -33,8 +33,8 @@ operator-visible diagnostic.
 ## Validation
 
 - A daemon test proves a Final over 4096 UTF-16 units becomes multiple ordered
-  Telegram messages, every chunk is within the limit, and the fingerprint is
-  committed only after all chunks succeed.
+  Telegram messages, every chunk stays within the limit and keeps the Final
+  header, and the fingerprint is committed only after all chunks succeed.
 - A failure test proves a failed continuation leaves the fingerprint pending.
 - Targeted tests, `go test ./...`, and `go build -buildvcs=false ./...` pass.
 - Live validation reads the affected Telegram topic after daemon restart and

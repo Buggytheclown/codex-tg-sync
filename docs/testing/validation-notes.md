@@ -4,6 +4,18 @@ This file captures validation nuances that are useful for agents and maintainers
 
 For feature-to-test ownership, see `docs/testing/regression-map.md`.
 
+## AFC long Final topic preview
+
+2026-08-26 Europe/Minsk: the macOS LaunchAgent was rebuilt and restarted, AFC
+was reactivated, and a disposable Telegram-origin AFC task produced a Final
+long enough for four Bot API messages. MTProto topic readback showed every
+chunk starting with `✅ [Final]`, all four remaining within the 4096 UTF-16-unit
+limit, and the forum topic's authoritative `top_message` pointing to the last
+chunk with the same Final prefix. Targeted tests, full `go test ./...`,
+`go build -buildvcs=false ./...`, `go vet ./...`, and `git diff --check` passed.
+No private ids, paths, tokens, screenshots, prompts, or raw logs are recorded
+here.
+
 ## AFC reliability and external delivery transparency
 
 2026-08-23 Europe/Minsk: the ADR-029 slice was validated with targeted AFC,

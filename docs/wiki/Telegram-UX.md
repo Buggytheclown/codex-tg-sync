@@ -21,6 +21,10 @@ New run
 
 The active commentary card owns run status while the run is active. When the final answer is available, the bridge sends a new `[Final]` card and moves the panel route to that message. `[Final]` shows final-answer text/status only; completed commentary and tool/output history stay in Details. Tool-only turns with no commentary appear in Details as `Tool activity`. Details pagination edits the Final card instead of sending more messages, and Details/Back buttons stay bound to the completed run card that created them.
 
+Long AFC Finals are split into multiple messages. Every part starts with
+`✅ [Final]` so the topic list continues to show completed state when the last
+part becomes its message preview.
+
 ## Notifications
 
 Most bot messages are sent silently to avoid notification spam. Normal Telegram notifications are reserved for `New run`, `[Plan]`, and `[Final]`. `New run` notifications are enabled by default and can be disabled with `CTR_GO_NOTIFY_NEW_RUN=off`; the card remains visible either way. `[Plan]` question cards and `[Final]` cards always use normal notifications.

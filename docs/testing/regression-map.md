@@ -118,8 +118,9 @@ Planned primary tests:
   preserving recovery from a real current-session failure.
 - `internal/daemon/afc_test.go` proves Stop interrupts current Desktop-origin
   and Telegram-origin turns through guarded authoritative coordinates.
-- `internal/daemon/afc_test.go::TestAFCLongFinalSplitsWithinTelegramLimit`
-  proves long Finals are delivered as ordered UTF-16-safe chunks and committed
+- `internal/daemon/afc_test.go::TestAFCLongFinalKeepsFinalHeaderOnEveryChunk`
+  proves long Finals are delivered as ordered UTF-16-safe chunks, every chunk
+  keeps the Final header for Telegram topic previews, and delivery is committed
   only after all chunks succeed.
 - `internal/daemon/afc_test.go::TestAFCLongFinalFailureKeepsFingerprintPending`
   proves a failed continuation remains pending for reconciliation retry.
@@ -143,8 +144,9 @@ Contract notes:
   Telegram reports `message thread not found`.
 - AFC active rejects legacy DM mutations before App Server access. Off does not
   restore legacy lifecycle; explicit later DM work may start lazily.
-- Long AFC Finals are split at Telegram's UTF-16 message boundary. The first
-  chunk carries the Final header; continuation chunks do not repeat it.
+- Long AFC Finals are split at Telegram's UTF-16 message boundary. Every chunk
+  carries the Final header so the latest continuation keeps terminal state
+  visible in the Telegram topic preview.
 
 ## AFC Forum Group Transport
 

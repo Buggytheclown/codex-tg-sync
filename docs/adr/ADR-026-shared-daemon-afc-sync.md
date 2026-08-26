@@ -34,8 +34,10 @@ Desktop sees without maintaining a second App Server runtime.
 - Live events are preferred for presentation and `thread/read` remains the
   durable reconciliation source.
 - AFC Finals that exceed Telegram's message limit are split into ordered
-  UTF-16-safe chunks. The Final delivery fingerprint advances only after every
-  chunk is accepted; reconciliation retries an incomplete delivery.
+  UTF-16-safe chunks. Every chunk repeats the Final header so the topic preview
+  still exposes terminal state when a continuation is the latest message. The
+  Final delivery fingerprint advances only after every chunk is accepted;
+  reconciliation retries an incomplete delivery.
 - AFC reconciliation continuously materializes newly created eligible
   top-level Desktop threads, using App Server `createdAt` rather than treating
   activity in an old thread as a new chat. Activation creates only a bounded recent snapshot;

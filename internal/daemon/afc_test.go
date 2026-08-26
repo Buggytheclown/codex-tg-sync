@@ -378,7 +378,7 @@ func TestAFCPassiveSyncSendsSilentStatusAndNotifyingFinal(t *testing.T) {
 	}
 }
 
-func TestAFCLongFinalSplitsWithinTelegramLimit(t *testing.T) {
+func TestAFCLongFinalKeepsFinalHeaderOnEveryChunk(t *testing.T) {
 	service := activeAFCService(t)
 	ctx := context.Background()
 	finalText := strings.Repeat("🙂", tgformat.TelegramMessageLimit/2+600)
@@ -401,12 +401,13 @@ func TestAFCLongFinalSplitsWithinTelegramLimit(t *testing.T) {
 		if got := afcUTF16Len(send.text); got > tgformat.TelegramMessageLimit {
 			t.Fatalf("chunk %d UTF-16 length=%d, want <=%d", index+1, got, tgformat.TelegramMessageLimit)
 		}
-		if index > 0 && strings.HasPrefix(send.text, afcFinalHeader) {
-			t.Fatalf("continuation chunk %d repeated Final header", index+1)
+		prefix := afcFinalHeader + "\n"
+		if !strings.HasPrefix(send.text, prefix) {
+			t.Fatalf("chunk %d = %q, want Final header for topic preview", index+1, send.text)
 		}
-		delivered.WriteString(send.text)
+		delivered.WriteString(strings.TrimPrefix(send.text, prefix))
 	}
-	if got, want := delivered.String(), afcFinalHeader+"\n"+finalText; got != want {
+	if got, want := delivered.String(), finalText; got != want {
 		t.Fatalf("delivered Final length=%d, want exact length=%d", len(got), len(want))
 	}
 	topic, err := service.store.GetActiveAFCTopic(ctx, -1001, 11)

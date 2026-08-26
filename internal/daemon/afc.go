@@ -1030,9 +1030,23 @@ func (s *Service) persistAndDeliverAFCSnapshotLocked(ctx context.Context, forum 
 }
 
 func renderAFCFinal(finalText string) []model.RenderedMessage {
-	return tgformat.RenderSegments([]tgformat.Segment{
-		tgformat.Plain(afcFinalHeader + "\n" + strings.TrimSpace(finalText)),
-	}, tgformat.TelegramMessageLimit)
+	body := strings.TrimSpace(finalText)
+	if body == "" {
+		return []model.RenderedMessage{{Text: afcFinalHeader}}
+	}
+	prefix := afcFinalHeader + "\n"
+	prefixUnits := afcUTF16Len(prefix)
+	chunks := tgformat.RenderSegments(
+		[]tgformat.Segment{tgformat.Plain(body)},
+		tgformat.TelegramMessageLimit-prefixUnits,
+	)
+	for index := range chunks {
+		chunks[index].Text = prefix + chunks[index].Text
+		for entityIndex := range chunks[index].Entities {
+			chunks[index].Entities[entityIndex].Offset += prefixUnits
+		}
+	}
+	return chunks
 }
 
 func (s *Service) deliverAFCUserMessageLocked(ctx context.Context, forum AFCForum, topic model.AFCTopic, current appserver.ThreadReadSnapshot) (model.AFCTopic, bool) {
