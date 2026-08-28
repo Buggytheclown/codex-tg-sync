@@ -176,9 +176,9 @@ func TestStatusShowsHeartbeatDeadLettersAndOpenHealthIncidents(t *testing.T) {
 	}
 }
 
-func TestDaemonHeartbeatFailureTruthfullyResetsAFCWithoutReplay(t *testing.T) {
+func TestSharedAppServerHeartbeatFailureTruthfullyResetsAFCWithoutReplay(t *testing.T) {
 	service := activeAFCService(t)
-	service.cfg.AppServerMode = "daemon"
+	service.cfg.AppServerMode = "websocket"
 	service.lastPollHeartbeat = time.Time{}
 	poll := &stubSession{threadListErr: errors.New("websocket is half-open")}
 	service.mu.Lock()

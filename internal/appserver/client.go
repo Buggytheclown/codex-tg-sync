@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -34,14 +35,24 @@ var _ control.ControlPlane = (*Client)(nil)
 type TransportMode string
 
 const (
-	TransportSpawned TransportMode = "spawned"
-	TransportDaemon  TransportMode = "daemon"
+	TransportSpawned   TransportMode = "spawned"
+	TransportDaemon    TransportMode = "daemon"
+	TransportWebSocket TransportMode = "websocket"
 )
 
 type TransportConfig struct {
 	Mode       TransportMode
 	ListenURL  string
 	SocketPath string
+}
+
+func IsSharedTransportMode(mode string) bool {
+	switch TransportMode(strings.ToLower(strings.TrimSpace(mode))) {
+	case TransportDaemon, TransportWebSocket:
+		return true
+	default:
+		return false
+	}
 }
 
 type rpcResponse struct {
@@ -928,8 +939,9 @@ func (c *Client) StderrTail() []string {
 }
 
 func (c *Client) buildCommand() (*exec.Cmd, error) {
-	if c.transport.Mode == TransportDaemon {
-		return nil, errors.New("managed daemon uses a direct Unix WebSocket connection")
+	if c.transport.Mode != TransportSpawned {
+		_, err := c.appServerArgs()
+		return nil, err
 	}
 	executable, err := exec.LookPath(c.codexBin)
 	if err != nil {
@@ -954,9 +966,17 @@ func (c *Client) buildCommand() (*exec.Cmd, error) {
 }
 
 func (c *Client) openTransport(ctx context.Context) (*exec.Cmd, io.WriteCloser, io.ReadCloser, io.ReadCloser, error) {
-	if c.transport.Mode == TransportDaemon {
+	switch c.transport.Mode {
+	case TransportDaemon:
 		stdin, stdout, err := c.openDaemonWebSocket(ctx)
 		return nil, stdin, stdout, nil, err
+	case TransportWebSocket:
+		stdin, stdout, err := c.openLoopbackWebSocket(ctx)
+		return nil, stdin, stdout, nil, err
+	case TransportSpawned:
+		// Continue below and start the configured child process.
+	default:
+		return nil, nil, nil, nil, fmt.Errorf("unsupported app-server transport mode %q", c.transport.Mode)
 	}
 	cmd, err := c.buildCommand()
 	if err != nil {
@@ -1004,6 +1024,46 @@ func (c *Client) openDaemonWebSocket(ctx context.Context) (io.WriteCloser, io.Re
 	if err != nil {
 		return nil, nil, fmt.Errorf("connect app-server daemon socket %q: %w", socketPath, err)
 	}
+	return websocketStreams(conn)
+}
+
+func (c *Client) openLoopbackWebSocket(ctx context.Context) (io.WriteCloser, io.ReadCloser, error) {
+	endpoint, err := loopbackWebSocketEndpoint(c.transport.ListenURL)
+	if err != nil {
+		return nil, nil, err
+	}
+	dialer := websocket.Dialer{HandshakeTimeout: c.requestTimeout}
+	conn, response, err := dialer.DialContext(ctx, endpoint, nil)
+	if response != nil && response.Body != nil {
+		_ = response.Body.Close()
+	}
+	if err != nil {
+		return nil, nil, fmt.Errorf("connect shared app-server WebSocket %q: %w", endpoint, err)
+	}
+	return websocketStreams(conn)
+}
+
+func loopbackWebSocketEndpoint(raw string) (string, error) {
+	endpoint := strings.TrimSpace(raw)
+	parsed, err := url.Parse(endpoint)
+	if err != nil {
+		return "", fmt.Errorf("parse app-server WebSocket URL %q: %w", endpoint, err)
+	}
+	if !strings.EqualFold(parsed.Scheme, "ws") {
+		return "", errors.New("app-server WebSocket URL must use ws:// for loopback transport")
+	}
+	host := strings.TrimSpace(parsed.Hostname())
+	if host == "" {
+		return "", errors.New("app-server WebSocket URL requires a host")
+	}
+	ip := net.ParseIP(host)
+	if !strings.EqualFold(host, "localhost") && (ip == nil || !ip.IsLoopback()) {
+		return "", fmt.Errorf("app-server plaintext WebSocket host %q must be loopback", host)
+	}
+	return parsed.String(), nil
+}
+
+func websocketStreams(conn *websocket.Conn) (io.WriteCloser, io.ReadCloser, error) {
 	connection := &websocketConnection{conn: conn}
 	return &websocketWriteCloser{connection: connection}, &websocketReadCloser{connection: connection}, nil
 }
@@ -1029,6 +1089,8 @@ func (c *Client) appServerArgs() ([]string, error) {
 		return []string{"app-server", "--listen", c.transport.ListenURL}, nil
 	case TransportDaemon:
 		return nil, errors.New("managed daemon uses a direct Unix WebSocket connection")
+	case TransportWebSocket:
+		return nil, errors.New("shared app-server uses a direct loopback WebSocket connection")
 	default:
 		return nil, fmt.Errorf("unsupported app-server transport mode %q", c.transport.Mode)
 	}

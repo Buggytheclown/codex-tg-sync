@@ -67,10 +67,11 @@ In spawned mode, avoid forced bridge restarts while a Telegram-originated run
 is active. The bridge owns that App Server stdio session, so killing the bridge
 closes the transport and can make the turn appear `interrupted`.
 
-In shared-daemon AFC mode, Codex Desktop and `codex-tg` use the same managed App
-Server. Restarting only `codex-tg` does not interrupt the authoritative Codex
-turn, but it intentionally resets AFC to `off` and cleans the previous Telegram
-topics. Run `/sync on` after the bridge reconnects.
+In shared App Server AFC modes, Codex Desktop and `codex-tg` use the same
+managed-daemon Unix socket or standalone loopback WebSocket listener.
+Restarting only `codex-tg` does not interrupt the authoritative Codex turn, but
+it intentionally resets AFC to `off` and cleans the previous Telegram topics.
+Run `/sync on` after the bridge reconnects.
 
 Until a safe restart command exists, prefer this order:
 

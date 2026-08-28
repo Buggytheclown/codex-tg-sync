@@ -18,16 +18,19 @@ Desktop sees without maintaining a second App Server runtime.
 
 ## Decision
 
-- Desktop and `codex-tg` use one managed local App Server daemon as the runtime
-  authority.
+- Desktop and `codex-tg` use one shared local App Server process as the runtime
+  authority. It may be the managed daemon or a standalone loopback WebSocket
+  listener.
 - `codex-tg` daemon mode connects directly to the daemon Unix socket with a
   standard WebSocket client and Unix-domain dialer; spawned stdio remains an
   explicit compatibility mode.
+- `codex-tg` websocket mode connects directly to an existing `ws://` loopback
+  TCP listener. It does not start, supervise, or terminate that App Server.
 - WebSocket text frames use the native App Server wire format:
   JSON-RPC-shaped messages omit the `jsonrpc` header required by generic
   JSON-RPC 2.0 transports.
-- Daemon mode never silently falls back to spawned stdio when the daemon is
-  unavailable or incompatible.
+- Shared daemon and websocket modes never silently fall back to spawned stdio
+  when the configured App Server is unavailable or incompatible.
 - WebSocket connection lifetime is not thread ownership or App Server lifetime.
 - A tracked shared-daemon thread is subscribed with `thread/resume` containing
   only `threadId`. CWD and history options are not added to resume.

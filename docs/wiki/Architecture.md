@@ -38,9 +38,10 @@ The v0.4 runtime still runs as a Go daemon with:
 - SQLite state;
 - local Codex App Server connectivity.
 
-The current implementation starts `codex app-server` over stdio. That remains
-supported. ADR-019 allows future work to prepare official App Server `unix://`
-and `app-server proxy` transports when they improve lifecycle safety.
+The bridge can start `codex app-server` over stdio, connect directly to the
+managed daemon Unix socket, or connect to an existing loopback TCP WebSocket
+listener. Shared transports keep App Server process ownership outside the
+bridge and never fall back to a private spawned runtime.
 
 ## Integration Surface
 

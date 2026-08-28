@@ -142,6 +142,21 @@ func TestFromEnvReadsManagedDaemonTransport(t *testing.T) {
 	}
 }
 
+func TestFromEnvReadsLoopbackWebSocketTransport(t *testing.T) {
+	t.Setenv("CTR_GO_CONFIG", filepath.Join(t.TempDir(), "missing.env"))
+	t.Setenv("CTR_GO_APP_SERVER_MODE", "websocket")
+	t.Setenv("CTR_GO_APP_SERVER_LISTEN", "ws://127.0.0.1:4500")
+
+	cfg := FromEnv()
+
+	if got, want := cfg.AppServerMode, "websocket"; got != want {
+		t.Fatalf("AppServerMode = %q, want %q", got, want)
+	}
+	if got, want := cfg.AppServerListen, "ws://127.0.0.1:4500"; got != want {
+		t.Fatalf("AppServerListen = %q, want %q", got, want)
+	}
+}
+
 func TestFromEnvDefaultsToSpawnedAppServer(t *testing.T) {
 	t.Setenv("CTR_GO_CONFIG", filepath.Join(t.TempDir(), "missing.env"))
 	t.Setenv("CTR_GO_APP_SERVER_MODE", "")

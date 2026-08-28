@@ -4,6 +4,18 @@ This file captures validation nuances that are useful for agents and maintainers
 
 For feature-to-test ownership, see `docs/testing/regression-map.md`.
 
+## Loopback WebSocket App Server transport
+
+2026-08-28 Europe/Minsk: the new direct loopback WebSocket transport passed its
+TCP handshake and framing integration tests, all repository tests, and the full
+build. A read-only live smoke connected to an already running standalone App
+Server, completed `initialize` / `initialized`, and returned `thread/list`.
+The installed macOS LaunchAgent then established an independent TCP connection
+to the same listener, persisted `appserver.poll_connected=true`, and had no
+child Codex process; the listener remained the only App Server process bound to
+the port. Telegram readback was not run because message rendering and routing
+contracts were unchanged.
+
 ## AFC long Final topic preview
 
 2026-08-26 Europe/Minsk: the macOS LaunchAgent was rebuilt and restarted, AFC

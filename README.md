@@ -169,8 +169,8 @@ Primary environment variables:
 - `CTR_GO_HOME`
 - `CTR_GO_CONFIG` (`~/.codex-tg/config.env` by default)
 - `CTR_GO_CODEX_BIN`
-- `CTR_GO_APP_SERVER_MODE` (`spawned` by default; use `daemon` to connect directly to the managed daemon Unix socket)
-- `CTR_GO_APP_SERVER_LISTEN`
+- `CTR_GO_APP_SERVER_MODE` (`spawned` by default; `daemon` connects to the managed daemon Unix socket; `websocket` connects to an existing loopback TCP listener)
+- `CTR_GO_APP_SERVER_LISTEN` (`stdio://` by default; use a loopback URL such as `ws://127.0.0.1:4500` in `websocket` mode)
 - `CTR_GO_APP_SERVER_SOCKET` (optional Unix socket override for daemon mode)
 - `CTR_GO_CONTROL_API_LISTEN` (empty/off by default; experimental local router-agent API, loopback TCP only)
 - `CTR_GO_TELEGRAM_BOT_TOKEN`
@@ -341,7 +341,29 @@ only in the private config and are omitted from status/doctor JSON.
 ### Shared App Server startup on macOS
 
 Sync mode requires Codex Desktop and `codex-tg` to connect to the same
-managed App Server. The startup order matters.
+App Server process. The startup order matters. The bridge supports either the
+managed daemon Unix socket or an existing loopback TCP WebSocket listener.
+
+For a standalone WebSocket listener, start App Server first:
+
+```bash
+codex app-server --listen ws://127.0.0.1:4500
+```
+
+Then configure `codex-tg` without a Unix socket override:
+
+```env
+CTR_GO_APP_SERVER_MODE=websocket
+CTR_GO_APP_SERVER_LISTEN=ws://127.0.0.1:4500
+```
+
+WebSocket mode is fail-closed: if the listener is unavailable, `codex-tg`
+does not spawn a private App Server. Codex Desktop must be configured to use
+the same listener before Sync mode is enabled. The transport is experimental;
+keep plaintext WebSocket endpoints on loopback as required by the
+[official App Server documentation](https://learn.chatgpt.com/docs/app-server).
+
+The managed-daemon workflow remains available as follows.
 
 #### After every reboot
 

@@ -2028,9 +2028,10 @@ func TestAFCRestartUnknownOwnershipBlocksSafeAndForceCleanup(t *testing.T) {
 	}
 }
 
-func TestAFCStartupResetsSessionCleansTopicsAndWarnsOnceWhenDaemonUnavailable(t *testing.T) {
+func TestAFCStartupResetsSessionCleansTopicsAndWarnsOnceWhenWebSocketUnavailable(t *testing.T) {
 	service := activeAFCService(t)
-	service.cfg.AppServerMode = string(appserver.TransportDaemon)
+	service.cfg.AppServerMode = string(appserver.TransportWebSocket)
+	service.cfg.AppServerListen = "ws://127.0.0.1:4500"
 	service.cfg.RequestTimeout = 25 * time.Millisecond
 	service.cfg.IndexRefreshInterval = time.Hour
 	service.cfg.ObserverPollInterval = time.Hour
@@ -2068,6 +2069,7 @@ func TestAFCStartupResetsSessionCleansTopicsAndWarnsOnceWhenDaemonUnavailable(t 
 	}
 	if len(forum.sends) != 1 || forum.sends[0].topicID != afcGeneralSendTopicID ||
 		!strings.Contains(forum.sends[0].text, "Shared Codex App Server is unavailable") ||
+		!strings.Contains(forum.sends[0].text, "ws://127.0.0.1:4500") ||
 		!strings.Contains(forum.sends[0].text, "/sync on") {
 		t.Fatalf("startup warnings=%#v", forum.sends)
 	}

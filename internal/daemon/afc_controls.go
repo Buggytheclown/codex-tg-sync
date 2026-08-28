@@ -39,14 +39,14 @@ func (s *Service) stopAFCTurn(ctx context.Context, topicID int64) (*DirectRespon
 			return &DirectResponse{Text: "Stop requested. AFC remains active until terminal confirmation."}, nil
 		}
 	}
-	if !strings.EqualFold(strings.TrimSpace(s.cfg.AppServerMode), "daemon") {
+	if !s.usesSharedAppServer() {
 		return &DirectResponse{Text: "This topic has no stoppable AFC-owned turn."}, nil
 	}
 	s.mu.RLock()
 	poll, connected := s.poll, s.pollConnected
 	s.mu.RUnlock()
 	if !connected || poll == nil {
-		return &DirectResponse{Text: "Shared daemon session is unavailable; Stop was not sent."}, nil
+		return &DirectResponse{Text: "Shared App Server session is unavailable; Stop was not sent."}, nil
 	}
 	current, readErr := readAuthoritativeAFCSnapshot(ctx, poll, topic.ThreadID)
 	if readErr != nil {
@@ -59,7 +59,7 @@ func (s *Service) stopAFCTurn(ctx context.Context, topicID int64) (*DirectRespon
 	if err := poll.TurnInterrupt(ctx, topic.ThreadID, turnID); err != nil {
 		return &DirectResponse{Text: fmt.Sprintf("Stop request failed: %v", err)}, nil
 	}
-	return &DirectResponse{Text: "Stop requested for the current shared-daemon turn."}, nil
+	return &DirectResponse{Text: "Stop requested for the current shared App Server turn."}, nil
 }
 
 func (s *Service) forceDeactivateAFC(ctx context.Context) (*DirectResponse, error) {

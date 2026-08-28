@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -191,6 +192,94 @@ func TestDaemonTransportKeepsConnectionAfterLargeThreadRead(t *testing.T) {
 	case serverErr := <-serverErrors:
 		t.Fatalf("WebSocket server failed: %v", serverErr)
 	default:
+	}
+}
+
+func TestWebSocketTransportConnectsDirectlyOverLoopbackTCP(t *testing.T) {
+	upgrader := websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }}
+	messages := make(chan map[string]any, 2)
+	serverErrors := make(chan error, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		conn, err := upgrader.Upgrade(writer, request, nil)
+		if err != nil {
+			serverErrors <- err
+			return
+		}
+		defer conn.Close()
+		for index := 0; index < 2; index++ {
+			var payload map[string]any
+			if err := conn.ReadJSON(&payload); err != nil {
+				serverErrors <- err
+				return
+			}
+			messages <- payload
+			if index == 0 {
+				if err := conn.WriteJSON(map[string]any{"id": payload["id"], "result": map[string]any{}}); err != nil {
+					serverErrors <- err
+					return
+				}
+			}
+		}
+	}))
+	defer server.Close()
+
+	endpoint := "ws" + strings.TrimPrefix(server.URL, "http")
+	client := NewClientWithTransport("codex", TransportConfig{
+		Mode:      TransportWebSocket,
+		ListenURL: endpoint,
+	}, t.TempDir(), 2*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if err := client.Start(ctx); err != nil {
+		t.Fatalf("Start failed: %v", err)
+	}
+	t.Cleanup(func() { _ = client.Close() })
+
+	client.mu.Lock()
+	cmd := client.cmd
+	client.mu.Unlock()
+	if cmd != nil {
+		t.Fatalf("WebSocket transport spawned process: %v", cmd.Args)
+	}
+	for _, wantMethod := range []string{"initialize", "initialized"} {
+		select {
+		case payload := <-messages:
+			if got := payload["method"]; got != wantMethod {
+				t.Fatalf("method = %v, want %q", got, wantMethod)
+			}
+			if _, present := payload["jsonrpc"]; present {
+				t.Fatalf("wire message contains jsonrpc header: %#v", payload)
+			}
+		case err := <-serverErrors:
+			t.Fatalf("WebSocket server failed: %v", err)
+		case <-ctx.Done():
+			t.Fatalf("waiting for %s: %v", wantMethod, ctx.Err())
+		}
+	}
+}
+
+func TestWebSocketTransportRejectsNonLoopbackPlaintextURL(t *testing.T) {
+	client := NewClientWithTransport("codex", TransportConfig{
+		Mode:      TransportWebSocket,
+		ListenURL: "ws://example.com:4500",
+	}, t.TempDir(), time.Second)
+
+	err := client.Start(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "loopback") {
+		t.Fatalf("Start error = %v, want loopback validation error", err)
+	}
+}
+
+func TestSharedTransportModeIncludesDaemonAndWebSocket(t *testing.T) {
+	for _, mode := range []string{"daemon", "DAEMON", "websocket", " WebSocket "} {
+		if !IsSharedTransportMode(mode) {
+			t.Fatalf("IsSharedTransportMode(%q) = false, want true", mode)
+		}
+	}
+	for _, mode := range []string{"", "spawned", "unexpected"} {
+		if IsSharedTransportMode(mode) {
+			t.Fatalf("IsSharedTransportMode(%q) = true, want false", mode)
+		}
 	}
 }
 

@@ -175,29 +175,29 @@ func (s *Service) dispatchAFCMessage(ctx context.Context, topic model.AFCTopic, 
 		return &DirectResponse{Text: "This AFC topic is starting or ownership-unknown. The new message was not queued."}, nil
 	}
 	if topic.ActiveTurnState == model.AFCTurnUnknown {
-		if !strings.EqualFold(strings.TrimSpace(s.cfg.AppServerMode), string(appserver.TransportDaemon)) {
+		if !s.usesSharedAppServer() {
 			_ = s.store.MarkAFCReceiptState(ctx, receipt, model.AFCReceiptRejected)
 			return &DirectResponse{Text: "This AFC topic is starting or ownership-unknown. The new message was not queued."}, nil
 		}
 		if _, reconcileErr := s.authoritativeAFCActiveTurnLocked(ctx, topic); reconcileErr != nil {
 			_ = s.store.MarkAFCReceiptState(ctx, receipt, model.AFCReceiptRejected)
-			return &DirectResponse{Text: "AFC could not reconcile restart ownership from the shared daemon; the new message was not sent: " + reconcileErr.Error()}, nil
+			return &DirectResponse{Text: "AFC could not reconcile restart ownership from the shared App Server; the new message was not sent: " + reconcileErr.Error()}, nil
 		}
 		if reconcileErr := s.store.ResolveAFCSharedDaemonUnknown(ctx, topic.SessionID, topic.TopicID, topic.ThreadID, topic.WriterGeneration); reconcileErr != nil {
 			_ = s.store.MarkAFCReceiptState(ctx, receipt, model.AFCReceiptRejected)
-			return &DirectResponse{Text: "AFC shared-daemon restart reconciliation became stale; the new message was not sent."}, nil
+			return &DirectResponse{Text: "AFC shared App Server restart reconciliation became stale; the new message was not sent."}, nil
 		}
 		refreshed, refreshErr := s.store.GetActiveAFCTopic(ctx, topic.ChatID, topic.TopicID)
 		if refreshErr != nil || refreshed == nil {
 			_ = s.store.MarkAFCReceiptState(ctx, receipt, model.AFCReceiptRejected)
-			return &DirectResponse{Text: "AFC shared-daemon restart reconciliation could not reload the topic; the new message was not sent."}, nil
+			return &DirectResponse{Text: "AFC shared App Server restart reconciliation could not reload the topic; the new message was not sent."}, nil
 		}
 		topic = *refreshed
 	}
 	targetTurnID, targetErr := s.authoritativeAFCActiveTurnLocked(ctx, topic)
 	if targetErr != nil {
 		_ = s.store.MarkAFCReceiptState(ctx, receipt, model.AFCReceiptRejected)
-		return &DirectResponse{Text: "AFC could not verify the current daemon turn; no prompt was sent: " + targetErr.Error()}, nil
+		return &DirectResponse{Text: "AFC could not verify the current shared App Server turn; no prompt was sent: " + targetErr.Error()}, nil
 	}
 	lease, err := s.afcWriter.Reserve(ctx, topic.ThreadID)
 	if err != nil {
@@ -361,14 +361,14 @@ func (s *Service) steerManagedAFCTurnLocked(ctx context.Context, topic model.AFC
 }
 
 func (s *Service) authoritativeAFCActiveTurnLocked(ctx context.Context, topic model.AFCTopic) (string, error) {
-	if !strings.EqualFold(strings.TrimSpace(s.cfg.AppServerMode), string(appserver.TransportDaemon)) {
+	if !s.usesSharedAppServer() {
 		return "", nil
 	}
 	s.mu.RLock()
 	poll, connected := s.poll, s.pollConnected
 	s.mu.RUnlock()
 	if !connected || poll == nil {
-		return "", errors.New("shared daemon session is unavailable")
+		return "", errors.New("shared App Server session is unavailable")
 	}
 	current, err := readAuthoritativeAFCSnapshot(ctx, poll, topic.ThreadID)
 	if err != nil {
@@ -729,7 +729,7 @@ func (s *Service) discoverAFCThreadsLocked(ctx context.Context, state model.AFCS
 }
 
 func (s *Service) subscribeAFCThreadLocked(ctx context.Context, poll Session, pollGeneration uint64, threadID string) bool {
-	if !strings.EqualFold(strings.TrimSpace(s.cfg.AppServerMode), string(appserver.TransportDaemon)) {
+	if !s.usesSharedAppServer() {
 		return true
 	}
 	if s.afcSubscribedThreads == nil || s.afcSubscribedPollGeneration != pollGeneration {
@@ -902,7 +902,7 @@ func (s *Service) processAFCSnapshotLocked(ctx context.Context, state model.AFCS
 	activeTurnID := strings.TrimSpace(topic.ActiveTurnID)
 	currentTurnID := strings.TrimSpace(current.LatestTurnID)
 	if topic.ActiveTurnState == model.AFCTurnActive && activeTurnID != "" && currentTurnID != "" && currentTurnID != activeTurnID {
-		if !strings.EqualFold(strings.TrimSpace(s.cfg.AppServerMode), string(appserver.TransportDaemon)) ||
+		if !s.usesSharedAppServer() ||
 			!s.releaseAFCTurnLeaseLocked(ctx, state, topic, activeTurnID) {
 			return
 		}
@@ -1170,7 +1170,7 @@ func (s *Service) cleanupAFCTopics(ctx context.Context, sessionID string) {
 }
 
 // FinishStartup runs after the Telegram bot is ready. It cleans the previous
-// AFC session and reports a missing shared daemon once for this process start.
+// AFC session and reports a missing shared App Server once per process start.
 func (s *Service) FinishStartup(ctx context.Context) {
 	s.mu.Lock()
 	if s.startupFinished {
@@ -1196,22 +1196,31 @@ func (s *Service) finishStartup(ctx context.Context, cleanupSessionID string) {
 	connected := s.pollConnected
 	forum := s.afcForum
 	s.mu.RUnlock()
-	if connected || forum == nil || s.cfg.AFCGroupID == 0 ||
-		!strings.EqualFold(strings.TrimSpace(s.cfg.AppServerMode), string(appserver.TransportDaemon)) {
+	if connected || forum == nil || s.cfg.AFCGroupID == 0 || !s.usesSharedAppServer() {
 		return
 	}
 
-	message := model.RenderedMessage{Text: "⚠️ Shared Codex App Server is unavailable.\n\n" +
-		"AFC was reset to off.\n\n" +
-		"Fix:\n" +
-		"1. Start the managed daemon: codex app-server daemon start\n" +
-		"2. Restart Codex Desktop in local-daemon mode.\n" +
-		"3. Restart codex-tg, then run /sync on in Control."}
+	message := model.RenderedMessage{Text: s.sharedAppServerStartupWarning()}
 	if _, err := forum.SendAFCMessage(ctx, afcGeneralSendTopicID, message, false); err != nil {
 		s.logLifecycle("afc_startup_warning_failed", lifecycleFields{"error": err})
 		return
 	}
 	s.logLifecycle("afc_startup_warning_sent", nil)
+}
+
+func (s *Service) sharedAppServerStartupWarning() string {
+	fix := "1. Start the managed daemon: codex app-server daemon start\n" +
+		"2. Restart Codex Desktop in local-daemon mode.\n" +
+		"3. Restart codex-tg, then run /sync on in Control."
+	if appserver.TransportMode(strings.ToLower(strings.TrimSpace(s.cfg.AppServerMode))) == appserver.TransportWebSocket {
+		endpoint := strings.TrimSpace(s.cfg.AppServerListen)
+		fix = "1. Restore the shared App Server at " + endpoint + ".\n" +
+			"2. Ensure Codex Desktop is connected to the same endpoint.\n" +
+			"3. Restart codex-tg, then run /sync on in Control."
+	}
+	return "⚠️ Shared Codex App Server is unavailable.\n\n" +
+		"AFC was reset to off.\n\n" +
+		"Fix:\n" + fix
 }
 
 func (s *Service) getAFCForum() AFCForum { s.mu.RLock(); defer s.mu.RUnlock(); return s.afcForum }

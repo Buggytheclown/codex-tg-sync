@@ -48,10 +48,11 @@ amendment: `docs/adr/ADR-029-afc-reliability-and-external-delivery.md`; design:
 
 Planned primary tests:
 
-- `internal/config/config_test.go` covers daemon transport selection and the
-  default/configured AFC initial topic limit.
+- `internal/config/config_test.go` covers daemon and loopback WebSocket
+  transport selection plus the default/configured AFC initial topic limit.
 - `internal/appserver/client_test.go` proves daemon mode connects directly over
-  WebSocket on the Unix socket without spawning a process, spawned mode keeps
+  WebSocket on the Unix socket, websocket mode connects directly to a loopback
+  TCP listener, neither shared mode spawns a process, spawned mode keeps
   `app-server --listen`, and `thread/resume` contains only `threadId`;
   serialized App Server messages omit the unsupported `jsonrpc` header.
 - `internal/appserver/client_test.go::TestDaemonTransportKeepsConnectionAfterLargeThreadRead`
@@ -72,9 +73,10 @@ Planned primary tests:
 - `internal/storage/store_afc_test.go::TestResetAFCOnStartupMakesSessionCleanupOnlyAndPreservesOtherState`
   proves process startup resets only AFC state, makes old topics/drafts
   cleanup-only, and keeps receipts non-replayable.
-- `internal/daemon/afc_test.go::TestAFCStartupResetsSessionCleansTopicsAndWarnsOnceWhenDaemonUnavailable`
+- `internal/daemon/afc_test.go::TestAFCStartupResetsSessionCleansTopicsAndWarnsOnceWhenWebSocketUnavailable`
   proves startup cleans old topics, resets persisted connection flags, and
-  warns Control once when the configured shared daemon is unavailable.
+  warns Control once with the configured endpoint when the shared WebSocket is
+  unavailable.
 - `internal/daemon/afc_test.go::TestAFCStartupDoesNotWarnWhenSharedDaemonConnects`
   proves a healthy shared-daemon startup emits no warning.
 - `internal/daemon/afc_test.go::TestAFCManagedSteerFallsBackToNewTurnAfterAuthoritativeIdle`
@@ -82,9 +84,9 @@ Planned primary tests:
   replacement turn.
 - `internal/daemon/afc_test.go::TestAFCAuthoritativeSupersedingTurnReleasesStaleLocalLease`
   proves an authoritative newer turn releases stale local AFC ownership.
-- `internal/daemon/health_test.go::TestDaemonHeartbeatFailureTruthfullyResetsAFCWithoutReplay`
-  proves a failed managed-daemon heartbeat reports disconnected state, resets
-  AFC to `off`, and queues a Control warning without replay.
+- `internal/daemon/health_test.go::TestSharedAppServerHeartbeatFailureTruthfullyResetsAFCWithoutReplay`
+  proves a failed shared-transport heartbeat reports disconnected state,
+  resets AFC to `off`, and queues a Control warning without replay.
 - `internal/daemon/health_test.go::TestHealthEpisodeQueuesOneWarningAndOneRecovery`
   proves health warnings and recoveries are queued for Telegram General without
   an invalid forum thread id.
@@ -127,9 +129,11 @@ Planned primary tests:
 
 Contract notes:
 
-- Desktop and `codex-tg` share one managed App Server daemon through independent
-  WebSocket connections to the same Unix socket.
-- Shared-daemon mode is fail-closed and never silently spawns a private server.
+- Desktop and `codex-tg` share one local App Server through independent
+  WebSocket connections to the managed daemon Unix socket or the same loopback
+  TCP listener.
+- Shared daemon and websocket modes are fail-closed and never silently spawn a
+  private server.
 - AFC activation creates five recent topics by default, configurable through
   `CTR_GO_AFC_INITIAL_TOPIC_LIMIT`, then continuously discovers new chats.
 - Shared-daemon subscription resumes by exact `threadId` only; `thread/read`

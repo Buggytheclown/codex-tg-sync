@@ -174,6 +174,10 @@ func New(cfg config.Config) (*Service, error) {
 	return service, nil
 }
 
+func (s *Service) usesSharedAppServer() bool {
+	return appserver.IsSharedTransportMode(s.cfg.AppServerMode)
+}
+
 func (s *Service) Close() error {
 	s.mu.Lock()
 	cancel := s.cancel
@@ -1359,7 +1363,7 @@ func (s *Service) controlLoop(ctx context.Context) {
 }
 
 func (s *Service) heartbeatPollSession(ctx context.Context) {
-	if !strings.EqualFold(strings.TrimSpace(s.cfg.AppServerMode), string(appserver.TransportDaemon)) {
+	if !s.usesSharedAppServer() {
 		return
 	}
 	s.mu.Lock()
@@ -1400,7 +1404,7 @@ func (s *Service) heartbeatPollSession(ctx context.Context) {
 }
 
 func (s *Service) softResetAFCAfterTransportLoss(ctx context.Context, cause error) {
-	if !strings.EqualFold(strings.TrimSpace(s.cfg.AppServerMode), string(appserver.TransportDaemon)) || ctx.Err() != nil {
+	if !s.usesSharedAppServer() || ctx.Err() != nil {
 		return
 	}
 	summary := "The shared App Server connection was lost. AFC was reset to off; unfinished Telegram receipts are unknown and no request was replayed."
