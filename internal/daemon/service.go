@@ -3053,9 +3053,13 @@ func (s *Service) trackedThreads(ctx context.Context, limit int) []model.Thread 
 		if _, ok := seen[thread.ID]; ok {
 			continue
 		}
-		if !threadLooksActiveForPolling(thread) {
+		active := threadLooksActiveForPolling(thread)
+		if !active && !shouldCheckRecentThreadForCatchup(backgroundEnabled, thread) {
+			continue
+		}
+		if !active {
 			snapshot, _ := s.store.GetSnapshot(ctx, thread.ID)
-			if !backgroundEnabled || !s.threadNeedsCatchupPolling(ctx, thread, snapshot) {
+			if !s.threadNeedsCatchupPolling(ctx, thread, snapshot) {
 				continue
 			}
 		}
@@ -3063,6 +3067,10 @@ func (s *Service) trackedThreads(ctx context.Context, limit int) []model.Thread 
 		out = append(out, thread)
 	}
 	return out
+}
+
+func shouldCheckRecentThreadForCatchup(backgroundEnabled bool, thread model.Thread) bool {
+	return backgroundEnabled && !threadLooksActiveForPolling(thread)
 }
 
 func (s *Service) boundThreadIDs(ctx context.Context) []string {

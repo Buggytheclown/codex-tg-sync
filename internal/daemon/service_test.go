@@ -322,6 +322,23 @@ func TestTrackedThreadsSkipsIdleRecentHistoryWithoutBindingsOrPanels(t *testing.
 	}
 }
 
+func TestShouldCheckRecentThreadForCatchupRequiresBackgroundObserver(t *testing.T) {
+	t.Parallel()
+
+	idle := model.Thread{Status: "idle"}
+	if shouldCheckRecentThreadForCatchup(false, idle) {
+		t.Fatal("idle recent thread requests a snapshot while the background observer is off")
+	}
+	if !shouldCheckRecentThreadForCatchup(true, idle) {
+		t.Fatal("idle recent thread does not request a snapshot while the background observer is on")
+	}
+
+	active := model.Thread{Status: "inProgress", ActiveTurnID: "turn-1"}
+	if shouldCheckRecentThreadForCatchup(true, active) {
+		t.Fatal("active recent thread requests a catch-up snapshot instead of being tracked directly")
+	}
+}
+
 func TestThreadsCommandHidesInternalSubAgentThreads(t *testing.T) {
 	t.Parallel()
 
