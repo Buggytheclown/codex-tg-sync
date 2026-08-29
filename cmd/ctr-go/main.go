@@ -18,6 +18,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/mideco-tech/codex-tg/internal/arcanumreview"
 	"github.com/mideco-tech/codex-tg/internal/config"
 	"github.com/mideco-tech/codex-tg/internal/controlapi"
 	"github.com/mideco-tech/codex-tg/internal/cronpoller"
@@ -94,6 +95,9 @@ func runDaemon(cfg config.Config) error {
 	if err := cfg.ValidateYMessenger(); err != nil {
 		return err
 	}
+	if err := cfg.ValidateArcanumReview(); err != nil {
+		return err
+	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
@@ -123,6 +127,7 @@ func runDaemon(cfg config.Config) error {
 		return err
 	}
 	startYMessengerPoller(ctx, cfg, service, logger)
+	startArcanumReviewPoller(ctx, cfg, service, logger)
 	startCronPoller(ctx, cfg, service, logger)
 	service.FinishStartup(ctx)
 	logger.Printf("ctr-go daemon running with %s", bot.String())
@@ -167,6 +172,25 @@ func startYMessengerPoller(ctx context.Context, cfg config.Config, sink ymesseng
 	})
 	if logger != nil {
 		logger.Printf("YMessenger launch requests enabled (poll interval %s)", cfg.YMessengerPollInterval)
+	}
+	return true
+}
+
+func startArcanumReviewPoller(ctx context.Context, cfg config.Config, sink arcanumreview.RequestSink, logger *log.Logger) bool {
+	if !cfg.ArcanumReviewEnabled {
+		return false
+	}
+	client := arcanumreview.NewCLIClient(cfg.ArcanumYABin, nil)
+	poller := arcanumreview.NewPoller(client, sink, arcanumreview.Config{
+		Login: cfg.ArcanumReviewLogin, CWD: cfg.ArcanumReviewCWD, TelegramTopicID: cfg.ExternalRequestsTopicID,
+	})
+	go poller.Run(ctx, cfg.ArcanumReviewPollInterval, func(err error) {
+		if logger != nil {
+			logger.Printf("Arcanum review poll failed: %s", telegram.SanitizeLogError(err))
+		}
+	})
+	if logger != nil {
+		logger.Printf("Arcanum review requests enabled for %s (poll interval %s)", cfg.ArcanumReviewLogin, cfg.ArcanumReviewPollInterval)
 	}
 	return true
 }

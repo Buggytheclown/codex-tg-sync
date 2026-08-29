@@ -29,7 +29,7 @@ type externalPollHealthState struct {
 }
 
 const (
-	externalPollObservationGap = 90 * time.Second
+	externalPollObservationGap = 2 * time.Minute
 	externalPollResumeGrace    = 4 * time.Minute
 	externalPollFailureDelay   = time.Minute
 	externalPollRecoveryDelay  = 30 * time.Second
@@ -46,6 +46,10 @@ func (s *Service) reportHealthFailure(ctx context.Context, key, title, summary, 
 }
 
 func (s *Service) reportHealthFailureLocked(ctx context.Context, key, title, summary, action string) {
+	s.reportHealthFailureLockedToTopic(ctx, key, title, summary, action, afcGeneralSendTopicID)
+}
+
+func (s *Service) reportHealthFailureLockedToTopic(ctx context.Context, key, title, summary, action string, topicID int64) {
 	stateKey := "health." + key
 	episode := s.loadHealthEpisode(ctx, stateKey)
 	episode.Count++
@@ -65,7 +69,7 @@ func (s *Service) reportHealthFailureLocked(ctx context.Context, key, title, sum
 	if action = strings.TrimSpace(action); action != "" {
 		text += "\n\nAction: " + action
 	}
-	s.enqueueControlNotice(ctx, "health:"+key+":"+episode.EpisodeID+":open", text, key, episode.EpisodeID, "open")
+	s.enqueueControlNoticeToTopic(ctx, "health:"+key+":"+episode.EpisodeID+":open", text, key, episode.EpisodeID, "open", topicID)
 }
 
 func (s *Service) reportHealthRecovered(ctx context.Context, key, title string) {
@@ -79,6 +83,10 @@ func (s *Service) reportHealthRecovered(ctx context.Context, key, title string) 
 }
 
 func (s *Service) reportHealthRecoveredLocked(ctx context.Context, key, title, note string) {
+	s.reportHealthRecoveredLockedToTopic(ctx, key, title, note, afcGeneralSendTopicID)
+}
+
+func (s *Service) reportHealthRecoveredLockedToTopic(ctx context.Context, key, title, note string, topicID int64) {
 	stateKey := "health." + key
 	episode := s.loadHealthEpisode(ctx, stateKey)
 	if !episode.Open || episode.EpisodeID == "" {
@@ -92,10 +100,14 @@ func (s *Service) reportHealthRecoveredLocked(ctx context.Context, key, title, n
 	} else if openedAt, err := time.Parse(time.RFC3339Nano, episode.OpenedAt); err == nil {
 		text += fmt.Sprintf("\n\nRecovered after %s.", s.now().UTC().Sub(openedAt).Round(time.Second))
 	}
-	s.enqueueControlNotice(ctx, "health:"+key+":"+episode.EpisodeID+":recovered", text, key, episode.EpisodeID, "recovered")
+	s.enqueueControlNoticeToTopic(ctx, "health:"+key+":"+episode.EpisodeID+":recovered", text, key, episode.EpisodeID, "recovered", topicID)
 }
 
 func (s *Service) enqueueControlNotice(ctx context.Context, eventID, text, healthKey, episodeID, healthState string) {
+	s.enqueueControlNoticeToTopic(ctx, eventID, text, healthKey, episodeID, healthState, afcGeneralSendTopicID)
+}
+
+func (s *Service) enqueueControlNoticeToTopic(ctx context.Context, eventID, text, healthKey, episodeID, healthState string, topicID int64) {
 	if s.cfg.AFCGroupID == 0 || strings.TrimSpace(eventID) == "" || strings.TrimSpace(text) == "" {
 		return
 	}
@@ -104,8 +116,8 @@ func (s *Service) enqueueControlNotice(ctx context.Context, eventID, text, healt
 		HealthKey: healthKey, HealthEpisodeID: episodeID, HealthState: healthState,
 	}
 	_ = s.store.EnqueueDelivery(ctx, model.DeliveryQueueItem{
-		EventID: eventID, ChatKey: model.ChatKey(s.cfg.AFCGroupID, afcGeneralSendTopicID), ChatID: s.cfg.AFCGroupID,
-		TopicID: afcGeneralSendTopicID, Kind: "health", Status: model.DeliveryStatusPending,
+		EventID: eventID, ChatKey: model.ChatKey(s.cfg.AFCGroupID, topicID), ChatID: s.cfg.AFCGroupID,
+		TopicID: topicID, Kind: "health", Status: model.DeliveryStatusPending,
 		AvailableAt: model.NowString(), PayloadJSON: storage.MustJSON(payload), CreatedAt: model.NowString(), UpdatedAt: model.NowString(),
 	})
 }
@@ -216,7 +228,7 @@ func (s *Service) NoteExternalPollResult(ctx context.Context, source string, err
 		if failureSince.IsZero() {
 			tracker.FailureSince = now.Format(time.RFC3339Nano)
 		} else if !episode.Open && now.Sub(failureSince) >= externalPollFailureDelay {
-			s.reportHealthFailureLocked(ctx, key, "YMessenger polling failed", safeError, externalPollFailureAction(err))
+			s.reportHealthFailureLockedToTopic(ctx, key, "External source polling failed: "+source, safeError, externalPollFailureAction(source, err), s.cfg.ExternalRequestsTopicID)
 		}
 		s.saveExternalPollHealthState(ctx, trackerKey, tracker)
 		return
@@ -238,7 +250,7 @@ func (s *Service) NoteExternalPollResult(ctx context.Context, source string, err
 			if tracker.RecoveredAfterResume {
 				note = "Recovered after wake and stable connectivity."
 			}
-			s.reportHealthRecoveredLocked(ctx, key, "YMessenger polling recovered", note)
+			s.reportHealthRecoveredLockedToTopic(ctx, key, "External source polling recovered: "+source, note, s.cfg.ExternalRequestsTopicID)
 			tracker.RecoverySince = ""
 			tracker.RecoveredAfterResume = false
 		}
@@ -266,12 +278,12 @@ func parseHealthTime(value string) time.Time {
 	return at
 }
 
-func externalPollFailureAction(err error) string {
+func externalPollFailureAction(source string, err error) string {
 	lower := strings.ToLower(strings.TrimSpace(fmt.Sprint(err)))
 	for _, marker := range []string{"no route to host", "network is unreachable", "no such host", "lookup ", "timeout", "deadline exceeded", "unexpected eof"} {
 		if strings.Contains(lower, marker) {
-			return "Wait for stable network connectivity. If the failure persists while online, verify YMessenger access."
+			return "Wait for stable network connectivity. If the failure persists while online, verify access for " + strings.TrimSpace(source) + "."
 		}
 	}
-	return "Check YMessenger token and History API access."
+	return "Check credentials and API or CLI access for " + strings.TrimSpace(source) + "."
 }

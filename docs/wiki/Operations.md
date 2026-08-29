@@ -42,6 +42,35 @@ configuration error is logged once instead of every poll. Catch-up waits for
 four minutes of continuous runtime after startup or a sleep-sized gap. Set an
 optional positive duration such as `max_lateness: "2h"` to skip stale slots.
 
+## Arcanum Review Requests
+
+Enable assigned-review polling in the private config:
+
+```text
+CTR_GO_ARCANUM_REVIEW_ENABLED=true
+CTR_GO_ARCANUM_REVIEW_LOGIN=<reviewer-login>
+CTR_GO_ARCANUM_YA_BIN=/absolute/path/to/ya
+CTR_GO_ARCANUM_REVIEW_POLL_SECONDS=60
+CTR_GO_ARCANUM_REVIEW_CWD=/absolute/path/to/projects
+CTR_GO_EXTERNAL_REQUESTS_TOPIC_ID=<permanent-requests-topic-id>
+```
+
+Sustained external poll failures and their recoveries are delivered to this
+same Requests topic. The existing health delivery queue retries failures and
+falls back to the General topic if Telegram reports that Requests no longer
+exists.
+
+Use `command -v ya` in an interactive shell to resolve the absolute binary
+path before restarting the service. The configured login must already be able
+to run `ya tool gena-arcanum-cli --json pr search`. The first poll offers every
+currently assigned open PR to the durable request store; already-known ids are
+ignored and new ids appear once in Requests.
+
+On macOS, resolve symlinks as well. A `ya` link whose target is under
+`Documents` or another privacy-protected directory can be readable in an
+interactive terminal but blocked for a LaunchAgent. Put the bootstrap in a
+service-readable path such as `~/.codex-tg/bin/ya` when necessary.
+
 ## macOS Service
 
 ```powershell

@@ -146,6 +146,19 @@ ADR: `docs/adr/ADR-030-cron-launch-requests.md`; feature brief:
 - Explicit model and reasoning effort travel with the durable launch request
   and do not mutate global Telegram settings.
 
+## Arcanum Review Launch Requests
+
+ADR: `docs/adr/ADR-031-arcanum-review-launch-requests.md`.
+
+- An optional in-process adapter polls the official Arcanum CLI for open,
+  published PRs assigned to one configured login.
+- One `(arcanum_review, PR id)` identity is consumed across pending, dismissed,
+  failed, started, and completed request states.
+- The Requests card renders author, PR title, and source URL separately from
+  the executable prompt.
+- `Start` sends only `$arc-pr-review [<URL>](<URL>)` to Codex and never posts or
+  approves anything in Arcanum.
+
 ## Telegram Adapter Contract
 
 - AFC Control exposes `/sync on|off` for lifecycle, `/refresh` to trigger the

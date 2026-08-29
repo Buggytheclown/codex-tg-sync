@@ -92,6 +92,45 @@ func TestYMessengerApprovalDefaultsToRequired(t *testing.T) {
 	}
 }
 
+func TestFromEnvReadsArcanumReviewConfig(t *testing.T) {
+	t.Setenv("CTR_GO_CONFIG", filepath.Join(t.TempDir(), "missing.env"))
+	t.Setenv("CTR_GO_ARCANUM_REVIEW_ENABLED", "true")
+	t.Setenv("CTR_GO_ARCANUM_REVIEW_LOGIN", "reviewer-example")
+	t.Setenv("CTR_GO_ARCANUM_YA_BIN", "/usr/local/bin/ya")
+	t.Setenv("CTR_GO_ARCANUM_REVIEW_POLL_SECONDS", "45")
+	t.Setenv("CTR_GO_ARCANUM_REVIEW_CWD", filepath.Join(t.TempDir(), "projects"))
+
+	cfg := FromEnv()
+
+	if !cfg.ArcanumReviewEnabled || cfg.ArcanumReviewLogin != "reviewer-example" || cfg.ArcanumYABin != "/usr/local/bin/ya" {
+		t.Fatalf("Arcanum review config = %#v", cfg)
+	}
+	if cfg.ArcanumReviewPollInterval != 45*time.Second || cfg.ArcanumReviewCWD == "" {
+		t.Fatalf("Arcanum poll/cwd = %s / %q", cfg.ArcanumReviewPollInterval, cfg.ArcanumReviewCWD)
+	}
+}
+
+func TestValidateArcanumReviewRequiresEnabledFields(t *testing.T) {
+	t.Parallel()
+	cfg := Config{ArcanumReviewEnabled: true}
+	if err := cfg.ValidateArcanumReview(); err == nil {
+		t.Fatal("ValidateArcanumReview succeeded with missing fields")
+	}
+	cfg.ArcanumReviewLogin = "reviewer-example"
+	cfg.ArcanumYABin = "/usr/local/bin/ya"
+	cfg.ArcanumReviewPollInterval = time.Minute
+	cfg.ArcanumReviewCWD = t.TempDir()
+	cfg.AFCGroupID = -10042
+	cfg.ExternalRequestsTopicID = 77
+	if err := cfg.ValidateArcanumReview(); err != nil {
+		t.Fatalf("ValidateArcanumReview(valid) failed: %v", err)
+	}
+	cfg.ExternalApprovalPolicy = "sometimes"
+	if err := cfg.ValidateArcanumReview(); err == nil {
+		t.Fatal("ValidateArcanumReview accepted invalid external approval policy")
+	}
+}
+
 func TestValidateYMessengerRequiresEnabledFields(t *testing.T) {
 	cfg := Config{YMessengerEnabled: true}
 	if err := cfg.ValidateYMessenger(); err == nil {

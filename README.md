@@ -39,6 +39,7 @@ the same durable launch lifecycle.
 - Compact `[User]`, `[Status]`, `[Approval]`, `[Input]`, and `[Final]` messages.
 - Project and Chat creation through `/projects` and `/newchat` in Control.
 - Durable external launch requests with Telegram `Start` / `Dismiss` approval.
+- Optional assigned-Arcanum-review polling through the official CLI.
 - Reloadable JSON cron schedules with daily and weekly catch-up without backlog.
 - SQLite-backed topic identity, callbacks, launch requests, and delivery state.
 - macOS service installer with friendly first-run setup, user LaunchAgent management, and menu bar tray control.
@@ -184,6 +185,11 @@ Primary environment variables:
 - `CTR_GO_YMESSENGER_ALLOWED_SENDERS` (comma-separated sender login allowlist)
 - `CTR_GO_YMESSENGER_POLL_SECONDS` (`2` by default)
 - `CTR_GO_YMESSENGER_REQUIRE_APPROVAL` (`true` by default; set `false` to start allowed explicit mentions automatically)
+- `CTR_GO_ARCANUM_REVIEW_ENABLED` (`false` by default)
+- `CTR_GO_ARCANUM_REVIEW_LOGIN` (assigned reviewer login)
+- `CTR_GO_ARCANUM_YA_BIN` (absolute `ya` path recommended for service operation)
+- `CTR_GO_ARCANUM_REVIEW_POLL_SECONDS` (`60` by default)
+- `CTR_GO_ARCANUM_REVIEW_CWD` (falls back to the external request default cwd)
 - `CTR_GO_EXTERNAL_REQUESTS_TOPIC_ID` (permanent Telegram request/status topic id)
 - `CTR_GO_EXTERNAL_REQUEST_DEFAULT_CWD` (falls back to `CTR_GO_DEFAULT_CWD`)
 - `CTR_GO_EXTERNAL_REQUEST_APPROVAL_POLICY` (`never`, `on-request`, or `untrusted`; empty inherits the App Server default)
@@ -263,6 +269,40 @@ allowed explicit robot mention. History authorization failures leave the
 cursor unchanged. Other failures for one exact root retry twice, then advance
 with an explicit unavailable-context marker so one message cannot block all
 later updates. The daemon does not cache unrelated chat messages.
+
+### Arcanum review launch requests
+
+The optional Arcanum review adapter polls the official `gena-arcanum-cli` for
+open published pull requests assigned to one configured login. Each newly seen
+PR creates one durable card in the existing Requests topic. The card shows the
+PR author, summary, and canonical source link; `Start` sends only the exact
+`$arc-pr-review [<URL>](<URL>)` invocation to Codex.
+
+The adapter is disabled by default. It uses the existing local `ya`
+authentication and does not store another OAuth token. Configure an absolute
+`ya` path for service operation because a user LaunchAgent may not inherit the
+interactive shell `PATH`:
+
+```text
+CTR_GO_ARCANUM_REVIEW_ENABLED=true
+CTR_GO_ARCANUM_REVIEW_LOGIN=<reviewer-login>
+CTR_GO_ARCANUM_YA_BIN=/absolute/path/to/ya
+CTR_GO_ARCANUM_REVIEW_POLL_SECONDS=60
+CTR_GO_ARCANUM_REVIEW_CWD=/absolute/path/to/projects
+CTR_GO_EXTERNAL_REQUESTS_TOPIC_ID=<permanent-requests-topic-id>
+```
+
+On macOS, also check where that path resolves. A symlink into `Documents` or
+another privacy-protected directory may work in a terminal but be unreadable to
+a background LaunchAgent. In that case, place the `ya` bootstrap in a
+service-readable location such as `~/.codex-tg/bin/ya` and configure that path.
+
+The working directory should contain the location where the installed
+`arc-pr-review` skill may create its isolated temporary Arc mount. Approval is
+always required. Repeated polling uses an in-memory seen set, while SQLite
+`(source, external_id)` uniqueness prevents duplicate cards after restart. One
+PR id creates at most one request, including after reassignment or later review
+iterations.
 
 ### Cron launch requests
 

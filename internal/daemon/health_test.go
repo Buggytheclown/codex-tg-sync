@@ -36,6 +36,7 @@ func TestHealthEpisodeQueuesOneWarningAndOneRecovery(t *testing.T) {
 
 func TestExternalPollHealthIgnoresResumeFlappingUntilContinuouslyAwake(t *testing.T) {
 	service := activeAFCService(t)
+	service.cfg.ExternalRequestsTopicID = 77
 	ctx := context.Background()
 	base := time.Date(2026, 8, 26, 7, 0, 0, 0, time.UTC)
 
@@ -53,6 +54,9 @@ func TestExternalPollHealthIgnoresResumeFlappingUntilContinuouslyAwake(t *testin
 	items, err = service.store.ClaimDeliveryBatch(ctx, 10)
 	if err != nil || len(items) != 1 || !strings.Contains(items[0].PayloadJSON, "network connectivity") {
 		t.Fatalf("stable failure alert=%#v err=%v", items, err)
+	}
+	if items[0].TopicID != service.cfg.ExternalRequestsTopicID {
+		t.Fatalf("stable failure topic=%d, want Requests topic %d", items[0].TopicID, service.cfg.ExternalRequestsTopicID)
 	}
 	if err := service.store.CompleteDelivery(ctx, items[0].ID); err != nil {
 		t.Fatal(err)
@@ -73,6 +77,30 @@ func TestExternalPollHealthIgnoresResumeFlappingUntilContinuouslyAwake(t *testin
 	items, err = service.store.ClaimDeliveryBatch(ctx, 10)
 	if err != nil || len(items) != 1 || !strings.Contains(items[0].PayloadJSON, "polling recovered") {
 		t.Fatalf("stable recovery=%#v err=%v", items, err)
+	}
+	if items[0].TopicID != service.cfg.ExternalRequestsTopicID {
+		t.Fatalf("stable recovery topic=%d, want Requests topic %d", items[0].TopicID, service.cfg.ExternalRequestsTopicID)
+	}
+}
+
+func TestExternalPollHealthReportsSlowTimeoutCyclesToRequests(t *testing.T) {
+	service := activeAFCService(t)
+	service.cfg.ExternalRequestsTopicID = 77
+	ctx := context.Background()
+	base := time.Date(2026, 8, 29, 7, 0, 0, 0, time.UTC)
+	step := 91 * time.Second
+
+	for elapsed := time.Duration(0); elapsed <= externalPollResumeGrace+externalPollFailureDelay+2*step; elapsed += step {
+		service.now = func() time.Time { return base.Add(elapsed) }
+		service.NoteExternalPollResult(ctx, "arcanum_review", context.DeadlineExceeded)
+	}
+
+	items, err := service.store.ClaimDeliveryBatch(ctx, 10)
+	if err != nil || len(items) != 1 {
+		t.Fatalf("slow timeout alert=%#v err=%v, want one warning", items, err)
+	}
+	if items[0].TopicID != service.cfg.ExternalRequestsTopicID || !strings.Contains(items[0].PayloadJSON, "arcanum_review") {
+		t.Fatalf("slow timeout alert=%#v, want Arcanum warning in Requests", items[0])
 	}
 }
 

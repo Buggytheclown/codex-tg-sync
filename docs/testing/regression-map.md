@@ -302,6 +302,34 @@ Contract notes:
 - Cron execution settings are request-local and must not change global Codex
   model or reasoning settings.
 
+## Arcanum Review Launch Requests
+
+ADR: `docs/adr/ADR-031-arcanum-review-launch-requests.md`; feature brief:
+`docs/process/arcanum-review-launch-requests-brief.md`.
+
+Primary tests:
+
+- `internal/arcanumreview/client_test.go::TestCLIClientListsAssignedPullRequestsWithExactQuery`
+- `internal/arcanumreview/client_test.go::TestCLIClientRejectsMalformedAssignedPullRequest`
+- `internal/arcanumreview/poller_test.go::TestPollOnceCreatesDisplayMetadataAndExactReviewPrompt`
+- `internal/arcanumreview/poller_test.go::TestPollerSeenAvoidsWritesDuringProcessLifetime`
+- `internal/arcanumreview/poller_test.go::TestPollerRestartUsesSQLiteDedupe`
+- `internal/arcanumreview/poller_test.go::TestPollerMarksSeenOnlyAfterSuccessfulEnqueue`
+- `internal/config/config_test.go::TestFromEnvReadsArcanumReviewConfig`
+- `internal/config/config_test.go::TestValidateArcanumReviewRequiresEnabledFields`
+- `internal/daemon/external_requests_test.go::TestExternalLaunchApprovalRendersOnceAndDismissEditsSameMessage`
+- `cmd/ctr-go/main_test.go::TestArcanumReviewPollerRemainsDisabledByDefault`
+
+Contract notes:
+
+- The exact source query is `open(true);published(true);assignee(<login>)` and
+  runs through the official CLI rather than HTML scraping.
+- PR id is the durable identity. Repeated polls are suppressed in memory only
+  after a successful enqueue; SQLite remains authoritative after restart.
+- PR author, summary, and URL are display metadata. The Codex prompt contains
+  only the exact `$arc-pr-review` invocation.
+- Telegram approval remains mandatory and no result is posted to Arcanum.
+
 ## Distribution And Local Config
 
 ADR: `docs/adr/ADR-017-release-binaries-and-init.md` and

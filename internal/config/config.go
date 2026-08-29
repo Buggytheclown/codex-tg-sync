@@ -57,6 +57,11 @@ type Config struct {
 	YMessengerAllowedSenders    []string
 	YMessengerPollInterval      time.Duration
 	YMessengerRequireApproval   bool
+	ArcanumReviewEnabled        bool
+	ArcanumReviewLogin          string
+	ArcanumYABin                string
+	ArcanumReviewPollInterval   time.Duration
+	ArcanumReviewCWD            string
 	ExternalRequestsTopicID     int64
 	ExternalRequestDefaultCWD   string
 	ExternalApprovalPolicy      string
@@ -151,6 +156,11 @@ func fromSource(source envSource) Config {
 	if appServerMode == "" {
 		appServerMode = "spawned"
 	}
+	externalRequestDefaultCWD := source.path("CTR_GO_EXTERNAL_REQUEST_DEFAULT_CWD", defaultCWD)
+	arcanumYABin := source.get("CTR_GO_ARCANUM_YA_BIN")
+	if arcanumYABin == "" {
+		arcanumYABin = "ya"
+	}
 	return Config{
 		Paths:                       paths,
 		CodexBin:                    codexBin,
@@ -164,8 +174,13 @@ func fromSource(source envSource) Config {
 		YMessengerAllowedSenders:    parseStringList(source.get("CTR_GO_YMESSENGER_ALLOWED_SENDERS")),
 		YMessengerPollInterval:      source.durationSeconds("CTR_GO_YMESSENGER_POLL_SECONDS", 2*time.Second),
 		YMessengerRequireApproval:   source.bool("CTR_GO_YMESSENGER_REQUIRE_APPROVAL", true),
+		ArcanumReviewEnabled:        source.bool("CTR_GO_ARCANUM_REVIEW_ENABLED", false),
+		ArcanumReviewLogin:          source.get("CTR_GO_ARCANUM_REVIEW_LOGIN"),
+		ArcanumYABin:                arcanumYABin,
+		ArcanumReviewPollInterval:   source.durationSeconds("CTR_GO_ARCANUM_REVIEW_POLL_SECONDS", time.Minute),
+		ArcanumReviewCWD:            source.path("CTR_GO_ARCANUM_REVIEW_CWD", externalRequestDefaultCWD),
 		ExternalRequestsTopicID:     parseInt64(source.get("CTR_GO_EXTERNAL_REQUESTS_TOPIC_ID")),
-		ExternalRequestDefaultCWD:   source.path("CTR_GO_EXTERNAL_REQUEST_DEFAULT_CWD", defaultCWD),
+		ExternalRequestDefaultCWD:   externalRequestDefaultCWD,
 		ExternalApprovalPolicy:      strings.TrimSpace(source.get("CTR_GO_EXTERNAL_REQUEST_APPROVAL_POLICY")),
 		ExternalApprovalsReviewer:   strings.TrimSpace(source.get("CTR_GO_EXTERNAL_REQUEST_APPROVALS_REVIEWER")),
 		ExternalSandboxMode:         strings.TrimSpace(source.get("CTR_GO_EXTERNAL_REQUEST_SANDBOX_MODE")),
@@ -205,6 +220,11 @@ func (c Config) MarshalJSON() ([]byte, error) {
 		YMessengerConfigured        bool    `json:"ymessenger_configured"`
 		YMessengerPollSeconds       float64 `json:"ymessenger_poll_seconds"`
 		YMessengerRequireApproval   bool    `json:"ymessenger_require_approval"`
+		ArcanumReviewEnabled        bool    `json:"arcanum_review_enabled"`
+		ArcanumReviewConfigured     bool    `json:"arcanum_review_configured"`
+		ArcanumReviewLogin          string  `json:"arcanum_review_login,omitempty"`
+		ArcanumReviewPollSeconds    float64 `json:"arcanum_review_poll_seconds"`
+		ArcanumReviewCWD            string  `json:"arcanum_review_cwd,omitempty"`
 		ExternalRequestsTopicID     int64   `json:"external_requests_topic_id,omitempty"`
 		ExternalRequestDefaultCWD   string  `json:"external_request_default_cwd,omitempty"`
 		ExternalApprovalPolicy      string  `json:"external_request_approval_policy,omitempty"`
@@ -240,6 +260,11 @@ func (c Config) MarshalJSON() ([]byte, error) {
 		YMessengerConfigured:        strings.TrimSpace(c.YMessengerOAuthTeamToken) != "",
 		YMessengerPollSeconds:       c.YMessengerPollInterval.Seconds(),
 		YMessengerRequireApproval:   c.YMessengerRequireApproval,
+		ArcanumReviewEnabled:        c.ArcanumReviewEnabled,
+		ArcanumReviewConfigured:     strings.TrimSpace(c.ArcanumReviewLogin) != "" && strings.TrimSpace(c.ArcanumYABin) != "",
+		ArcanumReviewLogin:          c.ArcanumReviewLogin,
+		ArcanumReviewPollSeconds:    c.ArcanumReviewPollInterval.Seconds(),
+		ArcanumReviewCWD:            c.ArcanumReviewCWD,
 		ExternalRequestsTopicID:     c.ExternalRequestsTopicID,
 		ExternalRequestDefaultCWD:   c.ExternalRequestDefaultCWD,
 		ExternalApprovalPolicy:      c.ExternalApprovalPolicy,
@@ -295,6 +320,10 @@ func (c Config) ValidateYMessenger() error {
 	if c.ExternalRequestsTopicID == 0 {
 		return fmt.Errorf("CTR_GO_EXTERNAL_REQUESTS_TOPIC_ID is required when YMessenger is enabled")
 	}
+	return c.validateExternalRequestPermissions()
+}
+
+func (c Config) validateExternalRequestPermissions() error {
 	if !oneOf(c.ExternalApprovalPolicy, "", "never", "on-request", "untrusted") {
 		return fmt.Errorf("CTR_GO_EXTERNAL_REQUEST_APPROVAL_POLICY must be never, on-request, or untrusted")
 	}
@@ -305,6 +334,38 @@ func (c Config) ValidateYMessenger() error {
 		return fmt.Errorf("CTR_GO_EXTERNAL_REQUEST_SANDBOX_MODE must be read-only, workspace-write, or danger-full-access")
 	}
 	return nil
+}
+
+func (c Config) ValidateArcanumReview() error {
+	if !c.ArcanumReviewEnabled {
+		return nil
+	}
+	required := []struct {
+		name  string
+		value string
+	}{
+		{"CTR_GO_ARCANUM_REVIEW_LOGIN", c.ArcanumReviewLogin},
+		{"CTR_GO_ARCANUM_YA_BIN", c.ArcanumYABin},
+		{"CTR_GO_ARCANUM_REVIEW_CWD", c.ArcanumReviewCWD},
+	}
+	for _, field := range required {
+		if strings.TrimSpace(field.value) == "" {
+			return fmt.Errorf("%s is required when Arcanum review polling is enabled", field.name)
+		}
+	}
+	if c.ArcanumReviewPollInterval <= 0 {
+		return fmt.Errorf("CTR_GO_ARCANUM_REVIEW_POLL_SECONDS must be positive")
+	}
+	if c.AFCGroupID == 0 {
+		return fmt.Errorf("CTR_GO_AFC_GROUP_ID is required when Arcanum review polling is enabled")
+	}
+	if c.ExternalRequestsTopicID == 0 {
+		return fmt.Errorf("CTR_GO_EXTERNAL_REQUESTS_TOPIC_ID is required when Arcanum review polling is enabled")
+	}
+	if !filepath.IsAbs(c.ArcanumReviewCWD) {
+		return fmt.Errorf("CTR_GO_ARCANUM_REVIEW_CWD must be an absolute path")
+	}
+	return c.validateExternalRequestPermissions()
 }
 
 func oneOf(value string, allowed ...string) bool {

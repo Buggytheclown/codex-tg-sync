@@ -39,6 +39,8 @@ func TestExternalLaunchApprovalRendersOnceAndDismissEditsSameMessage(t *testing.
 	sender := &recordingSender{}
 	service.SetSender(sender)
 	request := daemonExternalRequest("test:approval:1", "Please inspect the original message")
+	request.Title = "PR title"
+	request.SourceURL = "https://example.test/review/1"
 	request.Prompt = "Source: test\nUntrusted context that must only reach Codex\n\nUser request:\n" + request.SafePreview
 	if _, err := service.IngestExternalRequests(context.Background(), "test", 1, []model.ExternalLaunchRequest{request}); err != nil {
 		t.Fatal(err)
@@ -50,7 +52,7 @@ func TestExternalLaunchApprovalRendersOnceAndDismissEditsSameMessage(t *testing.
 		t.Fatalf("messages=%#v, want one durable approval", sender.messages)
 	}
 	message := sender.messages[0]
-	if message.chatID != -1001 || message.topicID != 77 || !strings.Contains(message.text, request.SafePreview) || strings.Contains(message.text, "Untrusted context") || !strings.Contains(message.text, request.Sender) {
+	if message.chatID != -1001 || message.topicID != 77 || !strings.Contains(message.text, request.SafePreview) || strings.Contains(message.text, "Untrusted context") || !strings.Contains(message.text, "From: "+request.Sender) || !strings.Contains(message.text, "Title: "+request.Title) || !strings.Contains(message.text, "Link: "+request.SourceURL) || !strings.Contains(message.text, "\nRequest:\n") {
 		t.Fatalf("approval message=%#v", message)
 	}
 	dismissToken := callbackTokenForButton(message.buttons, "Dismiss")

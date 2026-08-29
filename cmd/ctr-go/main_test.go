@@ -45,6 +45,12 @@ func TestYMessengerPollerRemainsDisabledByDefault(t *testing.T) {
 	}
 }
 
+func TestArcanumReviewPollerRemainsDisabledByDefault(t *testing.T) {
+	if started := startArcanumReviewPoller(context.Background(), config.Config{}, nil, nil); started {
+		t.Fatal("Arcanum review poller started without enabled config")
+	}
+}
+
 func TestRunInitWritesPrivateConfigAndRefusesOverwrite(t *testing.T) {
 	dir := t.TempDir()
 	configPath := filepath.Join(dir, "config.env")

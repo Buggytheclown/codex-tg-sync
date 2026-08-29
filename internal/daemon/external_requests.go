@@ -289,11 +289,14 @@ func externalLaunchRequestText(request model.ExternalLaunchRequest) string {
 	lines := []string{
 		"🚀 [Launch request]",
 		fmt.Sprintf("Source: %s", request.Source),
-		fmt.Sprintf("Sender: %s", request.Sender),
-		fmt.Sprintf("Status: %s", status),
+		fmt.Sprintf("From: %s", request.Sender),
 	}
+	if strings.TrimSpace(request.Title) != "" {
+		lines = append(lines, "Title: "+strings.TrimSpace(request.Title))
+	}
+	lines = append(lines, fmt.Sprintf("Status: %s", status))
 	if strings.TrimSpace(request.SourceURL) != "" {
-		lines = append(lines, "Source link: "+strings.TrimSpace(request.SourceURL))
+		lines = append(lines, "Link: "+strings.TrimSpace(request.SourceURL))
 	}
 	if strings.TrimSpace(request.ThreadID) != "" {
 		lines = append(lines, "Thread: "+request.ThreadID)
@@ -301,7 +304,7 @@ func externalLaunchRequestText(request model.ExternalLaunchRequest) string {
 	if strings.TrimSpace(request.ErrorSummary) != "" {
 		lines = append(lines, "Error: "+request.ErrorSummary)
 	}
-	lines = append(lines, "", "Requested text:", externalLaunchTelegramPreview(request))
+	lines = append(lines, "", "Request:", externalLaunchTelegramPreview(request))
 	text := strings.Join(lines, "\n")
 	const safeTelegramTextRunes = 3900
 	runes := []rune(text)
