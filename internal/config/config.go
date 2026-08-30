@@ -45,49 +45,42 @@ func (p Paths) Ensure() error {
 }
 
 type Config struct {
-	Paths                       Paths
-	CodexBin                    string
-	AppServerMode               string
-	AppServerListen             string
-	AppServerSocket             string
-	ControlAPIListen            string
-	YMessengerEnabled           bool
-	YMessengerRobotLogin        string
-	YMessengerOAuthTeamToken    string
-	YMessengerAllowedSenders    []string
-	YMessengerPollInterval      time.Duration
-	YMessengerRequireApproval   bool
-	ArcanumReviewEnabled        bool
-	ArcanumReviewLogin          string
-	ArcanumYABin                string
-	ArcanumReviewPollInterval   time.Duration
-	ArcanumReviewCWD            string
-	ArcanumAutoStartAuthors     []string
-	ExternalRequestsTopicID     int64
-	ExternalRequestDefaultCWD   string
-	ExternalApprovalPolicy      string
-	ExternalApprovalsReviewer   string
-	ExternalSandboxMode         string
-	TelegramBotToken            string
-	AllowedUserIDs              []int64
-	AllowedChatIDs              []int64
-	AFCGroupID                  int64
-	AFCInitialTopicLimit        int
-	DefaultCWD                  string
-	CodexChatsRoot              string
-	PanelMode                   string
-	LogEnabled                  bool
-	DiagnosticLogs              bool
-	NotifyNewRun                bool
-	ObserverPollInterval        time.Duration
-	RequestTimeout              time.Duration
-	IndexRefreshInterval        time.Duration
-	AttachRefreshInterval       time.Duration
-	DeliveryRetryBase           time.Duration
-	DeliveryMaxAttempts         int
-	ProjectsProjectPreviewLimit int
-	ProjectsChatPreviewLimit    int
-	ChatsPageSize               int
+	Paths                     Paths
+	CodexBin                  string
+	AppServerMode             string
+	AppServerListen           string
+	AppServerSocket           string
+	ControlAPIListen          string
+	YMessengerEnabled         bool
+	YMessengerRobotLogin      string
+	YMessengerOAuthTeamToken  string
+	YMessengerAllowedSenders  []string
+	YMessengerPollInterval    time.Duration
+	YMessengerRequireApproval bool
+	ArcanumReviewEnabled      bool
+	ArcanumReviewLogin        string
+	ArcanumYABin              string
+	ArcanumReviewPollInterval time.Duration
+	ArcanumReviewCWD          string
+	ArcanumAutoStartAuthors   []string
+	ExternalRequestsTopicID   int64
+	ExternalRequestDefaultCWD string
+	ExternalApprovalPolicy    string
+	ExternalApprovalsReviewer string
+	ExternalSandboxMode       string
+	TelegramBotToken          string
+	AllowedUserIDs            []int64
+	AFCGroupID                int64
+	AFCInitialTopicLimit      int
+	DefaultCWD                string
+	CodexChatsRoot            string
+	LogEnabled                bool
+	DiagnosticLogs            bool
+	SyncPollInterval          time.Duration
+	RequestTimeout            time.Duration
+	IndexRefreshInterval      time.Duration
+	DeliveryRetryBase         time.Duration
+	DeliveryMaxAttempts       int
 }
 
 const DefaultAFCInitialTopicLimit = 5
@@ -163,134 +156,128 @@ func fromSource(source envSource) Config {
 		arcanumYABin = "ya"
 	}
 	return Config{
-		Paths:                       paths,
-		CodexBin:                    codexBin,
-		AppServerMode:               appServerMode,
-		AppServerListen:             listen,
-		AppServerSocket:             source.get("CTR_GO_APP_SERVER_SOCKET"),
-		ControlAPIListen:            source.get("CTR_GO_CONTROL_API_LISTEN"),
-		YMessengerEnabled:           source.bool("CTR_GO_YMESSENGER_ENABLED", false),
-		YMessengerRobotLogin:        source.get("CTR_GO_YMESSENGER_ROBOT_LOGIN"),
-		YMessengerOAuthTeamToken:    source.get("CTR_GO_YMESSENGER_OAUTH_TEAM_TOKEN"),
-		YMessengerAllowedSenders:    parseStringList(source.get("CTR_GO_YMESSENGER_ALLOWED_SENDERS")),
-		YMessengerPollInterval:      source.durationSeconds("CTR_GO_YMESSENGER_POLL_SECONDS", 2*time.Second),
-		YMessengerRequireApproval:   source.bool("CTR_GO_YMESSENGER_REQUIRE_APPROVAL", true),
-		ArcanumReviewEnabled:        source.bool("CTR_GO_ARCANUM_REVIEW_ENABLED", false),
-		ArcanumReviewLogin:          source.get("CTR_GO_ARCANUM_REVIEW_LOGIN"),
-		ArcanumYABin:                arcanumYABin,
-		ArcanumReviewPollInterval:   source.durationSeconds("CTR_GO_ARCANUM_REVIEW_POLL_SECONDS", time.Minute),
-		ArcanumReviewCWD:            source.path("CTR_GO_ARCANUM_REVIEW_CWD", externalRequestDefaultCWD),
-		ArcanumAutoStartAuthors:     parseStringList(source.get("CTR_GO_ARCANUM_REVIEW_AUTO_START_AUTHORS")),
-		ExternalRequestsTopicID:     parseInt64(source.get("CTR_GO_EXTERNAL_REQUESTS_TOPIC_ID")),
-		ExternalRequestDefaultCWD:   externalRequestDefaultCWD,
-		ExternalApprovalPolicy:      strings.TrimSpace(source.get("CTR_GO_EXTERNAL_REQUEST_APPROVAL_POLICY")),
-		ExternalApprovalsReviewer:   strings.TrimSpace(source.get("CTR_GO_EXTERNAL_REQUEST_APPROVALS_REVIEWER")),
-		ExternalSandboxMode:         strings.TrimSpace(source.get("CTR_GO_EXTERNAL_REQUEST_SANDBOX_MODE")),
-		TelegramBotToken:            source.first("CTR_GO_TELEGRAM_BOT_TOKEN", "CTR_TELEGRAM_BOT_TOKEN"),
-		AllowedUserIDs:              parseInt64List(source.first("CTR_GO_ALLOWED_USER_IDS", "CTR_ALLOWED_USER_IDS")),
-		AllowedChatIDs:              parseInt64List(source.first("CTR_GO_ALLOWED_CHAT_IDS", "CTR_ALLOWED_CHAT_IDS")),
-		AFCGroupID:                  parseInt64(source.get("CTR_GO_AFC_GROUP_ID")),
-		AFCInitialTopicLimit:        source.positiveInt("CTR_GO_AFC_INITIAL_TOPIC_LIMIT", DefaultAFCInitialTopicLimit),
-		DefaultCWD:                  defaultCWD,
-		CodexChatsRoot:              source.path("CTR_GO_CODEX_CHATS_ROOT", DefaultCodexChatsRoot()),
-		PanelMode:                   normalizePanelMode(source.string("CTR_GO_PANEL_MODE", "per_run")),
-		LogEnabled:                  source.bool("CTR_GO_LOG_ENABLED", true),
-		DiagnosticLogs:              source.bool("CTR_GO_DIAGNOSTIC_LOGS", true),
-		NotifyNewRun:                source.bool("CTR_GO_NOTIFY_NEW_RUN", true),
-		ObserverPollInterval:        source.durationSeconds("CTR_GO_OBSERVER_POLL_SECONDS", 5*time.Second),
-		RequestTimeout:              source.durationSeconds("CTR_GO_REQUEST_TIMEOUT_SECONDS", 30*time.Second),
-		IndexRefreshInterval:        source.durationSeconds("CTR_GO_INDEX_REFRESH_SECONDS", 45*time.Second),
-		AttachRefreshInterval:       source.durationSeconds("CTR_GO_ATTACH_REFRESH_SECONDS", 20*time.Second),
-		DeliveryRetryBase:           source.durationSeconds("CTR_GO_DELIVERY_RETRY_SECONDS", 5*time.Second),
-		DeliveryMaxAttempts:         source.int("CTR_GO_DELIVERY_MAX_ATTEMPTS", 5),
-		ProjectsProjectPreviewLimit: source.positiveInt("CTR_GO_PROJECTS_PROJECT_PREVIEW_LIMIT", 7),
-		ProjectsChatPreviewLimit:    source.positiveInt("CTR_GO_PROJECTS_CHAT_PREVIEW_LIMIT", 3),
-		ChatsPageSize:               source.positiveInt("CTR_GO_CHATS_PAGE_SIZE", 8),
+		Paths:                     paths,
+		CodexBin:                  codexBin,
+		AppServerMode:             appServerMode,
+		AppServerListen:           listen,
+		AppServerSocket:           source.get("CTR_GO_APP_SERVER_SOCKET"),
+		ControlAPIListen:          source.get("CTR_GO_CONTROL_API_LISTEN"),
+		YMessengerEnabled:         source.bool("CTR_GO_YMESSENGER_ENABLED", false),
+		YMessengerRobotLogin:      source.get("CTR_GO_YMESSENGER_ROBOT_LOGIN"),
+		YMessengerOAuthTeamToken:  source.get("CTR_GO_YMESSENGER_OAUTH_TEAM_TOKEN"),
+		YMessengerAllowedSenders:  parseStringList(source.get("CTR_GO_YMESSENGER_ALLOWED_SENDERS")),
+		YMessengerPollInterval:    source.durationSeconds("CTR_GO_YMESSENGER_POLL_SECONDS", 2*time.Second),
+		YMessengerRequireApproval: source.bool("CTR_GO_YMESSENGER_REQUIRE_APPROVAL", true),
+		ArcanumReviewEnabled:      source.bool("CTR_GO_ARCANUM_REVIEW_ENABLED", false),
+		ArcanumReviewLogin:        source.get("CTR_GO_ARCANUM_REVIEW_LOGIN"),
+		ArcanumYABin:              arcanumYABin,
+		ArcanumReviewPollInterval: source.durationSeconds("CTR_GO_ARCANUM_REVIEW_POLL_SECONDS", time.Minute),
+		ArcanumReviewCWD:          source.path("CTR_GO_ARCANUM_REVIEW_CWD", externalRequestDefaultCWD),
+		ArcanumAutoStartAuthors:   parseStringList(source.get("CTR_GO_ARCANUM_REVIEW_AUTO_START_AUTHORS")),
+		ExternalRequestsTopicID:   parseInt64(source.get("CTR_GO_EXTERNAL_REQUESTS_TOPIC_ID")),
+		ExternalRequestDefaultCWD: externalRequestDefaultCWD,
+		ExternalApprovalPolicy:    strings.TrimSpace(source.get("CTR_GO_EXTERNAL_REQUEST_APPROVAL_POLICY")),
+		ExternalApprovalsReviewer: strings.TrimSpace(source.get("CTR_GO_EXTERNAL_REQUEST_APPROVALS_REVIEWER")),
+		ExternalSandboxMode:       strings.TrimSpace(source.get("CTR_GO_EXTERNAL_REQUEST_SANDBOX_MODE")),
+		TelegramBotToken:          source.first("CTR_GO_TELEGRAM_BOT_TOKEN", "CTR_TELEGRAM_BOT_TOKEN"),
+		AllowedUserIDs:            parseInt64List(source.first("CTR_GO_ALLOWED_USER_IDS", "CTR_ALLOWED_USER_IDS")),
+		AFCGroupID:                parseInt64(source.get("CTR_GO_AFC_GROUP_ID")),
+		AFCInitialTopicLimit:      source.positiveInt("CTR_GO_AFC_INITIAL_TOPIC_LIMIT", DefaultAFCInitialTopicLimit),
+		DefaultCWD:                defaultCWD,
+		CodexChatsRoot:            source.path("CTR_GO_CODEX_CHATS_ROOT", DefaultCodexChatsRoot()),
+		LogEnabled:                source.bool("CTR_GO_LOG_ENABLED", true),
+		DiagnosticLogs:            source.bool("CTR_GO_DIAGNOSTIC_LOGS", true),
+		SyncPollInterval:          source.durationSeconds("CTR_GO_SYNC_POLL_SECONDS", 5*time.Second),
+		RequestTimeout:            source.durationSeconds("CTR_GO_REQUEST_TIMEOUT_SECONDS", 30*time.Second),
+		IndexRefreshInterval:      source.durationSeconds("CTR_GO_INDEX_REFRESH_SECONDS", 45*time.Second),
+		DeliveryRetryBase:         source.durationSeconds("CTR_GO_DELIVERY_RETRY_SECONDS", 5*time.Second),
+		DeliveryMaxAttempts:       source.int("CTR_GO_DELIVERY_MAX_ATTEMPTS", 5),
 	}
 }
 
 func (c Config) MarshalJSON() ([]byte, error) {
 	return json.Marshal(struct {
-		Home                        string  `json:"home"`
-		DBPath                      string  `json:"db_path"`
-		CodexBin                    string  `json:"codex_bin"`
-		AppServerMode               string  `json:"app_server_mode"`
-		AppServerListen             string  `json:"app_server_listen"`
-		AppServerSocket             string  `json:"app_server_socket,omitempty"`
-		ControlAPIListen            string  `json:"control_api_listen,omitempty"`
-		YMessengerEnabled           bool    `json:"ymessenger_enabled"`
-		YMessengerConfigured        bool    `json:"ymessenger_configured"`
-		YMessengerPollSeconds       float64 `json:"ymessenger_poll_seconds"`
-		YMessengerRequireApproval   bool    `json:"ymessenger_require_approval"`
-		ArcanumReviewEnabled        bool    `json:"arcanum_review_enabled"`
-		ArcanumReviewConfigured     bool    `json:"arcanum_review_configured"`
-		ArcanumReviewLogin          string  `json:"arcanum_review_login,omitempty"`
-		ArcanumReviewPollSeconds    float64 `json:"arcanum_review_poll_seconds"`
-		ArcanumReviewCWD            string  `json:"arcanum_review_cwd,omitempty"`
-		ExternalRequestsTopicID     int64   `json:"external_requests_topic_id,omitempty"`
-		ExternalRequestDefaultCWD   string  `json:"external_request_default_cwd,omitempty"`
-		ExternalApprovalPolicy      string  `json:"external_request_approval_policy,omitempty"`
-		ExternalApprovalsReviewer   string  `json:"external_request_approvals_reviewer,omitempty"`
-		ExternalSandboxMode         string  `json:"external_request_sandbox_mode,omitempty"`
-		HasTelegramToken            bool    `json:"telegram_configured"`
-		AllowedUserIDs              []int64 `json:"allowed_user_ids"`
-		AllowedChatIDs              []int64 `json:"allowed_chat_ids"`
-		AFCGroupID                  int64   `json:"afc_group_id,omitempty"`
-		AFCInitialTopicLimit        int     `json:"afc_initial_topic_limit"`
-		DefaultCWD                  string  `json:"default_cwd"`
-		CodexChatsRoot              string  `json:"codex_chats_root"`
-		PanelMode                   string  `json:"panel_mode"`
-		LogEnabled                  bool    `json:"log_enabled"`
-		DiagnosticLogs              bool    `json:"diagnostic_logs"`
-		NotifyNewRun                bool    `json:"notify_new_run"`
-		ObserverPollSeconds         float64 `json:"observer_poll_seconds"`
-		RequestTimeoutSeconds       float64 `json:"request_timeout_seconds"`
-		ProjectsProjectPreviewLimit int     `json:"projects_project_preview_limit"`
-		ProjectsChatPreviewLimit    int     `json:"projects_chat_preview_limit"`
-		ChatsPageSize               int     `json:"chats_page_size"`
-		GoOS                        string  `json:"goos"`
-		GoArch                      string  `json:"goarch"`
+		Home                      string  `json:"home"`
+		DBPath                    string  `json:"db_path"`
+		CodexBin                  string  `json:"codex_bin"`
+		AppServerMode             string  `json:"app_server_mode"`
+		AppServerListen           string  `json:"app_server_listen"`
+		AppServerSocket           string  `json:"app_server_socket,omitempty"`
+		ControlAPIListen          string  `json:"control_api_listen,omitempty"`
+		YMessengerEnabled         bool    `json:"ymessenger_enabled"`
+		YMessengerConfigured      bool    `json:"ymessenger_configured"`
+		YMessengerPollSeconds     float64 `json:"ymessenger_poll_seconds"`
+		YMessengerRequireApproval bool    `json:"ymessenger_require_approval"`
+		ArcanumReviewEnabled      bool    `json:"arcanum_review_enabled"`
+		ArcanumReviewConfigured   bool    `json:"arcanum_review_configured"`
+		ArcanumReviewLogin        string  `json:"arcanum_review_login,omitempty"`
+		ArcanumReviewPollSeconds  float64 `json:"arcanum_review_poll_seconds"`
+		ArcanumReviewCWD          string  `json:"arcanum_review_cwd,omitempty"`
+		ExternalRequestsTopicID   int64   `json:"external_requests_topic_id,omitempty"`
+		ExternalRequestDefaultCWD string  `json:"external_request_default_cwd,omitempty"`
+		ExternalApprovalPolicy    string  `json:"external_request_approval_policy,omitempty"`
+		ExternalApprovalsReviewer string  `json:"external_request_approvals_reviewer,omitempty"`
+		ExternalSandboxMode       string  `json:"external_request_sandbox_mode,omitempty"`
+		HasTelegramToken          bool    `json:"telegram_configured"`
+		AllowedUserIDs            []int64 `json:"allowed_user_ids"`
+		AFCGroupID                int64   `json:"afc_group_id,omitempty"`
+		AFCInitialTopicLimit      int     `json:"afc_initial_topic_limit"`
+		DefaultCWD                string  `json:"default_cwd"`
+		CodexChatsRoot            string  `json:"codex_chats_root"`
+		LogEnabled                bool    `json:"log_enabled"`
+		DiagnosticLogs            bool    `json:"diagnostic_logs"`
+		SyncPollSeconds           float64 `json:"sync_poll_seconds"`
+		RequestTimeoutSeconds     float64 `json:"request_timeout_seconds"`
+		GoOS                      string  `json:"goos"`
+		GoArch                    string  `json:"goarch"`
 	}{
-		Home:                        c.Paths.Home,
-		DBPath:                      c.Paths.DBPath,
-		CodexBin:                    c.CodexBin,
-		AppServerMode:               c.AppServerMode,
-		AppServerListen:             c.AppServerListen,
-		AppServerSocket:             c.AppServerSocket,
-		ControlAPIListen:            c.ControlAPIListen,
-		YMessengerEnabled:           c.YMessengerEnabled,
-		YMessengerConfigured:        strings.TrimSpace(c.YMessengerOAuthTeamToken) != "",
-		YMessengerPollSeconds:       c.YMessengerPollInterval.Seconds(),
-		YMessengerRequireApproval:   c.YMessengerRequireApproval,
-		ArcanumReviewEnabled:        c.ArcanumReviewEnabled,
-		ArcanumReviewConfigured:     strings.TrimSpace(c.ArcanumReviewLogin) != "" && strings.TrimSpace(c.ArcanumYABin) != "",
-		ArcanumReviewLogin:          c.ArcanumReviewLogin,
-		ArcanumReviewPollSeconds:    c.ArcanumReviewPollInterval.Seconds(),
-		ArcanumReviewCWD:            c.ArcanumReviewCWD,
-		ExternalRequestsTopicID:     c.ExternalRequestsTopicID,
-		ExternalRequestDefaultCWD:   c.ExternalRequestDefaultCWD,
-		ExternalApprovalPolicy:      c.ExternalApprovalPolicy,
-		ExternalApprovalsReviewer:   c.ExternalApprovalsReviewer,
-		ExternalSandboxMode:         c.ExternalSandboxMode,
-		HasTelegramToken:            c.TelegramBotToken != "",
-		AllowedUserIDs:              c.AllowedUserIDs,
-		AllowedChatIDs:              c.AllowedChatIDs,
-		AFCGroupID:                  c.AFCGroupID,
-		AFCInitialTopicLimit:        positiveOrDefault(c.AFCInitialTopicLimit, DefaultAFCInitialTopicLimit),
-		DefaultCWD:                  c.DefaultCWD,
-		CodexChatsRoot:              c.CodexChatsRoot,
-		PanelMode:                   normalizePanelMode(c.PanelMode),
-		LogEnabled:                  c.LogEnabled,
-		DiagnosticLogs:              c.DiagnosticLogs,
-		NotifyNewRun:                c.NotifyNewRun,
-		ObserverPollSeconds:         c.ObserverPollInterval.Seconds(),
-		RequestTimeoutSeconds:       c.RequestTimeout.Seconds(),
-		ProjectsProjectPreviewLimit: positiveOrDefault(c.ProjectsProjectPreviewLimit, 7),
-		ProjectsChatPreviewLimit:    positiveOrDefault(c.ProjectsChatPreviewLimit, 3),
-		ChatsPageSize:               positiveOrDefault(c.ChatsPageSize, 8),
-		GoOS:                        runtime.GOOS,
-		GoArch:                      runtime.GOARCH,
+		Home:                      c.Paths.Home,
+		DBPath:                    c.Paths.DBPath,
+		CodexBin:                  c.CodexBin,
+		AppServerMode:             c.AppServerMode,
+		AppServerListen:           c.AppServerListen,
+		AppServerSocket:           c.AppServerSocket,
+		ControlAPIListen:          c.ControlAPIListen,
+		YMessengerEnabled:         c.YMessengerEnabled,
+		YMessengerConfigured:      strings.TrimSpace(c.YMessengerOAuthTeamToken) != "",
+		YMessengerPollSeconds:     c.YMessengerPollInterval.Seconds(),
+		YMessengerRequireApproval: c.YMessengerRequireApproval,
+		ArcanumReviewEnabled:      c.ArcanumReviewEnabled,
+		ArcanumReviewConfigured:   strings.TrimSpace(c.ArcanumReviewLogin) != "" && strings.TrimSpace(c.ArcanumYABin) != "",
+		ArcanumReviewLogin:        c.ArcanumReviewLogin,
+		ArcanumReviewPollSeconds:  c.ArcanumReviewPollInterval.Seconds(),
+		ArcanumReviewCWD:          c.ArcanumReviewCWD,
+		ExternalRequestsTopicID:   c.ExternalRequestsTopicID,
+		ExternalRequestDefaultCWD: c.ExternalRequestDefaultCWD,
+		ExternalApprovalPolicy:    c.ExternalApprovalPolicy,
+		ExternalApprovalsReviewer: c.ExternalApprovalsReviewer,
+		ExternalSandboxMode:       c.ExternalSandboxMode,
+		HasTelegramToken:          c.TelegramBotToken != "",
+		AllowedUserIDs:            c.AllowedUserIDs,
+		AFCGroupID:                c.AFCGroupID,
+		AFCInitialTopicLimit:      positiveOrDefault(c.AFCInitialTopicLimit, DefaultAFCInitialTopicLimit),
+		DefaultCWD:                c.DefaultCWD,
+		CodexChatsRoot:            c.CodexChatsRoot,
+		LogEnabled:                c.LogEnabled,
+		DiagnosticLogs:            c.DiagnosticLogs,
+		SyncPollSeconds:           c.SyncPollInterval.Seconds(),
+		RequestTimeoutSeconds:     c.RequestTimeout.Seconds(),
+		GoOS:                      runtime.GOOS,
+		GoArch:                    runtime.GOARCH,
 	})
+}
+
+func (c Config) ValidateTelegramSurface() error {
+	if c.AFCGroupID >= 0 {
+		return fmt.Errorf("CTR_GO_AFC_GROUP_ID must be a negative Telegram supergroup id")
+	}
+	if len(c.AllowedUserIDs) != 1 {
+		return fmt.Errorf("CTR_GO_ALLOWED_USER_IDS must contain exactly one Telegram user id")
+	}
+	if c.AllowedUserIDs[0] <= 0 {
+		return fmt.Errorf("CTR_GO_ALLOWED_USER_IDS must contain one positive Telegram user id")
+	}
+	return nil
 }
 
 func (c Config) ValidateYMessenger() error {
@@ -598,13 +585,4 @@ func parseStringList(raw string) []string {
 func parseInt64(raw string) int64 {
 	value, _ := strconv.ParseInt(strings.TrimSpace(raw), 10, 64)
 	return value
-}
-
-func normalizePanelMode(value string) string {
-	switch strings.TrimSpace(strings.ToLower(value)) {
-	case "stable":
-		return "stable"
-	default:
-		return "per_run"
-	}
 }

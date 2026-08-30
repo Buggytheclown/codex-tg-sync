@@ -83,13 +83,10 @@ func TestAFCDispatchPersistsPendingTelegramUserFingerprint(t *testing.T) {
 	}
 }
 
-func TestAFCActivationIsIsolatedAndDisablesObserverOnlyOnSuccess(t *testing.T) {
+func TestAFCActivationPersistsCurrentState(t *testing.T) {
 	t.Parallel()
 	store := openTestStore(t)
 	ctx := context.Background()
-	if err := store.SetGlobalObserverTarget(ctx, 10, 0, true); err != nil {
-		t.Fatal(err)
-	}
 	if err := store.BeginAFCActivation(ctx, "session-1", -1001); err != nil {
 		t.Fatal(err)
 	}
@@ -103,24 +100,9 @@ func TestAFCActivationIsIsolatedAndDisablesObserverOnlyOnSuccess(t *testing.T) {
 	if err != nil || state.State != model.AFCStateActive {
 		t.Fatalf("state = %#v, err = %v", state, err)
 	}
-	_, configured, err := store.GetGlobalObserverTarget(ctx)
-	if err != nil || !configured {
-		t.Fatalf("observer configured = %v, err = %v", configured, err)
-	}
-	enabled, _ := store.GetState(ctx, "observer.global_enabled")
-	if enabled != "false" {
-		t.Fatalf("observer.global_enabled = %q, want false", enabled)
-	}
-	bound, err := store.ListBoundThreadIDs(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(bound) != 0 {
-		t.Fatalf("legacy bound threads = %v, want AFC isolation", bound)
-	}
 }
 
-func TestAFCOffIsLogicalBeforeCleanupAndDoesNotRestoreObserver(t *testing.T) {
+func TestAFCOffIsLogicalBeforeCleanup(t *testing.T) {
 	t.Parallel()
 	store := openTestStore(t)
 	ctx := context.Background()
@@ -143,10 +125,6 @@ func TestAFCOffIsLogicalBeforeCleanupAndDoesNotRestoreObserver(t *testing.T) {
 	state, err := store.GetAFCState(ctx)
 	if err != nil || state.State != model.AFCStateOff {
 		t.Fatalf("state = %#v, err = %v", state, err)
-	}
-	enabled, _ := store.GetState(ctx, "observer.global_enabled")
-	if enabled != "false" {
-		t.Fatalf("observer.global_enabled = %q, want false", enabled)
 	}
 }
 

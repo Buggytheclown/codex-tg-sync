@@ -1,94 +1,50 @@
 # codex-tg: local Codex control plane
 
-Local control plane for OpenAI Codex App Server, built in Go. Its supported
-Telegram surface is Sync mode: one private forum mirrors Codex Desktop chats as
-topics and keeps prompts, live status, approvals, input requests, and final
-answers attached to the correct Codex thread.
+`codex-tg` mirrors local Codex chats into one private Telegram forum. Each Codex thread has one topic where the operator can follow status, steer work, answer input, approve commands, stop a turn, and read the final result.
 
-## Why codex-tg?
+The supported Telegram surface is AFC/Sync mode only. Direct-message observer commands and global observer panels are not supported.
 
-- Mirror Codex Desktop chats into a private Telegram forum with `/sync on`.
-- Continue or stop the correct Codex turn from its Telegram topic.
-- Approve Codex and scheduled launch requests without exposing App Server to the internet.
-- Reuse your existing Codex setup: skills, MCP servers, plugins, repo instructions, and local workflows.
-- Run local daily or weekly Codex prompts through the same durable approval flow.
-- Durable thread-first routing keeps every topic attached to the right local task.
+## What it does
+
+- Synchronizes Codex Desktop chats into Telegram topics with `/sync on`.
+- Starts or steers the correct Codex turn from plain text in its topic.
+- Renders compact `[User]`, `[Status]`, `[Approval]`, `[Input]`, and `[Final]` cards.
+- Edits resolved approval/input cards in place and removes their buttons.
+- Creates project-backed topic drafts with `/projects` and dated chats with `/newchat`.
+- Collects durable launch requests from cron, Yandex Messenger, and assigned Arcanum reviews.
+- Shows active launch requests with `/requests` and poller state with `/pollers`.
+- Sends short terminal notifications back to configured external sources.
+- Keeps Codex App Server local; no public App Server listener is required.
+- Stores topic identity, callbacks, launch requests, delivery state, and snapshots in local SQLite.
 
 Current release: `v0.5.0`.
 
-## Why It Matters
+## Requirements
 
-- Keep local Codex work observable and controllable without exposing Codex App Server to the internet.
-- Use Telegram as a low-friction synchronized control surface for local Codex work.
-- Reuse one durable launch path for Telegram, cron, and optional source adapters.
-- Preserve local-first ownership: Codex sessions, workspaces, SQLite state, and tokens stay on your machine.
-
-## Remote Connections
-
-Official Codex Remote Connections cover the broad mobile remote-control
-workflow for Codex. `codex-tg` is not trying to replace that feature. The
-project direction is a local control layer and adapter system. Telegram Sync
-mode remains the operator surface, while cron and other private adapters feed
-the same durable launch lifecycle.
-
-## Features
-
-- Sync lifecycle through `/sync on|off`, `/status`, `/refresh`, and non-destructive `/repair`.
-- One managed Telegram forum topic per synchronized Codex Desktop chat.
-- Plain-text topic messages start or steer the authoritative turn; `/stop` interrupts it.
-- Compact `[User]`, `[Status]`, `[Approval]`, `[Input]`, and `[Final]` messages.
-- Project and Chat creation through `/projects` and `/newchat` in Control.
-- Durable external launch requests with Telegram `Start` / `Dismiss` approval.
-- Optional assigned-Arcanum-review polling through the official CLI.
-- Reloadable JSON cron schedules with daily and weekly catch-up without backlog.
-- SQLite-backed topic identity, callbacks, launch requests, and delivery state.
-- macOS service installer with friendly first-run setup, user LaunchAgent management, and menu bar tray control.
-- Cross-platform Go daemon foundation for Windows, macOS, and Linux.
-
-## Platform Status
-
-- Windows: tests and builds are supported; current Sync-mode live validation is macOS-focused.
-- macOS: primary service/runtime path, using a user LaunchAgent and the shared managed App Server.
-- Linux: CI runs tests/builds on Ubuntu; full local daemon/runtime validation is still pending.
+- OpenAI Codex CLI with `codex app-server`.
+- A Telegram bot token.
+- One Telegram numeric user id.
+- One private forum supergroup containing only that user and the bot.
+- The bot must be an administrator with topic-management and message-deletion rights.
 
 ## Quickstart
 
-Prerequisites:
-
-- OpenAI Codex CLI with `codex app-server`.
-- A Telegram bot token from BotFather.
-- Your Telegram numeric user id.
-- A private Telegram forum supergroup containing only you and the bot; the bot
-  must be allowed to manage topics and delete messages.
-
-On macOS, download the latest `.pkg` from
-[GitHub Releases](https://github.com/mideco-tech/codex-tg/releases/latest),
-install it, then run:
+On macOS, install the latest package from [GitHub Releases](https://github.com/mideco-tech/codex-tg/releases/latest), then run:
 
 ```powershell
 ctr-go service install --start --start-at-login
 ctr-go doctor
 ```
 
-`ctr-go service install` starts a friendly first-run setup wizard when required.
-The same values can be passed with flags for scripted installs. It writes a
-private local config file at `~/.codex-tg/config.env` by default, creates a
-user LaunchAgent, and starts the daemon when `--start` is present.
-If your shell uses proxy variables such as `HTTPS_PROXY` or `NO_PROXY`, the
-installer preserves them in the private config so the LaunchAgent can reach the
-same network without putting secrets or user ids into the plist.
+The wizard asks for the bot token, one allowed user id, the AFC forum group id, and local Codex paths. It writes `~/.codex-tg/config.env`, installs a user LaunchAgent, and starts the daemon.
 
-For Linux, Windows, or manual macOS setup, download the latest `ctr-go` archive,
-unpack it, then run:
+For a manual installation:
 
 ```powershell
 ctr-go init
 ctr-go doctor
 ctr-go daemon run
 ```
-
-Use `CTR_GO_CONFIG` to point at another config file. Explicit environment
-variables still override config file values.
 
 Build from source:
 
@@ -100,15 +56,22 @@ go run ./cmd/ctr-go doctor
 go run ./cmd/ctr-go daemon run
 ```
 
-Environment-only setup remains supported:
+Environment-only setup:
 
 ```powershell
 $env:CTR_GO_TELEGRAM_BOT_TOKEN = "<telegram-bot-token>"
-$env:CTR_GO_ALLOWED_USER_IDS = "<telegram-user-id>"
+$env:CTR_GO_ALLOWED_USER_IDS = "<one-telegram-user-id>"
+$env:CTR_GO_AFC_GROUP_ID = "<private-forum-supergroup-id>"
 $env:CTR_GO_DEFAULT_CWD = "C:\Users\you\Projects\Codex"
 ```
 
-In Telegram:
+Exactly one user id is required. The group id and user id are checked at startup.
+
+## First Telegram session
+
+The bot clears its default command scope and publishes commands only in the configured forum group.
+
+In the Control topic:
 
 ```text
 /sync on
@@ -116,400 +79,126 @@ In Telegram:
 /projects
 ```
 
-`/sync on` reconciles recent Codex Desktop chats into forum topics. Send plain
-text in a task topic to start or steer its turn; use `/stop` in that topic to
-interrupt the active turn. The daemon intentionally resets Sync to `off` after
-a restart, so enable it again after the shared App Server is healthy.
+`/sync on` creates topics for recent Codex chats and keeps discovering new ones. Send text inside a task topic to start or steer its turn. Use `/stop` in that topic to interrupt it.
 
-## Runtime Commands
+Sync intentionally resets to off after a daemon restart. Run `/sync on` again after the shared App Server connection is healthy.
+
+## Telegram commands
+
+The visible menu contains exactly:
+
+- `/sync on|off`
+- `/status`
+- `/pollers`
+- `/requests`
+- `/refresh`
+- `/projects`
+- `/newchat`
+- `/stop`
+
+`/repair` is accepted in Control but intentionally omitted from the menu. It recreates bridge App Server sessions without deleting Codex threads.
+
+`/projects` lists known local project workspaces. Choosing a project creates a ready topic; the first text message creates the Codex thread and first turn. `/newchat` creates a dated Codex Chat under `CTR_GO_CODEX_CHATS_ROOT`.
+
+Messages, callbacks, and commands outside the configured AFC group are ignored before route or App Server access.
+
+## Permissions and approvals
+
+Telegram-started threads and turns explicitly request:
+
+- approval policy: `on-request`
+- approvals reviewer: `auto_review`
+- sandbox mode: `workspace-write`
+
+This avoids inheriting a read-only/untrusted App Server default. Codex may still ask for approval. The action card offers one-time approval, command-prefix approval, deny, and cancel. `Allow command prefix` is App Server's `acceptForSession` decision for the proposed prefix; it is not blanket approval for every command in the session.
+
+External launch requests may use explicit execution settings from:
+
+- `CTR_GO_EXTERNAL_REQUEST_APPROVAL_POLICY`
+- `CTR_GO_EXTERNAL_REQUEST_APPROVALS_REVIEWER`
+- `CTR_GO_EXTERNAL_REQUEST_SANDBOX_MODE`
+
+## Launch requests and pollers
+
+All sources enter the same durable request lifecycle. The Requests topic shows a `[Launch request]` card before a request starts. Use:
+
+- `/requests` for active, non-closed requests and their status.
+- `/pollers` for enabled pollers, last attempt/success, consecutive failures, and current activity.
+
+Cron schedules live in `~/.codex-tg/cron.json`.
+
+Assigned Arcanum review polling uses the authenticated `ya tool gena-arcanum-cli`. Authors in `CTR_GO_ARCANUM_REVIEW_AUTO_START_AUTHORS` auto-start after their visible request card is created; other authors require `Start`.
+
+Yandex Messenger requests can require Telegram approval or auto-start according to configuration. When a launched turn reaches a terminal state, the adapter sends a short terminal reply back to the originating Messenger thread.
+
+## App Server modes
+
+- `spawned`: `codex-tg` owns a local stdio App Server.
+- `daemon`: connect to the managed local daemon Unix socket.
+- `websocket`: connect to an existing loopback WebSocket listener.
+
+Shared modes fail closed and never silently spawn a private App Server. Do not expose App Server publicly.
+
+## Primary configuration
+
+Required:
+
+- `CTR_GO_TELEGRAM_BOT_TOKEN`
+- `CTR_GO_ALLOWED_USER_IDS` — exactly one id
+- `CTR_GO_AFC_GROUP_ID`
+- `CTR_GO_DEFAULT_CWD`
+
+Common optional settings:
+
+- `CTR_GO_CONFIG`
+- `CTR_GO_HOME`
+- `CTR_GO_CODEX_BIN`
+- `CTR_GO_CODEX_CHATS_ROOT`
+- `CTR_GO_APP_SERVER_MODE`
+- `CTR_GO_APP_SERVER_SOCKET`
+- `CTR_GO_APP_SERVER_LISTEN`
+- `CTR_GO_AFC_INITIAL_TOPIC_LIMIT`
+- `CTR_GO_SYNC_POLL_SECONDS`
+- `CTR_GO_CONTROL_API_LISTEN`
+- `CTR_GO_LOG_ENABLED`
+- `CTR_GO_DIAGNOSTIC_LOGS`
+
+See [`.env.example`](.env.example) for external adapters.
+
+## Runtime commands
 
 ```powershell
 ctr-go init
+ctr-go doctor
+ctr-go status
+ctr-go repair
+ctr-go daemon run
 ctr-go service install
 ctr-go service start
 ctr-go service stop
 ctr-go service restart
 ctr-go service status
-ctr-go doctor
-ctr-go status
-ctr-go repair
-ctr-go daemon run
 ```
 
-Source-build equivalents:
+A Telegram `409 Conflict` means another process is polling the same bot token.
 
-```powershell
-go run ./cmd/ctr-go init
-go run ./cmd/ctr-go service install
-go run ./cmd/ctr-go doctor
-go run ./cmd/ctr-go status
-go run ./cmd/ctr-go repair
-go run ./cmd/ctr-go daemon run
-```
+## Development
 
-Supported Telegram command menu:
-
-- `/sync on|off` controls Sync mode
-- `/status`, `/refresh`
-- `/projects`, `/newchat`, `/stop`
-
-`/repair` is also accepted in Control and recreates bridge App Server sessions
-without deleting Codex threads. Sync mode in the configured private forum is
-the only supported Telegram product surface; direct-message command workflows
-outside that forum are unsupported.
-
-`/projects` opens cached project/workspace navigation in Control. Choosing a
-project creates a ready Telegram draft topic; its first plain-text message
-creates the Codex thread and first turn. `/newchat` opens the same project
-picker for a dated Codex Chat.
-
-## Configuration
-
-Primary environment variables:
-
-- `CTR_GO_HOME`
-- `CTR_GO_CONFIG` (`~/.codex-tg/config.env` by default)
-- `CTR_GO_CODEX_BIN`
-- `CTR_GO_APP_SERVER_MODE` (`spawned` by default; `daemon` connects to the managed daemon Unix socket; `websocket` connects to an existing loopback TCP listener)
-- `CTR_GO_APP_SERVER_LISTEN` (`stdio://` by default; use a loopback URL such as `ws://127.0.0.1:4500` in `websocket` mode)
-- `CTR_GO_APP_SERVER_SOCKET` (optional Unix socket override for daemon mode)
-- `CTR_GO_CONTROL_API_LISTEN` (empty/off by default; experimental local router-agent API, loopback TCP only)
-- `CTR_GO_TELEGRAM_BOT_TOKEN`
-- `CTR_GO_ALLOWED_USER_IDS`
-- `CTR_GO_ALLOWED_CHAT_IDS`
-- `CTR_GO_AFC_GROUP_ID` (exact private forum supergroup used by Sync mode)
-- `CTR_GO_AFC_INITIAL_TOPIC_LIMIT` (`5` by default; initial `/sync on` snapshot only)
-- `CTR_GO_YMESSENGER_ENABLED` (`false` by default)
-- `CTR_GO_YMESSENGER_ROBOT_LOGIN` (required when the adapter is enabled)
-- `CTR_GO_YMESSENGER_OAUTH_TEAM_TOKEN` (required secret robot token)
-- `CTR_GO_YMESSENGER_ALLOWED_SENDERS` (comma-separated sender login allowlist)
-- `CTR_GO_YMESSENGER_POLL_SECONDS` (`2` by default)
-- `CTR_GO_YMESSENGER_REQUIRE_APPROVAL` (`true` by default; set `false` to start allowed explicit mentions automatically)
-- `CTR_GO_ARCANUM_REVIEW_ENABLED` (`false` by default)
-- `CTR_GO_ARCANUM_REVIEW_LOGIN` (assigned reviewer login)
-- `CTR_GO_ARCANUM_YA_BIN` (absolute `ya` path recommended for service operation)
-- `CTR_GO_ARCANUM_REVIEW_POLL_SECONDS` (`60` by default)
-- `CTR_GO_ARCANUM_REVIEW_CWD` (falls back to the external request default cwd)
-- `CTR_GO_ARCANUM_REVIEW_AUTO_START_AUTHORS` (optional comma-separated exact author-login allowlist for future PRs)
-- `CTR_GO_EXTERNAL_REQUESTS_TOPIC_ID` (permanent Telegram request/status topic id)
-- `CTR_GO_EXTERNAL_REQUEST_DEFAULT_CWD` (falls back to `CTR_GO_DEFAULT_CWD`)
-- `CTR_GO_EXTERNAL_REQUEST_APPROVAL_POLICY` (`never`, `on-request`, or `untrusted`; empty inherits the App Server default)
-- `CTR_GO_EXTERNAL_REQUEST_APPROVALS_REVIEWER` (`user` or `auto_review`; empty inherits the App Server default)
-- `CTR_GO_EXTERNAL_REQUEST_SANDBOX_MODE` (`read-only`, `workspace-write`, or `danger-full-access`; empty inherits the App Server default)
-- `CTR_GO_DEFAULT_CWD`
-- `CTR_GO_CODEX_CHATS_ROOT` (`~/Documents/Codex` by default)
-- `CTR_GO_LOG_ENABLED` (`true` by default; set `false`/`off`/`0` to discard daemon stdout logs)
-- `CTR_GO_DIAGNOSTIC_LOGS` (`true` by default; set `false`/`off`/`0` to keep normal bot logs but suppress structured `daemon_event` diagnostics)
-- `CTR_GO_OBSERVER_POLL_SECONDS`
-- `CTR_GO_REQUEST_TIMEOUT_SECONDS`
-- `CTR_GO_PROJECTS_PROJECT_PREVIEW_LIMIT` (`7` by default)
-- `CTR_GO_PROJECTS_CHAT_PREVIEW_LIMIT` (`3` by default)
-- `CTR_GO_CHATS_PAGE_SIZE` (`8` by default)
-- `CTR_GO_INDEX_REFRESH_SECONDS`
-- `CTR_GO_ATTACH_REFRESH_SECONDS`
-- `CTR_GO_DELIVERY_RETRY_SECONDS`
-- `CTR_GO_DELIVERY_MAX_ATTEMPTS`
-
-Compatibility fallbacks:
-
-- `CTR_TELEGRAM_BOT_TOKEN`
-- `CTR_ALLOWED_USER_IDS`
-- `CTR_ALLOWED_CHAT_IDS`
-
-## Telegram Sync mode
-
-Set `CTR_GO_AFC_GROUP_ID` to one private Telegram forum supergroup and configure
-exactly one `CTR_GO_ALLOWED_USER_IDS` value. The group must contain only that
-user and the bot; the bot must be able to manage topics and delete messages.
-Use `/sync on` in the built-in General topic. Activation validates the group and
-idempotently renames that built-in topic to `Control` before creating managed topics for
-five recent Codex threads by default. While Sync is active, reconciliation creates one
-topic for each newly discovered Desktop chat; `/refresh` triggers the same reconciliation
-immediately. Control advertises `/projects` and `/newchat`;
-either command creates a Telegram draft topic without holding an App Server
-writer. Send its first prompt only after the topic is ready: Sync creates the
-Codex thread and first turn together, then renames the topic from that prompt.
-Messages sent while a topic turn is active steer that exact turn, and `/stop`
-targets the current shared-daemon turn regardless of whether Desktop or Telegram
-started it. `/sync off` drains safely and removes managed Telegram topics but
-does not delete Codex threads. Use `/sync off --force` only when active turns
-must be interrupted and drained.
-
-### Yandex Messenger launch requests
-
-The optional Yandex Messenger adapter runs inside the same `codex-tg` daemon;
-the normal one-command startup does not change. Approval is secure by default.
-When it is enabled, create a permanent `Requests` topic manually in the
-configured Sync forum group and put its topic id in
-`CTR_GO_EXTERNAL_REQUESTS_TOPIC_ID`. Every accepted request is rendered there
-as a durable status card. Set `CTR_GO_YMESSENGER_REQUIRE_APPROVAL=false` to
-start allowed explicit mentions automatically; auto-start cards have no
-approval buttons and are edited as the launch progresses.
-
-The poller accepts a message only when `from.login` is in
-`CTR_GO_YMESSENGER_ALLOWED_SENDERS` and the configured robot is present in
-`mentioned_users`. Source `chat_id` is deliberately not filtered. Accepted
-messages receive a durable acknowledgement and appear in `Requests`;
-approval-gated requests include `Start`
-and `Dismiss`, while automatic requests are informational only. Dispatch
-requires Sync to be active, creates one normal task topic, then uses the shared
-writer to perform `thread/start` and the first `turn/start`.
-Optional external-request permission settings are passed explicitly to both
-calls, so the launch does not depend on cached App Server defaults.
-An explicit robot mention from any other sender receives a static owner-only
-reply. It stores no Codex prompt and cannot create a Telegram approval or
-Codex session.
-
-For direct replies, the nested `reply_to_message` is included as untrusted
-context. For thread messages, the adapter uses the Messenger API invariant that
-`chat.thread_id` equals the root message timestamp and resolves that exact
-message on demand through Messenger History API. The configured robot OAuth
-token is reused with the History API `OAuth` authorization scheme; no user
-token or additional secret is required. History lookup runs only for an
-allowed explicit robot mention. History authorization failures leave the
-cursor unchanged. Other failures for one exact root retry twice, then advance
-with an explicit unavailable-context marker so one message cannot block all
-later updates. The daemon does not cache unrelated chat messages.
-
-### Arcanum review launch requests
-
-The optional Arcanum review adapter polls the official `gena-arcanum-cli` for
-open published pull requests assigned to one configured login. Each newly seen
-PR creates one durable card in the existing Requests topic. The card shows the
-PR author, summary, and canonical source link; `Start` sends only the exact
-`$arc-pr-review [<URL>](<URL>)` invocation to Codex.
-
-The adapter is disabled by default. It uses the existing local `ya`
-authentication and does not store another OAuth token. Configure an absolute
-`ya` path for service operation because a user LaunchAgent may not inherit the
-interactive shell `PATH`:
-
-```text
-CTR_GO_ARCANUM_REVIEW_ENABLED=true
-CTR_GO_ARCANUM_REVIEW_LOGIN=<reviewer-login>
-CTR_GO_ARCANUM_YA_BIN=/absolute/path/to/ya
-CTR_GO_ARCANUM_REVIEW_POLL_SECONDS=60
-CTR_GO_ARCANUM_REVIEW_CWD=/absolute/path/to/projects
-CTR_GO_ARCANUM_REVIEW_AUTO_START_AUTHORS=alice,bob
-CTR_GO_EXTERNAL_REQUESTS_TOPIC_ID=<permanent-requests-topic-id>
-```
-
-On macOS, also check where that path resolves. A symlink into `Documents` or
-another privacy-protected directory may work in a terminal but be unreadable to
-a background LaunchAgent. In that case, place the `ya` bootstrap in a
-service-readable location such as `~/.codex-tg/bin/ya` and configure that path.
-
-The working directory should contain the location where the installed
-`arc-pr-review` skill may create its isolated temporary Arc mount. Approval is
-required by default. A future PR whose exact author login appears in
-`CTR_GO_ARCANUM_REVIEW_AUTO_START_AUTHORS` renders a buttonless Requests card
-before it can auto-start; changing the allowlist does not start already stored
-pending requests. Repeated polling uses an in-memory seen set, while SQLite
-`(source, external_id)` uniqueness prevents duplicate cards after restart. One
-PR id creates at most one request, including after reassignment or later review
-iterations.
-
-When a launched external turn completes, fails, or is interrupted, the daemon
-edits the original card and sends one short audible terminal notice in the
-Requests topic. The full Codex Final remains in the managed session topic.
-
-### Cron launch requests
-
-An optional `~/.codex-tg/cron.json` file can enqueue daily or weekly Codex launch
-requests through the same durable Telegram approval and Sync dispatch lifecycle.
-The daemon reloads the file every 30 seconds; a missing file disables the
-source, while invalid JSON or task configuration fails closed for that poll.
-
-The supported five-field subset is deliberately small:
-
-- daily: day-of-month, month, and day-of-week are `*`;
-- weekly: day-of-month and month are `*`, and day-of-week is one number or
-  three-letter weekday such as `1` or `MON`.
-
-A daily task creates at most one request per local calendar day. A weekly task
-creates at most one request per local calendar week and uses the scheduled
-weekday's date as its durable identity. Starting after the current period's
-slot catches up once; missed days or weeks never create a backlog. After daemon
-startup or a sleep-sized polling gap, catch-up waits for four minutes of
-continuous runtime so a short laptop DarkWake does not create a request.
-
-```json
-{
-  "version": 1,
-  "timezone": "Europe/Berlin",
-  "tasks": [
-    {
-      "id": "morning-project-brief",
-      "cron": "0 10 * * *",
-      "cwd": "/path/to/project",
-      "prompt": "Prepare the morning engineering brief.",
-      "model": "gpt-5.6-luna",
-      "reasoning_effort": "high",
-      "launch_policy": "telegram",
-      "max_lateness": "2h",
-      "enabled": true
-    },
-    {
-      "id": "weekly-project-radar",
-      "cron": "0 10 * * MON",
-      "cwd": "/path/to/another-project",
-      "prompt": "Prepare the weekly project radar.",
-      "model": "gpt-5.6-sol",
-      "reasoning_effort": "high",
-      "launch_policy": "telegram",
-      "enabled": true
-    }
-  ]
-}
-```
-
-`launch_policy` defaults to `telegram`, which requires the configured external
-requests topic and presents `Dismiss` / `Start`. Use `auto` for future requests
-that should enter the existing auto-start path. Existing pending requests are
-not rewritten after configuration changes. Optional `max_lateness` accepts a
-positive Go duration such as `30m` or `2h`; an older occurrence is skipped.
-Omitting it keeps catch-up available for the full local day or week.
-
-The existing App Server subscription and authoritative `thread/read` snapshot
-remain the only source of the Codex final answer. A terminal final is queued in
-SQLite and sent through Bot API `sendText` with the source `chat_id`, invoking
-`message_id` as `reply_message_id`, and source `thread_id`. The terminal answer
-is returned to Messenger; a failed, interrupted, or empty terminal turn gets a
-short explicit fallback instead of silence. Commentary and tool output remain
-in the normal Sync task topic.
-
-The update cursor and normalized request are committed in one SQLite
-transaction. Duplicate source messages and button presses are ignored. A
-daemon restart after a dispatch claim, or an ambiguous App Server response,
-marks the outcome unknown and never replays it automatically. Telegram
-send/edit failures remain pending for reconciliation. Messenger reply state is
-visible in `doctor` as `external_reply_backlog` and delivery transitions are
-written as structured lifecycle events. OAuthTeam and Telegram tokens stay
-only in the private config and are omitted from status/doctor JSON.
-
-### Shared App Server startup on macOS
-
-Sync mode requires Codex Desktop and `codex-tg` to connect to the same
-App Server process. The startup order matters. The bridge supports either the
-managed daemon Unix socket or an existing loopback TCP WebSocket listener.
-
-For a standalone WebSocket listener, start App Server first:
-
-```bash
-codex app-server --listen ws://127.0.0.1:4500
-```
-
-Then configure `codex-tg` without a Unix socket override:
-
-```env
-CTR_GO_APP_SERVER_MODE=websocket
-CTR_GO_APP_SERVER_LISTEN=ws://127.0.0.1:4500
-```
-
-WebSocket mode is fail-closed: if the listener is unavailable, `codex-tg`
-does not spawn a private App Server. Codex Desktop must be configured to use
-the same listener before Sync mode is enabled. The transport is experimental;
-keep plaintext WebSocket endpoints on loopback as required by the
-[official App Server documentation](https://learn.chatgpt.com/docs/app-server).
-
-The managed-daemon workflow remains available as follows.
-
-#### After every reboot
-
-**Do not open Codex Desktop first.** The `launchctl` environment override and a
-manually started managed daemon do not survive a reboot. Use this order:
-
-1. Start the managed App Server daemon.
-2. Set local-daemon mode for GUI apps launched afterward.
-3. Open Codex Desktop.
-4. Start or restart `codex-tg`, verify the shared connection, then run `/sync on`
-   in Control.
-
-Run steps 1 and 2 before opening Desktop:
-
-```bash
-/Applications/ChatGPT.app/Contents/Resources/codex app-server daemon start
-launchctl setenv CODEX_APP_SERVER_USE_LOCAL_DAEMON 1
-```
-
-After opening Desktop, verify and restart the bridge if needed:
-
-```bash
-/Applications/ChatGPT.app/Contents/Resources/codex app-server daemon version
-ctr-go service restart
-ctr-go status
-```
-
-When installed with `--start-at-login`, `codex-tg` may start automatically
-before the managed daemon. In that case it stays fail-closed, resets Sync to
-`off`, and sends one warning to Control. It does not spawn a private App Server.
-Start the managed daemon, restart Desktop in local-daemon mode, and then run
-`/sync on`.
-
-#### If Codex Desktop was opened first
-
-Desktop probably started a private App Server. Recover with this exact order:
-
-1. Fully quit Codex Desktop with **Cmd+Q**; closing its window is not enough.
-2. Run the two daemon and `launchctl` commands above.
-3. Reopen Codex Desktop.
-4. Run `ctr-go service restart`, verify `ctr-go status`, and send `/sync on` in
-   Control.
-
-Every `codex-tg` restart intentionally resets Sync to `off`. Existing
-Codex work continues in the shared runtime, but the old Telegram topics are
-cleaned up. Run `/sync on` in Control after the shared connection is healthy.
-The bridge applies the same boundary when its managed-daemon heartbeat detects
-a broken or half-open transport: connection status becomes false, Control gets
-one warning and one recovery notice, polling reconnects, and Sync remains off
-until the operator runs `/sync on` again. Prompts are never replayed.
-
-## Verification
+Source builds require the Go version declared in `go.mod`.
 
 ```powershell
 go test ./...
 go build -buildvcs=false ./...
 ```
 
-Live Telegram readback E2E is documented in
-[tests/live_e2e/README.md](tests/live_e2e/README.md). It is intentionally
-gated by local env and is not part of `go test ./...`.
+Architecture and contracts:
 
-## GitHub Metadata
-
-Suggested repository description:
-
-```text
-Sync local Codex Desktop chats with a private Telegram forum; steer, approve, and schedule Codex work without exposing App Server publicly.
-```
-
-Suggested topics:
-
-```text
-codex telegram telegram-bot telegram-ui openai-codex codex-cli
-codex-app-server codex-control-plane ai-agents coding-agent remote-control developer-tools
-local-first go macos windows linux telegram-forum cron scheduler
-```
-
-## Documentation
-
+- [Sync-only Telegram ADR](docs/adr/ADR-032-sync-only-telegram-surface.md)
+- [Telegram contract matrix](docs/research/contract-matrix.md)
+- [Regression map](docs/testing/regression-map.md)
 - [Architecture](docs/wiki/Architecture.md)
-- [Control Plane](docs/wiki/Control-Plane.md)
-- [Quickstart](docs/wiki/Quickstart.md)
-- [Telegram UX](docs/wiki/Telegram-UX.md)
-- [Security](docs/wiki/Security.md)
 - [Operations](docs/wiki/Operations.md)
-- [Changelog](CHANGELOG.md)
-- [Contract matrix](docs/research/contract-matrix.md)
-- [Validation notes](docs/testing/validation-notes.md)
-- [ADRs](docs/adr/)
 
-## License
+## Security
 
-Apache License 2.0. This keeps the project permissive for the community while also providing an explicit patent grant that large companies usually expect from infrastructure and developer-tooling projects.
-
-## Operational Notes
-
-- Telegram long polling returns `409 Conflict` when another process consumes the same bot token.
-- Do not expose Codex App Server on a public interface. `codex-tg` is designed around local/private App Server connectivity.
-- Keep bot tokens, Telegram sessions, SQLite databases, logs, and `.env` files out of git.
+Tokens, user ids, chat ids, SQLite databases, logs, local sessions, private paths, and screenshots are local secrets. Do not commit them. The optional local control API accepts loopback listeners only.

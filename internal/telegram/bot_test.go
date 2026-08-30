@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -57,6 +58,52 @@ func TestDefaultCommandsExposeSyncAndOperatorStatusCommands(t *testing.T) {
 	}
 	if len(seen) != 8 {
 		t.Fatalf("defaultCommands = %#v, want only the public Sync and operator commands", defaultCommands())
+	}
+}
+
+func TestBotStartScopesCommandsToConfiguredAFCGroup(t *testing.T) {
+	t.Parallel()
+
+	var paths []string
+	var commandPayload map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		paths = append(paths, r.URL.Path)
+		switch r.URL.Path {
+		case "/getMe":
+			_, _ = w.Write([]byte(`{"ok":true,"result":{"id":7,"is_bot":true,"first_name":"bot","username":"codex_bot"}}`))
+		case "/deleteMyCommands":
+			_, _ = w.Write([]byte(`{"ok":true,"result":true}`))
+		case "/setMyCommands":
+			if err := json.NewDecoder(r.Body).Decode(&commandPayload); err != nil {
+				t.Fatalf("decode setMyCommands: %v", err)
+			}
+			_, _ = w.Write([]byte(`{"ok":true,"result":true}`))
+		default:
+			t.Fatalf("unexpected Telegram API path %q", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	client := NewClient("token")
+	client.baseURL = server.URL
+	bot := &Bot{
+		cfg:    config.Config{AFCGroupID: -10042},
+		client: client,
+		logger: log.New(io.Discard, "", 0),
+	}
+	if err := bot.Start(context.Background()); err != nil {
+		t.Fatalf("Start failed: %v", err)
+	}
+	if got, want := strings.Join(paths, ","), "/getMe,/deleteMyCommands,/setMyCommands"; got != want {
+		t.Fatalf("Telegram API calls = %q, want %q", got, want)
+	}
+	scope, _ := commandPayload["scope"].(map[string]any)
+	if scope["type"] != "chat" || scope["chat_id"] != float64(-10042) {
+		t.Fatalf("setMyCommands scope = %#v, want exact AFC chat", scope)
+	}
+	commands, _ := commandPayload["commands"].([]any)
+	if len(commands) != 8 {
+		t.Fatalf("setMyCommands commands = %#v, want 8", commands)
 	}
 }
 
@@ -260,16 +307,15 @@ func TestTelegramInboundTextUsesCaptionAndDetectsUnsupportedMedia(t *testing.T) 
 	}
 }
 
-func TestBotUnsupportedMediaGetsExplicitReplyWithoutStartingCodex(t *testing.T) {
-	var captured map[string]any
+func TestBotIgnoresUnsupportedMediaOutsideAFCGroup(t *testing.T) {
+	var calls int
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		body, _ := io.ReadAll(r.Body)
-		_ = json.Unmarshal(body, &captured)
+		calls++
 		_, _ = w.Write([]byte(`{"ok":true,"result":{"message_id":777,"chat":{"id":42,"type":"private"}}}`))
 	}))
 	defer server.Close()
 	root := t.TempDir()
-	service, err := daemon.New(config.Config{AllowedUserIDs: []int64{7}, Paths: config.Paths{
+	service, err := daemon.New(config.Config{AllowedUserIDs: []int64{7}, AFCGroupID: -1001, Paths: config.Paths{
 		Home: root, DataDir: filepath.Join(root, "data"), LogDir: filepath.Join(root, "logs"), DBPath: filepath.Join(root, "data", "state.sqlite"),
 	}})
 	if err != nil {
@@ -284,7 +330,7 @@ func TestBotUnsupportedMediaGetsExplicitReplyWithoutStartingCodex(t *testing.T) 
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if text, _ := captured["text"].(string); !strings.Contains(text, "Plain text messages only") {
-		t.Fatalf("reply=%#v", captured)
+	if calls != 0 {
+		t.Fatalf("Bot API calls = %d, want silent ignore", calls)
 	}
 }

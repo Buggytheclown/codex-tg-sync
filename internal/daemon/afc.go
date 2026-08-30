@@ -25,8 +25,8 @@ const (
 )
 
 // AFCForum is deliberately scoped to the configured AFC group. Its
-// implementation must not accept a chat id, so daemon code cannot accidentally
-// route AFC traffic into a legacy chat.
+// implementation does not accept a chat id, so every operation stays inside
+// that group.
 type AFCForum interface {
 	ValidateAFCGroup(ctx context.Context, allowedUserID int64) error
 	PrepareAFCControl(ctx context.Context) error
@@ -579,7 +579,7 @@ func (s *Service) deactivateAFC(ctx context.Context) (*DirectResponse, error) {
 			deleted++
 		}
 	}
-	return &DirectResponse{Text: fmt.Sprintf("AFC off: deleted %d topic(s), cleanup pending %d. Legacy observer and writer were not restored.", deleted, pending)}, nil
+	return &DirectResponse{Text: fmt.Sprintf("AFC off: deleted %d topic(s), cleanup pending %d.", deleted, pending)}, nil
 }
 
 func (s *Service) afcStatus(ctx context.Context) (*DirectResponse, error) {
@@ -685,7 +685,7 @@ func (s *Service) discoverAFCThreadsLocked(ctx context.Context, state model.AFCS
 	if cutoff.IsZero() {
 		return 0, 0, errors.New("AFC activation cutoff is unavailable")
 	}
-	result, err := poll.ThreadList(ctx, observerRecentThreadLimit, "")
+	result, err := poll.ThreadList(ctx, afcRecentThreadLimit, "")
 	if err != nil {
 		return 0, 0, fmt.Errorf("AFC discovery thread/list: %w", err)
 	}

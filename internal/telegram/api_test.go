@@ -78,6 +78,45 @@ func TestClientForumTopicOperations(t *testing.T) {
 	}
 }
 
+func TestClientScopesCommandsToExactAFCChat(t *testing.T) {
+	t.Parallel()
+
+	type requestRecord struct {
+		path string
+		body map[string]any
+	}
+	var requests []requestRecord
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		requests = append(requests, requestRecord{path: r.URL.Path, body: body})
+		_, _ = w.Write([]byte(`{"ok":true,"result":true}`))
+	}))
+	defer server.Close()
+
+	client := NewClient("token")
+	client.baseURL = server.URL
+	if err := client.DeleteMyCommands(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if err := client.SetMyCommandsForChat(context.Background(), -10042, []BotCommand{{Command: "sync", Description: "Sync"}}); err != nil {
+		t.Fatal(err)
+	}
+
+	if len(requests) != 2 {
+		t.Fatalf("requests = %#v", requests)
+	}
+	if requests[0].path != "/deleteMyCommands" || requests[0].body["scope"] != nil {
+		t.Fatalf("default command cleanup = %#v", requests[0])
+	}
+	scope, ok := requests[1].body["scope"].(map[string]any)
+	if requests[1].path != "/setMyCommands" || !ok || scope["type"] != "chat" || scope["chat_id"] != float64(-10042) {
+		t.Fatalf("AFC command scope = %#v", requests[1])
+	}
+}
+
 func TestClientProbeForumGroupAndValidateSecurity(t *testing.T) {
 	t.Parallel()
 

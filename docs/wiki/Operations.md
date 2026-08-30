@@ -7,12 +7,15 @@ ctr-go status
 ctr-go service status
 ```
 
-In Telegram:
+In Control:
 
 ```text
 /status
-/context
+/pollers
+/requests
 ```
+
+`/pollers` shows enabled state, current activity, last attempt/success, and consecutive failures. `/requests` shows active non-closed launch requests.
 
 ## Repair
 
@@ -20,31 +23,21 @@ In Telegram:
 ctr-go repair
 ```
 
-In Telegram:
+or in Control:
 
 ```text
 /repair
 ```
 
-Repair is non-destructive: it recreates the bridge's App Server poll session,
-rechecks pending approvals, and refreshes tracked thread snapshots. It does not
-restart `codex-tg`, start a missing managed App Server daemon, or change AFC
-on/off state.
+Repair recreates the bridge poll session and refreshes synchronization state. It does not restart `codex-tg`, start a missing managed App Server, delete Codex threads, or re-enable Sync.
 
-## Cron Requests
+## Cron requests
 
-Create `~/.codex-tg/cron.json` to enable daily or weekly scheduled launch requests. The
-daemon reloads it every 30 seconds, so normal edits do not require a restart.
-Use `launch_policy: telegram` for the existing `Dismiss` / `Start` approval
-flow, or `auto` for future auto-start requests. Invalid configuration creates
-no request; inspect the daemon log before correcting the file. An unchanged
-configuration error is logged once instead of every poll. Catch-up waits for
-four minutes of continuous runtime after startup or a sleep-sized gap. Set an
-optional positive duration such as `max_lateness: "2h"` to skip stale slots.
+Create `~/.codex-tg/cron.json` for daily or weekly requests. The daemon reloads it every 30 seconds. Use `launch_policy: telegram` for Start/Dismiss approval or `auto` for automatic start. Invalid configurations do not create requests and appear in logs/poller status.
 
-## Arcanum Review Requests
+## Arcanum review requests
 
-Enable assigned-review polling in the private config:
+Configure the authenticated `ya` binary, reviewer login, working directory, poll interval, and Requests topic:
 
 ```text
 CTR_GO_ARCANUM_REVIEW_ENABLED=true
@@ -55,23 +48,9 @@ CTR_GO_ARCANUM_REVIEW_CWD=/absolute/path/to/projects
 CTR_GO_EXTERNAL_REQUESTS_TOPIC_ID=<permanent-requests-topic-id>
 ```
 
-Sustained external poll failures and their recoveries are delivered to this
-same Requests topic. The existing health delivery queue retries failures and
-falls back to the General topic if Telegram reports that Requests no longer
-exists.
+Optional `CTR_GO_ARCANUM_REVIEW_AUTO_START_AUTHORS` is a comma-separated exact author allowlist. Matching new PRs get a visible request card and then auto-start; all others require Start.
 
-Use `command -v ya` in an interactive shell to resolve the absolute binary
-path before restarting the service. The configured login must already be able
-to run `ya tool gena-arcanum-cli --json pr search`. The first poll offers every
-currently assigned open PR to the durable request store; already-known ids are
-ignored and new ids appear once in Requests.
-
-On macOS, resolve symlinks as well. A `ya` link whose target is under
-`Documents` or another privacy-protected directory can be readable in an
-interactive terminal but blocked for a LaunchAgent. Put the bootstrap in a
-service-readable path such as `~/.codex-tg/bin/ya` when necessary.
-
-## macOS Service
+## macOS service
 
 ```powershell
 ctr-go service install --start --start-at-login
@@ -84,40 +63,12 @@ ctr-go service enable-login
 ctr-go service uninstall --keep-config
 ```
 
-The service is a user LaunchAgent. Its environment contains only
-`CTR_GO_CONFIG`; tokens and user ids stay in the local config file.
-Proxy variables needed for Telegram/Codex network access are also preserved in
-the private config and applied by `ctr-go` after startup, instead of being
-written directly into the LaunchAgent plist.
+The LaunchAgent receives `CTR_GO_CONFIG`; secrets and required proxy values remain in the private config file.
 
-## Restart Safety
+## Restart behavior
 
-In spawned mode, avoid forced bridge restarts while a Telegram-originated run
-is active. The bridge owns that App Server stdio session, so killing the bridge
-closes the transport and can make the turn appear `interrupted`.
+In shared App Server modes, restarting `codex-tg` does not interrupt the authoritative Codex turn. It resets Sync to off and cleans the previous Telegram session. Run `/sync on` after reconnect.
 
-In shared App Server AFC modes, Codex Desktop and `codex-tg` use the same
-managed-daemon Unix socket or standalone loopback WebSocket listener.
-Restarting only `codex-tg` does not interrupt the authoritative Codex turn, but
-it intentionally resets AFC to `off` and cleans the previous Telegram topics.
-Run `/sync on` after the bridge reconnects.
+In spawned mode, the bridge owns the App Server process. Avoid restarting while a bridge-owned turn is active.
 
-Until a safe restart command exists, prefer this order:
-
-1. Check the active run state in Telegram or with `go run ./cmd/ctr-go status`.
-2. Wait for the active Telegram-originated turn to finish.
-3. Rebuild or reinstall the binary.
-4. Restart the daemon with `ctr-go service restart` or the tray menu.
-
-Future restart work should implement a drain/guard path that refuses or delays restart while Telegram-origin turns are active. More invasive designs, such as a separate App Server broker process or reattaching to a turn after daemon death, require a separate ADR.
-
-## Common Issue
-
-Telegram `409 Conflict` means another process is polling the same bot token. Stop the other consumer before starting `codex-tg`.
-
-## Local Config
-
-`ctr-go init` and `ctr-go service install` write `~/.codex-tg/config.env` by
-default. Set `CTR_GO_CONFIG` to use another path. Environment variables override
-values from the config file, which lets LaunchAgent/systemd/manual deployments
-keep their existing overrides.
+A Telegram `409 Conflict` means another process is polling the bot token.

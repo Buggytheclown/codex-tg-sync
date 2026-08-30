@@ -5,7 +5,8 @@
 ## Defaults
 
 - Codex App Server runs locally over stdio.
-- Telegram access is restricted by allowed user/chat ids.
+- Telegram access is restricted to exactly one allowed user in one configured
+  private AFC forum group.
 - SQLite state stays on the operator machine.
 - `ctr-go init` stores local configuration in `~/.codex-tg/config.env` by default.
 - `ctr-go service install` creates a user LaunchAgent whose environment contains
@@ -53,6 +54,6 @@ Secrets stay in the local config file today. A future Keychain migration is
 allowed, but runtime docs and logs must continue to avoid printing secrets in
 full.
 
-Yandex Messenger text is untrusted launch input. It always requires the
-configured Telegram operator to press `Start`; source messages cannot directly
-invoke App Server or approve later Codex permission prompts.
+Yandex Messenger text is untrusted launch input. It follows the configured
+manual or automatic launch policy, but it cannot approve later Codex permission
+prompts and never bypasses sender authorization.

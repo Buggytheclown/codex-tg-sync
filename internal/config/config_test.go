@@ -217,7 +217,7 @@ func TestFromEnvDefaultsToSpawnedAppServer(t *testing.T) {
 func TestMarshalJSONIncludesPublicRuntimeConfig(t *testing.T) {
 	t.Parallel()
 
-	data, err := json.Marshal(Config{AppServerMode: "daemon", AppServerSocket: "/tmp/codex.sock", NotifyNewRun: true, ControlAPIListen: "127.0.0.1:8765", AFCGroupID: -100123, AFCInitialTopicLimit: 9})
+	data, err := json.Marshal(Config{AppServerMode: "daemon", AppServerSocket: "/tmp/codex.sock", SyncPollInterval: 7 * time.Second, ControlAPIListen: "127.0.0.1:8765", AFCGroupID: -100123, AFCInitialTopicLimit: 9})
 	if err != nil {
 		t.Fatalf("json.Marshal failed: %v", err)
 	}
@@ -225,8 +225,8 @@ func TestMarshalJSONIncludesPublicRuntimeConfig(t *testing.T) {
 	if err := json.Unmarshal(data, &got); err != nil {
 		t.Fatalf("json.Unmarshal failed: %v", err)
 	}
-	if got["notify_new_run"] != true {
-		t.Fatalf("notify_new_run = %#v, want true", got["notify_new_run"])
+	if got["sync_poll_seconds"] != float64(7) {
+		t.Fatalf("sync_poll_seconds = %#v, want 7", got["sync_poll_seconds"])
 	}
 	if got["control_api_listen"] != "127.0.0.1:8765" {
 		t.Fatalf("control_api_listen = %#v, want listen address", got["control_api_listen"])
@@ -262,7 +262,7 @@ func TestParseEnvFileSupportsCommentsAndQuotes(t *testing.T) {
 # comment
 CTR_GO_TELEGRAM_BOT_TOKEN="token with spaces"
 CTR_GO_ALLOWED_USER_IDS='123,456'
-CTR_GO_NOTIFY_NEW_RUN=off
+CTR_GO_AFC_GROUP_ID=-100123
 `), "test.env")
 	if err != nil {
 		t.Fatalf("ParseEnvFile failed: %v", err)
@@ -270,7 +270,7 @@ CTR_GO_NOTIFY_NEW_RUN=off
 	want := map[string]string{
 		"CTR_GO_TELEGRAM_BOT_TOKEN": "token with spaces",
 		"CTR_GO_ALLOWED_USER_IDS":   "123,456",
-		"CTR_GO_NOTIFY_NEW_RUN":     "off",
+		"CTR_GO_AFC_GROUP_ID":       "-100123",
 	}
 	if !reflect.DeepEqual(values, want) {
 		t.Fatalf("values = %#v, want %#v", values, want)
@@ -298,10 +298,10 @@ func TestLoadReadsConfigFileAndEnvOverridesIt(t *testing.T) {
 	if err := os.WriteFile(configPath, []byte(strings.Join([]string{
 		`CTR_GO_HOME="` + home + `"`,
 		`CTR_GO_TELEGRAM_BOT_TOKEN="file-token"`,
-		`CTR_GO_ALLOWED_USER_IDS="101 202"`,
+		`CTR_GO_ALLOWED_USER_IDS="101"`,
+		`CTR_GO_AFC_GROUP_ID="-100123"`,
 		`CTR_GO_DEFAULT_CWD="` + fileDefaultCWD + `"`,
 		`CTR_GO_CONTROL_API_LISTEN="127.0.0.1:9876"`,
-		`CTR_GO_NOTIFY_NEW_RUN="off"`,
 		"",
 	}, "\n")), 0o600); err != nil {
 		t.Fatalf("WriteFile failed: %v", err)
@@ -316,8 +316,8 @@ func TestLoadReadsConfigFileAndEnvOverridesIt(t *testing.T) {
 	if cfg.TelegramBotToken != "file-token" {
 		t.Fatalf("TelegramBotToken = %q, want file-token", cfg.TelegramBotToken)
 	}
-	if !reflect.DeepEqual(cfg.AllowedUserIDs, []int64{101, 202}) {
-		t.Fatalf("AllowedUserIDs = %#v, want 101,202", cfg.AllowedUserIDs)
+	if !reflect.DeepEqual(cfg.AllowedUserIDs, []int64{101}) {
+		t.Fatalf("AllowedUserIDs = %#v, want 101", cfg.AllowedUserIDs)
 	}
 	if cfg.DefaultCWD != envDefaultCWD {
 		t.Fatalf("DefaultCWD = %q, want env override %q", cfg.DefaultCWD, envDefaultCWD)
@@ -325,11 +325,32 @@ func TestLoadReadsConfigFileAndEnvOverridesIt(t *testing.T) {
 	if cfg.Paths.Home != home {
 		t.Fatalf("Home = %q, want %q", cfg.Paths.Home, home)
 	}
-	if cfg.NotifyNewRun {
-		t.Fatal("NotifyNewRun = true, want false from config file")
-	}
 	if cfg.ControlAPIListen != "127.0.0.1:9876" {
 		t.Fatalf("ControlAPIListen = %q, want configured listen", cfg.ControlAPIListen)
+	}
+}
+
+func TestValidateTelegramSurfaceRequiresGroupAndExactlyOneUser(t *testing.T) {
+	tests := []struct {
+		name string
+		cfg  Config
+		ok   bool
+	}{
+		{"valid", Config{AFCGroupID: -1001, AllowedUserIDs: []int64{42}}, true},
+		{"missing group", Config{AllowedUserIDs: []int64{42}}, false},
+		{"positive group", Config{AFCGroupID: 1001, AllowedUserIDs: []int64{42}}, false},
+		{"missing user", Config{AFCGroupID: -1001}, false},
+		{"zero user", Config{AFCGroupID: -1001, AllowedUserIDs: []int64{0}}, false},
+		{"negative user", Config{AFCGroupID: -1001, AllowedUserIDs: []int64{-42}}, false},
+		{"multiple users", Config{AFCGroupID: -1001, AllowedUserIDs: []int64{42, 43}}, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.cfg.ValidateTelegramSurface()
+			if (err == nil) != tt.ok {
+				t.Fatalf("ValidateTelegramSurface() error=%v, ok=%v", err, tt.ok)
+			}
+		})
 	}
 }
 

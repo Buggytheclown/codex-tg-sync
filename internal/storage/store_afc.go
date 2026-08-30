@@ -447,13 +447,6 @@ func (s *Store) FinishAFCActivation(ctx context.Context, sessionID, summaryJSON 
 	if changed != 1 {
 		return errors.New("afc activation generation is stale")
 	}
-	if active {
-		now := string(model.NowString())
-		if _, err := tx.ExecContext(ctx, `INSERT INTO daemon_state(key,value,updated_at) VALUES ('observer.global_enabled','false',?)
-			ON CONFLICT(key) DO UPDATE SET value='false', updated_at=excluded.updated_at`, now); err != nil {
-			return err
-		}
-	}
 	return tx.Commit()
 }
 

@@ -88,37 +88,6 @@ func (s *Store) initialize(ctx context.Context) error {
 		updated_at TEXT NOT NULL
 	);
 
-	CREATE TABLE IF NOT EXISTS thread_bindings (
-		chat_key TEXT PRIMARY KEY,
-		chat_id INTEGER NOT NULL,
-		topic_id INTEGER NOT NULL,
-		thread_id TEXT NOT NULL,
-		mode TEXT NOT NULL,
-		created_at TEXT NOT NULL,
-		updated_at TEXT NOT NULL
-	);
-
-	CREATE TABLE IF NOT EXISTS observer_targets (
-		chat_key TEXT PRIMARY KEY,
-		chat_id INTEGER NOT NULL,
-		topic_id INTEGER NOT NULL,
-		enabled INTEGER NOT NULL,
-		created_at TEXT NOT NULL,
-		updated_at TEXT NOT NULL
-	);
-
-	CREATE TABLE IF NOT EXISTS telegram_message_routes (
-		chat_id INTEGER NOT NULL,
-		topic_id INTEGER NOT NULL,
-		message_id INTEGER NOT NULL,
-		thread_id TEXT NOT NULL,
-		turn_id TEXT,
-		item_id TEXT,
-		event_id TEXT,
-		created_at TEXT NOT NULL,
-		PRIMARY KEY(chat_id, topic_id, message_id)
-	);
-
 	CREATE TABLE IF NOT EXISTS callback_routes (
 		route_token TEXT PRIMARY KEY,
 		action TEXT NOT NULL,
@@ -130,19 +99,6 @@ func (s *Store) initialize(ctx context.Context) error {
 		expires_at TEXT,
 		payload_json TEXT NOT NULL,
 		created_at TEXT NOT NULL
-	);
-
-	CREATE TABLE IF NOT EXISTS pending_approvals (
-		request_id TEXT PRIMARY KEY,
-		thread_id TEXT NOT NULL,
-		turn_id TEXT,
-		item_id TEXT,
-		prompt_kind TEXT NOT NULL,
-		question TEXT,
-		status TEXT NOT NULL,
-		telegram_message_id INTEGER,
-		payload_json TEXT NOT NULL,
-		updated_at TEXT NOT NULL
 	);
 
 	CREATE TABLE IF NOT EXISTS delivery_queue (
@@ -285,57 +241,10 @@ func (s *Store) initialize(ctx context.Context) error {
 		PRIMARY KEY(chat_id, topic_id, message_id)
 	);
 
-	CREATE TABLE IF NOT EXISTS thread_panels (
-		id INTEGER PRIMARY KEY AUTOINCREMENT,
-		chat_id INTEGER NOT NULL,
-		topic_id INTEGER NOT NULL,
-		project_name TEXT NOT NULL,
-		thread_id TEXT NOT NULL,
-		source_mode TEXT NOT NULL DEFAULT 'explicit',
-		summary_message_id INTEGER NOT NULL DEFAULT 0,
-		tool_message_id INTEGER NOT NULL DEFAULT 0,
-		output_message_id INTEGER NOT NULL DEFAULT 0,
-		current_turn_id TEXT,
-		status TEXT,
-		archive_enabled INTEGER NOT NULL DEFAULT 1,
-		last_summary_hash TEXT,
-		last_tool_hash TEXT,
-		last_output_hash TEXT,
-		last_final_notice_fp TEXT,
-		run_notice_message_id INTEGER NOT NULL DEFAULT 0,
-		last_run_notice_fp TEXT,
-		user_message_id INTEGER NOT NULL DEFAULT 0,
-		last_user_notice_fp TEXT,
-		plan_prompt_message_id INTEGER NOT NULL DEFAULT 0,
-		last_plan_prompt_fp TEXT,
-		details_view_json TEXT,
-		last_final_card_hash TEXT,
-		is_current INTEGER NOT NULL DEFAULT 1,
-		created_at TEXT NOT NULL,
-		updated_at TEXT NOT NULL
-	);
-
-	CREATE TABLE IF NOT EXISTS chat_steer_state (
-		chat_key TEXT PRIMARY KEY,
-		chat_id INTEGER NOT NULL,
-		topic_id INTEGER NOT NULL,
-		thread_id TEXT NOT NULL,
-		turn_id TEXT,
-		panel_id INTEGER NOT NULL DEFAULT 0,
-		expires_at TEXT NOT NULL,
-		created_at TEXT NOT NULL,
-		updated_at TEXT NOT NULL
-	);
-
 	CREATE INDEX IF NOT EXISTS idx_threads_updated_at ON threads(updated_at DESC);
 	CREATE INDEX IF NOT EXISTS idx_threads_project_updated_at ON threads(project_name, updated_at DESC);
-	CREATE INDEX IF NOT EXISTS idx_bindings_thread_id ON thread_bindings(thread_id);
-	CREATE INDEX IF NOT EXISTS idx_observer_targets_enabled_updated_at ON observer_targets(enabled, updated_at DESC);
 	CREATE INDEX IF NOT EXISTS idx_delivery_queue_status_available_at ON delivery_queue(status, available_at);
-	CREATE INDEX IF NOT EXISTS idx_pending_approvals_status_updated_at ON pending_approvals(status, updated_at DESC);
 	CREATE INDEX IF NOT EXISTS idx_external_launch_status_updated_at ON external_launch_requests(status, updated_at);
-	CREATE INDEX IF NOT EXISTS idx_thread_panels_thread_current ON thread_panels(chat_id, topic_id, thread_id, is_current, updated_at DESC);
-	CREATE INDEX IF NOT EXISTS idx_chat_steer_expires_at ON chat_steer_state(expires_at);
 	CREATE INDEX IF NOT EXISTS idx_afc_topics_session_state ON afc_topics(session_id, telegram_state, rank);
 	CREATE INDEX IF NOT EXISTS idx_afc_topic_drafts_session_state ON afc_topic_drafts(session_id, state, rank);
 	CREATE INDEX IF NOT EXISTS idx_afc_receipts_session_thread ON afc_message_receipts(session_id, thread_id, updated_at);
@@ -343,41 +252,12 @@ func (s *Store) initialize(ctx context.Context) error {
 	if _, err := s.db.ExecContext(ctx, schema); err != nil {
 		return err
 	}
-	// This legacy cache captured every top-level Messenger message observed by
+	// This obsolete cache captured every top-level Messenger message observed by
 	// the robot. Thread roots are now fetched on demand from History API.
 	if _, err := s.db.ExecContext(ctx, `DROP TABLE IF EXISTS external_source_messages`); err != nil {
 		return err
 	}
-	if err := s.ensureColumn(ctx, "thread_panels", "source_mode", `ALTER TABLE thread_panels ADD COLUMN source_mode TEXT NOT NULL DEFAULT 'explicit'`); err != nil {
-		return err
-	}
-	if err := s.ensureColumn(ctx, "thread_panels", "last_final_notice_fp", `ALTER TABLE thread_panels ADD COLUMN last_final_notice_fp TEXT`); err != nil {
-		return err
-	}
-	if err := s.ensureColumn(ctx, "thread_panels", "run_notice_message_id", `ALTER TABLE thread_panels ADD COLUMN run_notice_message_id INTEGER NOT NULL DEFAULT 0`); err != nil {
-		return err
-	}
-	if err := s.ensureColumn(ctx, "thread_panels", "last_run_notice_fp", `ALTER TABLE thread_panels ADD COLUMN last_run_notice_fp TEXT`); err != nil {
-		return err
-	}
-	if err := s.ensureColumn(ctx, "thread_panels", "user_message_id", `ALTER TABLE thread_panels ADD COLUMN user_message_id INTEGER NOT NULL DEFAULT 0`); err != nil {
-		return err
-	}
-	if err := s.ensureColumn(ctx, "thread_panels", "last_user_notice_fp", `ALTER TABLE thread_panels ADD COLUMN last_user_notice_fp TEXT`); err != nil {
-		return err
-	}
-	if err := s.ensureColumn(ctx, "thread_panels", "plan_prompt_message_id", `ALTER TABLE thread_panels ADD COLUMN plan_prompt_message_id INTEGER NOT NULL DEFAULT 0`); err != nil {
-		return err
-	}
-	if err := s.ensureColumn(ctx, "thread_panels", "last_plan_prompt_fp", `ALTER TABLE thread_panels ADD COLUMN last_plan_prompt_fp TEXT`); err != nil {
-		return err
-	}
-	if err := s.ensureColumn(ctx, "thread_panels", "details_view_json", `ALTER TABLE thread_panels ADD COLUMN details_view_json TEXT`); err != nil {
-		return err
-	}
-	if err := s.ensureColumn(ctx, "thread_panels", "last_final_card_hash", `ALTER TABLE thread_panels ADD COLUMN last_final_card_hash TEXT`); err != nil {
-		return err
-	}
+
 	if err := s.ensureColumn(ctx, "afc_topics", "active_turn_id", `ALTER TABLE afc_topics ADD COLUMN active_turn_id TEXT`); err != nil {
 		return err
 	}
@@ -661,124 +541,6 @@ func (s *Store) MarkLiveEvent(ctx context.Context, threadID string, when model.T
 	return s.UpsertSnapshot(ctx, threadID, *snapshot)
 }
 
-func (s *Store) SetBinding(ctx context.Context, chatID, topicID int64, threadID, mode string) error {
-	now := string(model.NowString())
-	chatKey := model.ChatKey(chatID, topicID)
-	_, err := s.db.ExecContext(ctx, `
-	INSERT INTO thread_bindings(chat_key, chat_id, topic_id, thread_id, mode, created_at, updated_at)
-	VALUES (?, ?, ?, ?, ?, ?, ?)
-	ON CONFLICT(chat_key) DO UPDATE SET thread_id = excluded.thread_id, mode = excluded.mode, updated_at = excluded.updated_at`,
-		chatKey, chatID, topicID, threadID, mode, now, now,
-	)
-	return err
-}
-
-func (s *Store) ClearBinding(ctx context.Context, chatID, topicID int64) error {
-	_, err := s.db.ExecContext(ctx, `DELETE FROM thread_bindings WHERE chat_key = ?`, model.ChatKey(chatID, topicID))
-	return err
-}
-
-func (s *Store) GetBinding(ctx context.Context, chatID, topicID int64) (*model.ThreadBinding, error) {
-	row := s.db.QueryRowContext(ctx, `
-	SELECT chat_key, chat_id, topic_id, thread_id, mode, created_at, updated_at
-	FROM thread_bindings WHERE chat_key = ?`, model.ChatKey(chatID, topicID))
-	var binding model.ThreadBinding
-	err := row.Scan(&binding.ChatKey, &binding.ChatID, &binding.TopicID, &binding.ThreadID, &binding.Mode, &binding.CreatedAt, &binding.UpdatedAt)
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-	return &binding, nil
-}
-
-func (s *Store) ListBoundThreadIDs(ctx context.Context) ([]string, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT DISTINCT thread_id FROM thread_bindings ORDER BY updated_at DESC`)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	out := []string{}
-	for rows.Next() {
-		var threadID string
-		if err := rows.Scan(&threadID); err != nil {
-			return nil, err
-		}
-		out = append(out, threadID)
-	}
-	return out, rows.Err()
-}
-
-func (s *Store) SetObserverTarget(ctx context.Context, chatID, topicID int64, enabled bool) error {
-	now := string(model.NowString())
-	chatKey := model.ChatKey(chatID, topicID)
-	_, err := s.db.ExecContext(ctx, `
-	INSERT INTO observer_targets(chat_key, chat_id, topic_id, enabled, created_at, updated_at)
-	VALUES (?, ?, ?, ?, ?, ?)
-	ON CONFLICT(chat_key) DO UPDATE SET enabled = excluded.enabled, updated_at = excluded.updated_at`,
-		chatKey, chatID, topicID, boolToInt(enabled), now, now,
-	)
-	return err
-}
-
-func (s *Store) IsObserverTarget(ctx context.Context, chatID, topicID int64) (bool, error) {
-	row := s.db.QueryRowContext(ctx, `SELECT enabled FROM observer_targets WHERE chat_key = ?`, model.ChatKey(chatID, topicID))
-	var enabled int
-	err := row.Scan(&enabled)
-	if errors.Is(err, sql.ErrNoRows) {
-		return false, nil
-	}
-	return enabled == 1, err
-}
-
-func (s *Store) ListObserverTargets(ctx context.Context) ([]model.ObserverTarget, error) {
-	rows, err := s.db.QueryContext(ctx, `
-	SELECT chat_key, chat_id, topic_id, enabled, created_at, updated_at
-	FROM observer_targets WHERE enabled = 1 ORDER BY updated_at`)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	out := []model.ObserverTarget{}
-	for rows.Next() {
-		var target model.ObserverTarget
-		var enabled int
-		if err := rows.Scan(&target.ChatKey, &target.ChatID, &target.TopicID, &enabled, &target.CreatedAt, &target.UpdatedAt); err != nil {
-			return nil, err
-		}
-		target.Enabled = enabled == 1
-		out = append(out, target)
-	}
-	return out, rows.Err()
-}
-
-func (s *Store) PutMessageRoute(ctx context.Context, route model.MessageRoute) error {
-	_, err := s.db.ExecContext(ctx, `
-	INSERT OR REPLACE INTO telegram_message_routes(chat_id, topic_id, message_id, thread_id, turn_id, item_id, event_id, created_at)
-	VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-		route.ChatID, route.TopicID, route.MessageID, route.ThreadID, nullable(route.TurnID), nullable(route.ItemID), nullable(route.EventID), route.CreatedAt,
-	)
-	return err
-}
-
-func (s *Store) ResolveMessageRoute(ctx context.Context, chatID, topicID, messageID int64) (*model.MessageRoute, error) {
-	row := s.db.QueryRowContext(ctx, `
-	SELECT chat_id, topic_id, message_id, thread_id, coalesce(turn_id, ''), coalesce(item_id, ''), coalesce(event_id, ''), created_at
-	FROM telegram_message_routes WHERE chat_id = ? AND topic_id = ? AND message_id = ?`,
-		chatID, topicID, messageID,
-	)
-	var route model.MessageRoute
-	err := row.Scan(&route.ChatID, &route.TopicID, &route.MessageID, &route.ThreadID, &route.TurnID, &route.ItemID, &route.EventID, &route.CreatedAt)
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-	return &route, nil
-}
-
 func (s *Store) PutCallbackRoute(ctx context.Context, route model.CallbackRoute) error {
 	_, err := s.db.ExecContext(ctx, `
 	INSERT OR REPLACE INTO callback_routes(route_token, action, thread_id, turn_id, request_id, telegram_message_id, status, expires_at, payload_json, created_at)
@@ -818,49 +580,6 @@ func (s *Store) ExpireAFCCallbackRoutesByRequest(ctx context.Context, requestID 
 	_, err := s.db.ExecContext(ctx, `UPDATE callback_routes SET status=? WHERE action LIKE 'afc_%' AND request_id=?`,
 		model.CallbackStatusExpired, requestID)
 	return err
-}
-
-func (s *Store) SavePendingApproval(ctx context.Context, approval model.PendingApproval) error {
-	_, err := s.db.ExecContext(ctx, `
-	INSERT INTO pending_approvals(request_id, thread_id, turn_id, item_id, prompt_kind, question, status, telegram_message_id, payload_json, updated_at)
-	VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-	ON CONFLICT(request_id) DO UPDATE SET
-		status = excluded.status,
-		telegram_message_id = excluded.telegram_message_id,
-		payload_json = excluded.payload_json,
-		updated_at = excluded.updated_at`,
-		approval.RequestID, approval.ThreadID, nullable(approval.TurnID), nullable(approval.ItemID), approval.PromptKind, nullable(approval.Question), approval.Status,
-		approval.TelegramMessageID, approval.PayloadJSON, approval.UpdatedAt,
-	)
-	return err
-}
-
-func (s *Store) GetPendingApproval(ctx context.Context, requestID string) (*model.PendingApproval, error) {
-	row := s.db.QueryRowContext(ctx, `
-	SELECT request_id, thread_id, coalesce(turn_id,''), coalesce(item_id,''), prompt_kind, coalesce(question,''), status, coalesce(telegram_message_id,0), payload_json, updated_at
-	FROM pending_approvals WHERE request_id = ?`, requestID)
-	var approval model.PendingApproval
-	err := row.Scan(&approval.RequestID, &approval.ThreadID, &approval.TurnID, &approval.ItemID, &approval.PromptKind, &approval.Question, &approval.Status, &approval.TelegramMessageID, &approval.PayloadJSON, &approval.UpdatedAt)
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-	return &approval, nil
-}
-
-func (s *Store) UpdatePendingApprovalStatus(ctx context.Context, requestID, status string) error {
-	_, err := s.db.ExecContext(ctx, `UPDATE pending_approvals SET status = ?, updated_at = ? WHERE request_id = ?`, status, string(model.NowString()), requestID)
-	return err
-}
-
-func (s *Store) MarkAllPendingApprovals(ctx context.Context, status string) (int64, error) {
-	result, err := s.db.ExecContext(ctx, `UPDATE pending_approvals SET status = ?, updated_at = ? WHERE status = 'pending'`, status, string(model.NowString()))
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected()
 }
 
 func (s *Store) EnqueueDelivery(ctx context.Context, item model.DeliveryQueueItem) error {
@@ -931,6 +650,25 @@ func (s *Store) CompleteDelivery(ctx context.Context, queueID int64) error {
 func (s *Store) SupersedeDelivery(ctx context.Context, queueID int64) error {
 	_, err := s.db.ExecContext(ctx, `UPDATE delivery_queue SET status = ?, updated_at = ? WHERE id = ?`, model.DeliveryStatusSuperseded, string(model.NowString()), queueID)
 	return err
+}
+
+func (s *Store) RetireUnsupportedTelegramDeliveries(ctx context.Context, afcGroupID int64) (int64, error) {
+	result, err := s.db.ExecContext(ctx, `
+	UPDATE delivery_queue
+	SET status = ?, updated_at = ?
+	WHERE status IN (?, ?, ?)
+	  AND (chat_id <> ? OR kind NOT IN ('health', 'external_terminal'))`,
+		model.DeliveryStatusSuperseded,
+		string(model.NowString()),
+		model.DeliveryStatusPending,
+		model.DeliveryStatusRetry,
+		model.DeliveryStatusProcessing,
+		afcGroupID,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }
 
 func (s *Store) DeliveryStatusForEvent(ctx context.Context, eventID, chatKey string) (string, error) {
@@ -1017,31 +755,6 @@ func (s *Store) ListState(ctx context.Context) (map[string]string, error) {
 		out[key] = value
 	}
 	return out, rows.Err()
-}
-
-func (s *Store) GetChatContext(ctx context.Context, chatID, topicID int64) (*model.ChatContext, error) {
-	binding, err := s.GetBinding(ctx, chatID, topicID)
-	if err != nil {
-		return nil, err
-	}
-	globalTarget, _, err := s.GetGlobalObserverTarget(ctx)
-	if err != nil {
-		return nil, err
-	}
-	observerEnabled := globalTarget != nil && globalTarget.ChatID == chatID && globalTarget.TopicID == topicID
-	contextState := &model.ChatContext{Mode: "unbound", Binding: binding, ObserverEnabled: observerEnabled, ObserverTarget: globalTarget}
-	if observerEnabled {
-		contextState.Mode = model.BindingModeObserver
-	}
-	if binding != nil {
-		contextState.Mode = binding.Mode
-		thread, err := s.GetThread(ctx, binding.ThreadID)
-		if err != nil {
-			return nil, err
-		}
-		contextState.Thread = thread
-	}
-	return contextState, nil
 }
 
 func scanThread(scanner interface{ Scan(...any) error }) (*model.Thread, error) {

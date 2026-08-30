@@ -59,11 +59,10 @@ func TestRunInitWritesPrivateConfigAndRefusesOverwrite(t *testing.T) {
 	input := strings.Join([]string{
 		token,
 		"42",
-		"",
+		"-1001",
 		filepath.Join(dir, "project"),
 		filepath.Join(dir, "chats"),
 		"codex",
-		"false",
 		"",
 	}, "\n")
 	var out bytes.Buffer
@@ -82,8 +81,8 @@ func TestRunInitWritesPrivateConfigAndRefusesOverwrite(t *testing.T) {
 	for _, want := range []string{
 		`CTR_GO_TELEGRAM_BOT_TOKEN="` + token + `"`,
 		`CTR_GO_ALLOWED_USER_IDS="42"`,
+		`CTR_GO_AFC_GROUP_ID="-1001"`,
 		`CTR_GO_CODEX_BIN="codex"`,
-		`CTR_GO_NOTIFY_NEW_RUN="false"`,
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("config file missing %q:\n%s", want, text)
@@ -113,11 +112,10 @@ func TestRunInitForceOverwritesConfig(t *testing.T) {
 	input := strings.Join([]string{
 		"token",
 		"42",
-		"",
+		"-1001",
 		filepath.Join(dir, "project"),
 		filepath.Join(dir, "chats"),
 		"codex",
-		"true",
 		"",
 	}, "\n")
 

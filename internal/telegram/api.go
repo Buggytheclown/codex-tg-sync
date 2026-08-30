@@ -162,6 +162,11 @@ type BotCommand struct {
 	Description string `json:"description"`
 }
 
+type botCommandScope struct {
+	Type   string `json:"type"`
+	ChatID int64  `json:"chat_id,omitempty"`
+}
+
 type InlineKeyboardButton struct {
 	Text         string `json:"text"`
 	CallbackData string `json:"callback_data,omitempty"`
@@ -212,7 +217,12 @@ type getUpdatesRequest struct {
 }
 
 type setMyCommandsRequest struct {
-	Commands []BotCommand `json:"commands"`
+	Commands []BotCommand     `json:"commands"`
+	Scope    *botCommandScope `json:"scope,omitempty"`
+}
+
+type deleteMyCommandsRequest struct {
+	Scope *botCommandScope `json:"scope,omitempty"`
 }
 
 type answerCallbackQueryRequest struct {
@@ -357,8 +367,15 @@ func (c *Client) DeleteForumTopic(ctx context.Context, chatID, topicID int64) er
 	return c.callJSON(ctx, "deleteForumTopic", forumTopicRequest{ChatID: chatID, MessageThreadID: topicID}, nil)
 }
 
-func (c *Client) SetMyCommands(ctx context.Context, commands []BotCommand) error {
-	return c.callJSON(ctx, "setMyCommands", setMyCommandsRequest{Commands: commands}, nil)
+func (c *Client) SetMyCommandsForChat(ctx context.Context, chatID int64, commands []BotCommand) error {
+	return c.callJSON(ctx, "setMyCommands", setMyCommandsRequest{
+		Commands: commands,
+		Scope:    &botCommandScope{Type: "chat", ChatID: chatID},
+	}, nil)
+}
+
+func (c *Client) DeleteMyCommands(ctx context.Context) error {
+	return c.callJSON(ctx, "deleteMyCommands", deleteMyCommandsRequest{}, nil)
 }
 
 func (c *Client) GetUpdates(ctx context.Context, offset int64, timeoutSeconds int) ([]Update, error) {

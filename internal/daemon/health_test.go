@@ -189,10 +189,11 @@ func TestStatusShowsHeartbeatDeadLettersAndOpenHealthIncidents(t *testing.T) {
 		t.Fatalf("FailDelivery(dead) failed: %v", err)
 	}
 
-	status, err := service.StatusSnapshot(ctx, -1001, 0)
-	if err != nil {
-		t.Fatalf("StatusSnapshot failed: %v", err)
+	response, err := service.HandleMessageWithID(ctx, -1001, 1, 1, 123456789, "/status", 0)
+	if err != nil || response == nil {
+		t.Fatalf("status response=%#v err=%v", response, err)
 	}
+	status := response.Text
 	for _, want := range []string{
 		"Dead deliveries: 1",
 		"App-server heartbeat:",
@@ -229,7 +230,7 @@ func TestPollersCommandShowsDurableHealthyFailingStaleAndDisabledState(t *testin
 		t.Fatal(err)
 	}
 
-	response, err := service.handleCommand(ctx, 123456789, 0, "/pollers", 0)
+	response, err := service.HandleMessageWithID(ctx, -1001, 1, 1, 123456789, "/pollers", 0)
 	if err != nil || response == nil {
 		t.Fatalf("pollers response=%#v err=%v", response, err)
 	}

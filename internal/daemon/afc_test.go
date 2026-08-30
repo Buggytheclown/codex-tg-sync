@@ -137,10 +137,6 @@ func TestAFCPartialActivationOwnsGroupAndDisablesLegacyObserver(t *testing.T) {
 	forum := &fakeAFCForum{nextTopicID: 10, createErrAt: 2}
 	service.SetAFCForum(forum)
 	ctx := context.Background()
-	if err := service.store.SetGlobalObserverTarget(ctx, 99, 0, true); err != nil {
-		t.Fatal(err)
-	}
-
 	response, err := service.HandleMessage(ctx, -1001, 1, 123456789, "/sync on", 0)
 	if err != nil {
 		t.Fatal(err)
@@ -161,15 +157,8 @@ func TestAFCPartialActivationOwnsGroupAndDisablesLegacyObserver(t *testing.T) {
 	if state.State != model.AFCStateActive {
 		t.Fatalf("state = %#v", state)
 	}
-	observer, _ := service.store.GetState(ctx, "observer.global_enabled")
-	if observer != "false" {
-		t.Fatalf("observer = %q", observer)
-	}
 	if poll.threadResumeCalls != nil || poll.turnStartCalls != nil {
 		t.Fatalf("passive activation mutated app-server: %#v %#v", poll.threadResumeCalls, poll.turnStartCalls)
-	}
-	if service.legacyWriter.Snapshot().State != "stopped" {
-		t.Fatalf("legacy writer = %#v", service.legacyWriter.Snapshot())
 	}
 }
 
@@ -315,16 +304,13 @@ func TestAFCUnknownTopicAndCallbacksFailClosed(t *testing.T) {
 	}
 }
 
-func TestAFCZeroTopicActivationLeavesObserverEnabled(t *testing.T) {
+func TestAFCZeroTopicActivationReturnsToOff(t *testing.T) {
 	service := newTestService(t)
 	service.cfg.AFCGroupID = -1001
 	service.poll = &stubSession{threadListResult: map[string]any{"data": []any{map[string]any{"id": "thread-1", "title": "One", "updatedAt": float64(10)}}}}
 	service.pollConnected = true
 	service.SetAFCForum(&fakeAFCForum{createErrAt: 1})
 	ctx := context.Background()
-	if err := service.store.SetGlobalObserverTarget(ctx, 99, 0, true); err != nil {
-		t.Fatal(err)
-	}
 	response, err := service.HandleMessage(ctx, -1001, 1, 123456789, "/sync on", 0)
 	if err != nil || response == nil || !strings.Contains(response.Text, "active: 0") {
 		t.Fatalf("response=%#v err=%v", response, err)
@@ -332,10 +318,6 @@ func TestAFCZeroTopicActivationLeavesObserverEnabled(t *testing.T) {
 	state, _ := service.store.GetAFCState(ctx)
 	if state.State != model.AFCStateOff {
 		t.Fatalf("state=%#v", state)
-	}
-	observer, _ := service.store.GetState(ctx, "observer.global_enabled")
-	if observer != "true" {
-		t.Fatalf("observer=%q, want unchanged", observer)
 	}
 }
 
@@ -1239,13 +1221,6 @@ func TestAFCOffMarksOffBeforeCleanupAndDoesNotRestoreLegacy(t *testing.T) {
 	if len(forum.deletes) != 1 {
 		t.Fatalf("deletes=%v", forum.deletes)
 	}
-	observer, _ := service.store.GetState(ctx, "observer.global_enabled")
-	if observer != "false" {
-		t.Fatalf("observer restored: %q", observer)
-	}
-	if service.legacyWriter.Snapshot().State != "stopped" {
-		t.Fatalf("legacy writer restarted: %#v", service.legacyWriter.Snapshot())
-	}
 }
 
 func TestAFCOffCleansReadyDraftTopic(t *testing.T) {
@@ -1349,86 +1324,6 @@ func TestAFCConcurrentTopicsShareWriterAndDuplicateDoesNotReplay(t *testing.T) {
 	snapshot := service.afcWriter.Snapshot()
 	if snapshot.Active != 2 || snapshot.Generation == 0 {
 		t.Fatalf("writer snapshot=%#v", snapshot)
-	}
-}
-
-func TestAFCLegacyClaimConflictRejectsBeforeMutation(t *testing.T) {
-	service := activeAFCService(t)
-	legacy := &stubSession{}
-	service.liveFactory = func() Session { return legacy }
-	lease, err := service.legacyWriter.Reserve(context.Background(), "thread-1")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := service.legacyWriter.MarkActive(lease); err != nil {
-		t.Fatal(err)
-	}
-	response, err := service.HandleMessageWithID(context.Background(), -1001, 11, 501, 123456789, "blocked", 0)
-	if err != nil || response == nil || !strings.Contains(response.Text, "owned by legacy") {
-		t.Fatalf("response=%#v err=%v", response, err)
-	}
-	if len(legacy.threadResumeCalls) != 0 || len(legacy.turnStartCalls) != 0 {
-		t.Fatalf("mutation occurred: %#v %#v", legacy.threadResumeCalls, legacy.turnStartCalls)
-	}
-	if err := service.legacyWriter.MarkTerminal(lease); err != nil {
-		t.Fatal(err)
-	}
-}
-
-func TestAFCOwnershipBlocksLaterLegacyLaunchBeforeMutation(t *testing.T) {
-	service := activeAFCService(t)
-	writer := &stubSession{}
-	service.liveFactory = func() Session { return writer }
-	ctx := context.Background()
-	if _, err := service.HandleMessageWithID(ctx, -1001, 11, 501, 123456789, "AFC owns this", 0); err != nil {
-		t.Fatal(err)
-	}
-	beforeResume, beforeStart := len(writer.threadResumeCalls), len(writer.turnStartCalls)
-	if _, err := service.sendInputToThreadTurn(ctx, 123456789, 0, "thread-1", "", "legacy must fail", ""); !errors.Is(err, appserver.ErrThreadClaimed) {
-		t.Fatalf("legacy error=%v, want ErrThreadClaimed", err)
-	}
-	if len(writer.threadResumeCalls) != beforeResume || len(writer.turnStartCalls) != beforeStart {
-		t.Fatalf("legacy mutated AFC process: resume=%#v starts=%#v", writer.threadResumeCalls, writer.turnStartCalls)
-	}
-}
-
-func TestAFCActiveBlocksLegacyDMBeforeAppServerAndOffKeepsLegacyLazy(t *testing.T) {
-	service := activeAFCService(t)
-	ctx := context.Background()
-	if err := service.store.SetBinding(ctx, 123456789, 0, "thread-1", model.BindingModeBound); err != nil {
-		t.Fatal(err)
-	}
-	legacy := &stubSession{}
-	service.liveFactory = func() Session { return legacy }
-
-	blocked, err := service.HandleMessageWithID(ctx, 123456789, 0, 801, 123456789, "legacy prompt", 0)
-	if err != nil || blocked == nil || !strings.Contains(blocked.Text, "AFC active") {
-		t.Fatalf("blocked=%#v err=%v", blocked, err)
-	}
-	if legacy.startCalls != 0 || len(legacy.threadResumeCalls) != 0 || len(legacy.turnStartCalls) != 0 {
-		t.Fatalf("legacy App Server was touched: start=%d resume=%#v turn=%#v", legacy.startCalls, legacy.threadResumeCalls, legacy.turnStartCalls)
-	}
-	help, err := service.HandleMessageWithID(ctx, 123456789, 0, 802, 123456789, "/help", 0)
-	if err != nil || help == nil || !strings.Contains(help.Text, "Commands:") {
-		t.Fatalf("help=%#v err=%v", help, err)
-	}
-	status, err := service.HandleMessageWithID(ctx, 123456789, 0, 803, 123456789, "/status", 0)
-	if err != nil || status == nil || !strings.Contains(status.Text, "Go core status") {
-		t.Fatalf("status=%#v err=%v", status, err)
-	}
-
-	if _, err := service.HandleMessageWithID(ctx, -1001, 1, 804, 123456789, "/sync off", 0); err != nil {
-		t.Fatal(err)
-	}
-	if legacy.startCalls != 0 {
-		t.Fatalf("off eagerly started legacy writer: %d", legacy.startCalls)
-	}
-	started, err := service.HandleMessageWithID(ctx, 123456789, 0, 805, 123456789, "explicit legacy prompt", 0)
-	if err != nil || started == nil || started.TurnID != "started-turn" {
-		t.Fatalf("started=%#v err=%v", started, err)
-	}
-	if legacy.startCalls != 1 || len(legacy.turnStartCalls) != 1 {
-		t.Fatalf("legacy did not start lazily: start=%d turns=%#v", legacy.startCalls, legacy.turnStartCalls)
 	}
 }
 
@@ -1835,6 +1730,54 @@ func TestAFCApprovalCallbackIsGuardedByTopicTurnAndGeneration(t *testing.T) {
 	}
 }
 
+func TestAFCApprovalDecisionsResolveSameCard(t *testing.T) {
+	tests := []struct {
+		name       string
+		row        int
+		column     int
+		decision   string
+		resolution string
+	}{
+		{name: "approve_once", row: 0, column: 0, decision: "accept", resolution: "Approved"},
+		{name: "allow_command_prefix", row: 0, column: 1, decision: "acceptForSession", resolution: "Approved"},
+		{name: "deny", row: 1, column: 0, decision: "decline", resolution: "Denied"},
+		{name: "cancel", row: 1, column: 1, decision: "cancel", resolution: "Cancelled"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			service := activeAFCService(t)
+			writer := &afcWriterSession{stubSession: &stubSession{}, events: make(chan appserver.Event, 4)}
+			service.liveFactory = func() Session { return writer }
+			forum := &fakeAFCForum{}
+			service.SetAFCForum(forum)
+			ctx := context.Background()
+			if _, err := service.HandleMessageWithID(ctx, -1001, 11, 501, 123456789, "needs approval", 0); err != nil {
+				t.Fatal(err)
+			}
+			event := appserver.Event{Channel: "server_request", Method: "item/commandExecution/requestApproval", ID: "request-1", Params: map[string]any{
+				"threadId": "thread-1", "turnId": "started-turn", "itemId": "item-1", "question": "Run it?",
+			}}
+			service.handleAFCWriterEvent(ctx, writer, event, service.afcWriter.Snapshot().Generation)
+			if len(forum.actions) != 1 {
+				t.Fatalf("actions=%#v, want one", forum.actions)
+			}
+			action := forum.actions[0]
+			token := action.buttons[test.row][test.column].CallbackData
+			response, err := service.HandleCallback(ctx, -1001, action.topicID, action.messageID, 123456789, token)
+			if err != nil || response == nil || !strings.Contains(response.CallbackText, "sent") {
+				t.Fatalf("response=%#v err=%v", response, err)
+			}
+			if len(writer.respondRequestCalls) != 1 || writer.respondRequestCalls[0].result["decision"] != test.decision {
+				t.Fatalf("responses=%#v, want decision %q", writer.respondRequestCalls, test.decision)
+			}
+			if len(forum.edits) != 1 || forum.edits[0].topicID != action.topicID || forum.edits[0].messageID != action.messageID ||
+				!strings.Contains(forum.edits[0].text, test.resolution) {
+				t.Fatalf("edits=%#v, want same card resolved as %q", forum.edits, test.resolution)
+			}
+		})
+	}
+}
+
 func TestAFCDesktopOriginApprovalIsNotActionable(t *testing.T) {
 	service := activeAFCService(t)
 	forum := &fakeAFCForum{}
@@ -1974,10 +1917,6 @@ func TestAFCForceOffInterruptsAllAndWaitsForTerminalBeforeCleanup(t *testing.T) 
 	if state.State != model.AFCStateOff || len(forum.deletes) != 2 {
 		t.Fatalf("state=%#v deletes=%v", state, forum.deletes)
 	}
-	observer, _ := service.store.GetState(ctx, "observer.global_enabled")
-	if observer != "false" || service.legacyWriter.Snapshot().State != appserver.WriterStopped {
-		t.Fatalf("observer=%q legacy=%#v", observer, service.legacyWriter.Snapshot())
-	}
 }
 
 func TestAFCForceOffTimeoutStaysDrainingAndDoesNotCleanup(t *testing.T) {
@@ -2040,7 +1979,7 @@ func TestAFCStartupResetsSessionCleansTopicsAndWarnsOnceWhenWebSocketUnavailable
 	service.cfg.AppServerListen = "ws://127.0.0.1:4500"
 	service.cfg.RequestTimeout = 25 * time.Millisecond
 	service.cfg.IndexRefreshInterval = time.Hour
-	service.cfg.ObserverPollInterval = time.Hour
+	service.cfg.SyncPollInterval = time.Hour
 	failedPoll := &stubSession{startErr: errors.New("shared daemon unavailable")}
 	service.poll = failedPoll
 	service.pollFactory = func() Session { return failedPoll }
@@ -2082,8 +2021,8 @@ func TestAFCStartupResetsSessionCleansTopicsAndWarnsOnceWhenWebSocketUnavailable
 	if value, _ := service.store.GetState(ctx, "appserver.poll_connected"); value != "false" {
 		t.Fatalf("poll_connected=%q", value)
 	}
-	if value, _ := service.store.GetState(ctx, "appserver.live_connected"); value != "false" {
-		t.Fatalf("live_connected=%q", value)
+	if value, _ := service.store.GetState(ctx, "appserver.live_connected"); value != "" {
+		t.Fatalf("retired live_connected=%q", value)
 	}
 }
 
@@ -2091,7 +2030,7 @@ func TestAFCStartupDoesNotWarnWhenSharedDaemonConnects(t *testing.T) {
 	service := activeAFCService(t)
 	service.cfg.AppServerMode = string(appserver.TransportDaemon)
 	service.cfg.IndexRefreshInterval = time.Hour
-	service.cfg.ObserverPollInterval = time.Hour
+	service.cfg.SyncPollInterval = time.Hour
 	service.poll = &stubSession{}
 	forum := &fakeAFCForum{}
 	service.SetAFCForum(forum)

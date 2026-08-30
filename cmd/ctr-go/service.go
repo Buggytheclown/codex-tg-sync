@@ -78,19 +78,15 @@ type serviceInstallOptions struct {
 	ConfigPath      string
 	TelegramToken   string
 	AllowedUserIDs  string
-	AllowedChatIDs  string
+	AFCGroupID      string
 	DefaultCWD      string
 	CodexChatsRoot  string
 	CodexBin        string
-	NotifyNewRun    string
 	CTRGoBinaryPath string
 }
 
 func parseServiceInstallOptions(args []string) (serviceInstallOptions, error) {
-	opts := serviceInstallOptions{
-		ConfigPath:   config.ConfigFilePath(),
-		NotifyNewRun: "",
-	}
+	opts := serviceInstallOptions{ConfigPath: config.ConfigFilePath()}
 	if exe, err := serviceExecutable(); err == nil {
 		opts.CTRGoBinaryPath = exe
 	}
@@ -103,11 +99,10 @@ func parseServiceInstallOptions(args []string) (serviceInstallOptions, error) {
 	fs.StringVar(&opts.ConfigPath, "config", opts.ConfigPath, "config.env path")
 	fs.StringVar(&opts.TelegramToken, "telegram-bot-token", "", "Telegram bot token")
 	fs.StringVar(&opts.AllowedUserIDs, "allowed-user-ids", "", "allowed Telegram user ids")
-	fs.StringVar(&opts.AllowedChatIDs, "allowed-chat-ids", "", "allowed Telegram chat ids")
+	fs.StringVar(&opts.AFCGroupID, "afc-group-id", "", "private AFC forum group id")
 	fs.StringVar(&opts.DefaultCWD, "default-cwd", "", "default Codex working directory")
 	fs.StringVar(&opts.CodexChatsRoot, "codex-chats-root", "", "Codex UI Chats root")
 	fs.StringVar(&opts.CodexBin, "codex-bin", "", "Codex binary path")
-	fs.StringVar(&opts.NotifyNewRun, "notify-new-run", "", "notify on New run")
 	fs.StringVar(&opts.CTRGoBinaryPath, "ctr-go-bin", opts.CTRGoBinaryPath, "ctr-go binary path for LaunchAgent")
 	if err := fs.Parse(args); err != nil {
 		return opts, fmt.Errorf("usage: ctr-go service install [flags]")
@@ -181,15 +176,10 @@ func runServiceInstall(args []string, in io.Reader, out io.Writer) error {
 	_, _ = fmt.Fprintln(out, "\nSetup summary")
 	_, _ = fmt.Fprintln(out, "  Telegram bot token: configured")
 	_, _ = fmt.Fprintf(out, "  Allowed users: %s\n", values["CTR_GO_ALLOWED_USER_IDS"])
-	if strings.TrimSpace(values["CTR_GO_ALLOWED_CHAT_IDS"]) != "" {
-		_, _ = fmt.Fprintf(out, "  Allowed chats: %s\n", values["CTR_GO_ALLOWED_CHAT_IDS"])
-	} else {
-		_, _ = fmt.Fprintln(out, "  Allowed chats: any chat from allowed users")
-	}
+	_, _ = fmt.Fprintf(out, "  AFC group: %s\n", values["CTR_GO_AFC_GROUP_ID"])
 	_, _ = fmt.Fprintf(out, "  Default cwd: %s\n", values["CTR_GO_DEFAULT_CWD"])
 	_, _ = fmt.Fprintf(out, "  Codex Chats root: %s\n", values["CTR_GO_CODEX_CHATS_ROOT"])
 	_, _ = fmt.Fprintf(out, "  Codex binary: %s\n", values["CTR_GO_CODEX_BIN"])
-	_, _ = fmt.Fprintf(out, "  New run notifications: %s\n", values["CTR_GO_NOTIFY_NEW_RUN"])
 	_, _ = fmt.Fprintln(out, "\nNext steps")
 	_, _ = fmt.Fprintln(out, "  ctr-go service status")
 	_, _ = fmt.Fprintln(out, "  ctr-go doctor")
@@ -208,9 +198,6 @@ func serviceConfigValues(values map[string]string) map[string]string {
 	out := make(map[string]string, len(values))
 	for key, value := range values {
 		if key == "CTR_GO_CTR_GO_BIN" {
-			continue
-		}
-		if strings.TrimSpace(value) == "" && key == "CTR_GO_ALLOWED_CHAT_IDS" {
 			continue
 		}
 		out[key] = value
@@ -233,11 +220,10 @@ func collectServiceInstallValues(opts serviceInstallOptions, existing map[string
 	}
 	values["CTR_GO_TELEGRAM_BOT_TOKEN"] = strings.TrimSpace(firstNonEmpty(opts.TelegramToken, existing["CTR_GO_TELEGRAM_BOT_TOKEN"]))
 	values["CTR_GO_ALLOWED_USER_IDS"] = strings.TrimSpace(firstNonEmpty(opts.AllowedUserIDs, existing["CTR_GO_ALLOWED_USER_IDS"]))
-	values["CTR_GO_ALLOWED_CHAT_IDS"] = strings.TrimSpace(firstNonEmpty(opts.AllowedChatIDs, existing["CTR_GO_ALLOWED_CHAT_IDS"]))
+	values["CTR_GO_AFC_GROUP_ID"] = strings.TrimSpace(firstNonEmpty(opts.AFCGroupID, existing["CTR_GO_AFC_GROUP_ID"]))
 	values["CTR_GO_DEFAULT_CWD"] = strings.TrimSpace(firstNonEmpty(opts.DefaultCWD, existing["CTR_GO_DEFAULT_CWD"], cwd))
 	values["CTR_GO_CODEX_CHATS_ROOT"] = strings.TrimSpace(firstNonEmpty(opts.CodexChatsRoot, existing["CTR_GO_CODEX_CHATS_ROOT"], config.DefaultCodexChatsRoot()))
 	values["CTR_GO_CODEX_BIN"] = strings.TrimSpace(firstNonEmpty(opts.CodexBin, existing["CTR_GO_CODEX_BIN"], codexBin))
-	values["CTR_GO_NOTIFY_NEW_RUN"] = strings.TrimSpace(firstNonEmpty(opts.NotifyNewRun, existing["CTR_GO_NOTIFY_NEW_RUN"], "true"))
 	values["CTR_GO_CTR_GO_BIN"] = strings.TrimSpace(firstNonEmpty(opts.CTRGoBinaryPath, existing["CTR_GO_CTR_GO_BIN"]))
 	for _, key := range config.RuntimeEnvPassthroughKeys() {
 		if strings.TrimSpace(values[key]) != "" {
@@ -261,7 +247,7 @@ func runServiceWizard(values map[string]string, in io.Reader, out io.Writer) (ma
 	fields := []wizardField{
 		{
 			Key:      "CTR_GO_TELEGRAM_BOT_TOKEN",
-			Step:     "1/7",
+			Step:     "1/6",
 			Label:    "Telegram bot token",
 			Help:     "Create it with @BotFather. Example format: 123456789:AA...",
 			Required: true,
@@ -270,22 +256,23 @@ func runServiceWizard(values map[string]string, in io.Reader, out io.Writer) (ma
 		},
 		{
 			Key:      "CTR_GO_ALLOWED_USER_IDS",
-			Step:     "2/7",
-			Label:    "Allowed Telegram user id(s)",
-			Help:     "Only these Telegram users can control the bot. Example: 123456789 or 123,456",
+			Step:     "2/6",
+			Label:    "Allowed Telegram user id",
+			Help:     "The only Telegram user who can control the bot. Example: 123456789",
 			Required: true,
-			Validate: validateRequiredIDList,
+			Validate: validateTelegramUserID,
 		},
 		{
-			Key:      "CTR_GO_ALLOWED_CHAT_IDS",
-			Step:     "3/7",
-			Label:    "Allowed Telegram chat id(s)",
-			Help:     "Optional. Leave empty to allow any chat from the allowed users.",
-			Validate: validateOptionalIDList,
+			Key:      "CTR_GO_AFC_GROUP_ID",
+			Step:     "3/6",
+			Label:    "AFC forum group id",
+			Help:     "The exact private Telegram forum group used by codex-tg. Example: -1001234567890",
+			Required: true,
+			Validate: validateAFCGroupID,
 		},
 		{
 			Key:      "CTR_GO_DEFAULT_CWD",
-			Step:     "4/7",
+			Step:     "4/6",
 			Label:    "Default Codex work directory",
 			Help:     "Used for no-cwd threads and fallback routing.",
 			Required: true,
@@ -293,7 +280,7 @@ func runServiceWizard(values map[string]string, in io.Reader, out io.Writer) (ma
 		},
 		{
 			Key:      "CTR_GO_CODEX_CHATS_ROOT",
-			Step:     "5/7",
+			Step:     "5/6",
 			Label:    "Codex UI Chats root",
 			Help:     "New /newchat folders are created here, usually ~/Documents/Codex.",
 			Required: true,
@@ -301,19 +288,11 @@ func runServiceWizard(values map[string]string, in io.Reader, out io.Writer) (ma
 		},
 		{
 			Key:      "CTR_GO_CODEX_BIN",
-			Step:     "6/7",
+			Step:     "6/6",
 			Label:    "Codex binary",
 			Help:     "Absolute path is best. The detected default is used when available.",
 			Required: true,
 			Validate: validateExecutableRef,
-		},
-		{
-			Key:      "CTR_GO_NOTIFY_NEW_RUN",
-			Step:     "7/7",
-			Label:    "Notify on New run",
-			Help:     "Use true/false. Final and Plan prompts still notify by design.",
-			Required: true,
-			Validate: validateBoolText,
 		},
 	}
 	for _, field := range fields {
@@ -401,10 +380,10 @@ func validateServiceValues(values map[string]string) (map[string]string, error) 
 	required := map[string]string{
 		"CTR_GO_TELEGRAM_BOT_TOKEN": "--telegram-bot-token",
 		"CTR_GO_ALLOWED_USER_IDS":   "--allowed-user-ids",
+		"CTR_GO_AFC_GROUP_ID":       "--afc-group-id",
 		"CTR_GO_DEFAULT_CWD":        "--default-cwd",
 		"CTR_GO_CODEX_CHATS_ROOT":   "--codex-chats-root",
 		"CTR_GO_CODEX_BIN":          "--codex-bin",
-		"CTR_GO_NOTIFY_NEW_RUN":     "--notify-new-run",
 		"CTR_GO_CTR_GO_BIN":         "--ctr-go-bin",
 	}
 	var missing []string
@@ -421,12 +400,11 @@ func validateServiceValues(values map[string]string) (map[string]string, error) 
 		fn  func(string) error
 	}{
 		{"CTR_GO_TELEGRAM_BOT_TOKEN", validateTokenLike},
-		{"CTR_GO_ALLOWED_USER_IDS", validateRequiredIDList},
-		{"CTR_GO_ALLOWED_CHAT_IDS", validateOptionalIDList},
+		{"CTR_GO_ALLOWED_USER_IDS", validateTelegramUserID},
+		{"CTR_GO_AFC_GROUP_ID", validateAFCGroupID},
 		{"CTR_GO_DEFAULT_CWD", validateDirectory},
 		{"CTR_GO_CODEX_CHATS_ROOT", validateNonEmpty},
 		{"CTR_GO_CODEX_BIN", validateExecutableRef},
-		{"CTR_GO_NOTIFY_NEW_RUN", validateBoolText},
 	}
 	for _, check := range checks {
 		if err := check.fn(values[check.key]); err != nil {
@@ -740,21 +718,36 @@ func validateTokenLike(value string) error {
 	return nil
 }
 
-func validateRequiredIDList(value string) error {
-	if strings.TrimSpace(value) == "" {
-		return errors.New("at least one Telegram user id is required")
+func parseSingleID(value string) (int64, error) {
+	parts := strings.FieldsFunc(value, func(r rune) bool { return r == ',' || r == ' ' || r == '\n' || r == '\t' })
+	if len(parts) != 1 {
+		return 0, errors.New("exactly one Telegram id is required")
 	}
-	return validateOptionalIDList(value)
+	id, err := strconv.ParseInt(strings.TrimSpace(parts[0]), 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("id must be an integer; %q is invalid", parts[0])
+	}
+	return id, nil
 }
 
-func validateOptionalIDList(value string) error {
-	for _, part := range strings.FieldsFunc(value, func(r rune) bool { return r == ',' || r == ' ' || r == '\n' || r == '\t' }) {
-		if strings.TrimSpace(part) == "" {
-			continue
-		}
-		if _, err := strconv.ParseInt(strings.TrimSpace(part), 10, 64); err != nil {
-			return fmt.Errorf("ids must be integers; %q is invalid", part)
-		}
+func validateTelegramUserID(value string) error {
+	id, err := parseSingleID(value)
+	if err != nil {
+		return err
+	}
+	if id <= 0 {
+		return errors.New("Telegram user id must be positive")
+	}
+	return nil
+}
+
+func validateAFCGroupID(value string) error {
+	id, err := parseSingleID(value)
+	if err != nil {
+		return err
+	}
+	if id >= 0 {
+		return errors.New("Telegram forum supergroup id must be negative")
 	}
 	return nil
 }
@@ -793,15 +786,6 @@ func validateExecutableRef(value string) error {
 		return fmt.Errorf("binary %q was not found in PATH", value)
 	}
 	return nil
-}
-
-func validateBoolText(value string) error {
-	switch strings.ToLower(strings.TrimSpace(value)) {
-	case "true", "false", "on", "off", "yes", "no", "1", "0":
-		return nil
-	default:
-		return errors.New("value must be true or false")
-	}
 }
 
 func printServiceUsage(out io.Writer) {

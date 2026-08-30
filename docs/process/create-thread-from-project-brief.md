@@ -1,49 +1,57 @@
-# Create Thread From Project Brief
+# Create AFC Topic From Project Brief
 
 ## Problem
 
-Operators can browse cached threads and projects from Telegram, but cannot start a brand-new Codex thread from a selected project/work directory.
+An operator needs to start a new Codex task from Telegram without supplying an arbitrary filesystem path and without losing the durable topic-to-thread mapping.
 
 ## Goal
 
-Telegram supports a project-first flow: `/projects` -> project menu -> `New thread` -> next message becomes the first prompt for a new thread in that project's existing `cwd`.
+`/projects` and `/newchat` create durable AFC topic drafts. The first plain-text message in the draft atomically claims it, creates the Codex thread in the selected known cwd, starts the first turn, and binds the topic to the returned `threadId`.
 
 ## Non-goals
 
-- Creating, editing, or discovering new work directories.
-- Accepting arbitrary filesystem paths from Telegram.
+- Creating or discovering arbitrary work directories from Telegram.
+- Creating empty Codex threads before the first prompt.
+- Restoring direct-message bindings or one-shot chat state.
 - Changing the App Server protocol.
-- Creating empty threads without a first prompt.
 
-## UX / Operator Flow
+## Operator flow
 
-`/projects` renders project/workspace buttons grouped by normalized `cwd`. Codex UI Chats under generic `Documents/Codex` paths are shown under the separate `Chats` navigation instead of as normal projects. A project menu shows the workspace cwd, cached thread count, and actions: `New thread`, `Threads`, and `Bind latest`.
+1. Run `/projects` in Control.
+2. Choose a known project workspace, or run `/newchat` for a dated Codex Chat.
+3. The bot creates a ready forum topic draft.
+4. Send the first prompt in that topic.
+5. The draft becomes starting, then connected to the App Server-owned thread id.
+6. The topic renders current `[User]`, `[Status]`, approval/input, and `[Final]` state.
 
-`New thread` arms a one-shot state for the current chat/topic. The next plain-text message calls App Server `thread/start` for that project cwd and then `turn/start` with the message text.
+A second message while creation is in progress is rejected rather than starting another thread. Duplicate Telegram message ids are idempotent.
 
-`/newchat <prompt>` creates a dated Codex UI Chat cwd under the configured Chats root, calls App Server `thread/start` with that cwd, and starts the first turn from the prompt. `/newthread <prompt>` calls `thread/start` without a Telegram-selected cwd for cases that should not create a Chat folder; App Server may still attach its default cwd.
+## Domain model
 
-## Domain Model
-
-Project/workspace selection is derived from cached `threads.cwd` data. One-shot create-thread state is stored in SQLite daemon state and expires quickly. New thread identity remains App Server-owned.
+Project workspaces are derived from cached `threads.cwd` metadata. A topic draft stores AFC session id, exact group/topic ids, rank, title, selected cwd, state, and the first Telegram message id. Current callback routes support project navigation; no generic chat binding or panel state is created.
 
 ## Architecture
 
-The daemon keeps App Server integration on stdio only:
-
-- `thread/start` creates the thread in the selected cwd.
-- `turn/start` starts the first run.
-- SQLite stores the resulting thread, chat binding, panel state, callback routes, and one-shot create-thread state.
+- Telegram topic creation happens before Codex thread creation.
+- SQLite durably records and claims the draft.
+- App Server `thread/start` owns thread identity.
+- App Server `turn/start` starts the first prompt with the current Telegram permissions.
+- The daemon promotes the draft to an AFC topic only after it has the returned thread id.
+- Ambiguous `thread/start` outcomes are not replayed automatically.
 
 ## Testing
 
-- Unit tests cover `/projects`, project menu callbacks, one-shot arming, successful create/start, missing thread id, and recoverable `turn/start` failure.
-- Regression tests cover stale Plan choice buttons so old pending input cannot appear under a newer `[commentary]`.
-- Live Telegram E2E must use readback: project menu -> `New thread` -> prompt -> `[Final]`, plus a Plan Mode choice scenario.
+- Project catalog and callback tests cover known-workspace selection.
+- Draft tests cover ready/claim/idempotency/concurrent-message behavior.
+- Writer tests cover unclaimed process reservation and returned-thread claim.
+- Permission tests cover explicit `on-request`, `auto_review`, and `workspace-write`.
+- Live QA uses Control -> project selection -> topic draft -> first prompt -> `[Final]`, plus an approval/input callback when available.
 
-## Acceptance Criteria
+## Acceptance criteria
 
-- [ ] `/projects` shows project workspace buttons grouped by normalized cwd.
-- [ ] `New thread` creates a new thread in the selected project cwd and starts the first turn.
-- [ ] The current chat/topic is bound to the new thread after success.
-- [ ] Stale Plan choice buttons do not appear under a different turn's `[commentary]`.
+- [ ] `/projects` exposes only cached known workspaces.
+- [ ] `/newchat` uses the configured Codex Chats root.
+- [ ] A first topic message creates exactly one thread and one turn.
+- [ ] A duplicate or concurrent message cannot create a second thread.
+- [ ] The topic is bound to the returned durable thread id.
+- [ ] Failure remains visible and recoverable without direct-message state.

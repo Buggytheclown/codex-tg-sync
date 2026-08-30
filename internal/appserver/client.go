@@ -537,7 +537,7 @@ func (c *Client) resolveTurnStartOptions(ctx context.Context, options TurnStartO
 	if options.Model == "" {
 		model, err := c.defaultModel(ctx)
 		if err != nil {
-			return options, fmt.Errorf("codex model is required for collaboration mode %q; choose one with /model or fix model/list: %w", options.CollaborationMode, err)
+			return options, fmt.Errorf("codex model is required for collaboration mode %q; select a supported model or fix model/list: %w", options.CollaborationMode, err)
 		}
 		options.Model = model
 	}

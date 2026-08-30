@@ -13,6 +13,6 @@ before becoming an implementation requirement.
 | Automations should own recurring Codex jobs. | Official Automations docs cover recurring app tasks. | Accepted as preferred Codex scheduling surface. |
 | MCP server supports multi-agent orchestration, not full thread UI. | Agents SDK guide describes Codex MCP workflow integration; MCP help starts a stdio server. | Accepted as orchestration adapter. |
 | Voice should start as a chained pipeline. | Voice Agents docs describe speech-to-speech and chained architectures; Codex routing needs audit and approval control. | Accepted for first voice prototype. |
-| Telegram remains a high-signal adapter. | Existing implementation has routing, Plan prompts, Details, notifications, and live E2E contracts. | Accepted; no deprecation. |
+| Telegram remains a high-signal adapter. | The active implementation has AFC topic routing, approvals/input, launch requests, notifications, and live E2E contracts. | Accepted; direct-message observer behavior retired by ADR-032. |
 | Remote Connections invalidate old positioning. | Official Remote Connections cover broad mobile remote-control workflows. | Accepted; README should reposition. |
 | Generated schema drift needs regression checks. | Local schema differed from some public goal-surface expectations. | Accepted; future capability map should be schema-backed. |

@@ -1,39 +1,30 @@
 # Success Metrics
 
-## Product metrics
+## Safety
 
-- `/status` responds without waiting for full thread indexing.
-- background monitoring is active by default when one operator target exists.
-- `/observe all` moves the observer target instead of creating an additional feed.
-- `/observe off` disables global monitoring.
-- Observer messages always include source markers: project and thread.
-- `/context` reliably reports the current working tuple or the absence of one.
-- Each `(chat, project, thread)` has one actionable summary panel.
-- Tool/output messages never carry action buttons.
-- Final answers expose `Получить полный лог` on demand.
+- 100% of accepted Telegram inputs come from the configured AFC group and single allowed user.
+- 0 out-of-scope messages or callbacks reach SQLite route lookup or App Server mutation.
+- 0 duplicate turns from repeated Telegram updates, stale callbacks, reconnect, or ambiguous launch creation.
+- 0 secrets or private ids in committed docs, fixtures, logs, or screenshots.
 
-## Reliability metrics
+## Reliability
 
-- `delivery_queue` is the source of truth for observer delivery.
-- Delivery retries back off and end in dead-letter state instead of silent loss.
-- Restarting the daemon does not delete bindings or observer targets.
-- `/repair` recreates sessions and re-marks unresolved approvals as `needs_recheck`.
-- Moving the global observer target does not create duplicate active targets.
+- Topic-to-thread routing remains stable across sync cycles.
+- Current health and external terminal deliveries retry durably inside the AFC group.
+- Poller status reports enabled state, current work, last attempt/success, and consecutive failures.
+- Requests remain retryable/closable after a failed start.
+- Shared App Server reconnect never replays an accepted prompt.
 
-## Routing metrics
+## Operator experience
 
-- Route precedence remains:
-  1. explicit thread id
-  2. reply-to message route
-  3. bound thread
-- Thread-scoped callback actions keep their `threadId`/`turnId` or `requestId` association.
-- Summary-panel callbacks remain scoped to the corresponding `(chat, project, thread)`.
+- Command menu exists only in the AFC forum.
+- Approval/input actions edit the original card and remove buttons.
+- Every external request shows a `[Launch request]` card before manual or automatic start.
+- Terminal external work produces a short source notification when replies are supported.
+- `/status`, `/pollers`, and `/requests` answer from Control without hidden direct-message dependencies.
 
-## Validation commands
+## Engineering
 
-```powershell
-go build -buildvcs=false ./...
-go test ./...
-go run ./cmd/ctr-go doctor
-go run ./cmd/ctr-go status
-```
+- Fresh databases contain no retired Telegram tables; upgrades remain non-destructive.
+- Relevant targeted tests, `go test ./...`, race checks, and `go build -buildvcs=false ./...` pass before release.
+- Current docs and setup describe only the AFC/Sync Telegram surface.

@@ -27,11 +27,11 @@ func TestServiceInstallNonInteractiveWritesConfigAndLaunchAgent(t *testing.T) {
 		"--config", configPath,
 		"--telegram-bot-token", token,
 		"--allowed-user-ids", "42",
+		"--afc-group-id", "-1001",
 		"--default-cwd", dir,
 		"--codex-chats-root", filepath.Join(dir, "Codex"),
 		"--codex-bin", binary,
 		"--ctr-go-bin", binary,
-		"--notify-new-run", "false",
 	}, strings.NewReader(""), &out)
 	if err != nil {
 		t.Fatalf("service install failed: %v", err)
@@ -47,7 +47,7 @@ func TestServiceInstallNonInteractiveWritesConfigAndLaunchAgent(t *testing.T) {
 	for _, want := range []string{
 		`CTR_GO_TELEGRAM_BOT_TOKEN="` + token + `"`,
 		`CTR_GO_ALLOWED_USER_IDS="42"`,
-		`CTR_GO_NOTIFY_NEW_RUN="false"`,
+		`CTR_GO_AFC_GROUP_ID="-1001"`,
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("config missing %q:\n%s", want, text)
@@ -104,11 +104,11 @@ func TestServiceInstallForcePreservesExistingUnknownConfigKeys(t *testing.T) {
 		"--config", configPath,
 		"--telegram-bot-token", token,
 		"--allowed-user-ids", "42",
+		"--afc-group-id", "-1001",
 		"--default-cwd", dir,
 		"--codex-chats-root", filepath.Join(dir, "Codex"),
 		"--codex-bin", binary,
 		"--ctr-go-bin", binary,
-		"--notify-new-run", "true",
 	}, strings.NewReader(""), io.Discard)
 	if err != nil {
 		t.Fatalf("service install failed: %v", err)
@@ -145,11 +145,11 @@ func TestServiceInstallCapturesRuntimeProxyEnvInConfig(t *testing.T) {
 		"--config", configPath,
 		"--telegram-bot-token", "123456:abcdefghijklmnopqrstuvwxyz",
 		"--allowed-user-ids", "42",
+		"--afc-group-id", "-1001",
 		"--default-cwd", dir,
 		"--codex-chats-root", filepath.Join(dir, "Codex"),
 		"--codex-bin", binary,
 		"--ctr-go-bin", binary,
-		"--notify-new-run", "true",
 	}, strings.NewReader(""), io.Discard)
 	if err != nil {
 		t.Fatalf("service install failed: %v", err)
@@ -183,12 +183,10 @@ func TestServiceInstallInteractiveWizardRetriesInvalidValues(t *testing.T) {
 		"abc",
 		"42",
 		"chat",
-		"",
+		"-1001",
 		dir,
 		filepath.Join(dir, "Codex"),
 		binary,
-		"maybe",
-		"true",
 		"",
 	}, "\n")
 	var out bytes.Buffer
@@ -207,10 +205,9 @@ func TestServiceInstallInteractiveWizardRetriesInvalidValues(t *testing.T) {
 	}
 	for _, want := range []string{
 		"codex-tg service setup",
-		"[1/7] Telegram bot token",
+		"[1/6] Telegram bot token",
 		"Telegram bot token should look like",
-		"ids must be integers",
-		"value must be true or false",
+		"id must be an integer",
 		"Next steps",
 	} {
 		if !strings.Contains(got, want) {
@@ -228,10 +225,36 @@ func TestServiceInstallNonInteractiveReportsMissingFlags(t *testing.T) {
 	if err == nil {
 		t.Fatal("service install succeeded, want missing values error")
 	}
-	for _, want := range []string{"--telegram-bot-token", "--allowed-user-ids"} {
+	for _, want := range []string{"--telegram-bot-token", "--allowed-user-ids", "--afc-group-id"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Fatalf("error missing %q: %v", want, err)
 		}
+	}
+}
+
+func TestTelegramIDValidatorsRejectWrongShapeAndSign(t *testing.T) {
+	tests := []struct {
+		name  string
+		value string
+		check func(string) error
+		ok    bool
+	}{
+		{name: "user", value: "42", check: validateTelegramUserID, ok: true},
+		{name: "zero_user", value: "0", check: validateTelegramUserID},
+		{name: "negative_user", value: "-42", check: validateTelegramUserID},
+		{name: "group", value: "-1001", check: validateAFCGroupID, ok: true},
+		{name: "zero_group", value: "0", check: validateAFCGroupID},
+		{name: "positive_group", value: "1001", check: validateAFCGroupID},
+		{name: "multiple_users", value: "42,43", check: validateTelegramUserID},
+		{name: "not_integer", value: "chat", check: validateAFCGroupID},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			err := test.check(test.value)
+			if (err == nil) != test.ok {
+				t.Fatalf("validator(%q) error=%v, ok=%v", test.value, err, test.ok)
+			}
+		})
 	}
 }
 

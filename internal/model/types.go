@@ -50,15 +50,7 @@ const (
 	AFCReceiptRejected   = "rejected"
 	AFCReceiptUnknown    = "unknown"
 
-	BindingModeBound    = "bound"
-	BindingModeObserver = "observer"
-
-	PanelModePerRun = "per_run"
-	PanelModeStable = "stable"
-
-	PanelSourceExplicit       = "explicit"
-	PanelSourceGlobalObserver = "global_observer"
-	PanelSourceTelegramInput  = "telegram_input"
+	TurnOriginTelegram = "telegram_input"
 
 	PromptSourceServerRequest = "server_request"
 	PromptSourceSyntheticPoll = "synthetic_poll"
@@ -303,25 +295,6 @@ type ThreadSnapshotState struct {
 	CompactJSON          json.RawMessage `json:"compact_json,omitempty"`
 }
 
-type ThreadBinding struct {
-	ChatKey   string
-	ChatID    int64
-	TopicID   int64
-	ThreadID  string
-	Mode      string
-	CreatedAt TimeString
-	UpdatedAt TimeString
-}
-
-type ObserverTarget struct {
-	ChatKey   string
-	ChatID    int64
-	TopicID   int64
-	Enabled   bool
-	CreatedAt TimeString
-	UpdatedAt TimeString
-}
-
 type CallbackRoute struct {
 	Token             string
 	Action            string
@@ -361,30 +334,12 @@ type PlanPrompt struct {
 	Status      string   `json:"status"`
 }
 
-type MessageRoute struct {
-	ChatID    int64
-	TopicID   int64
-	MessageID int64
-	ThreadID  string
-	TurnID    string
-	ItemID    string
-	EventID   string
-	CreatedAt TimeString
-}
-
 type DeliveryPayload struct {
-	Mode            string         `json:"mode,omitempty"`
 	Text            string         `json:"text,omitempty"`
 	ThreadID        string         `json:"thread_id,omitempty"`
 	TurnID          string         `json:"turn_id,omitempty"`
 	ItemID          string         `json:"item_id,omitempty"`
 	EventID         string         `json:"event_id,omitempty"`
-	MessageID       int64          `json:"message_id,omitempty"`
-	FileName        string         `json:"file_name,omitempty"`
-	FilePath        string         `json:"file_path,omitempty"`
-	Caption         string         `json:"caption,omitempty"`
-	PanelID         int64          `json:"panel_id,omitempty"`
-	PanelRole       string         `json:"panel_role,omitempty"`
 	Buttons         [][]ButtonSpec `json:"buttons,omitempty"`
 	HealthKey       string         `json:"health_key,omitempty"`
 	HealthEpisodeID string         `json:"health_episode_id,omitempty"`
@@ -448,12 +403,6 @@ type DetailItem struct {
 	CommentaryIndex int        `json:"commentary_index,omitempty"`
 }
 
-type DetailsViewState struct {
-	Page            int  `json:"page"`
-	ToolMode        bool `json:"tool_mode"`
-	CommentaryIndex int  `json:"commentary_index,omitempty"`
-}
-
 type ObserverEvent struct {
 	EventID       string `json:"event_id"`
 	Kind          string `json:"kind"`
@@ -467,56 +416,6 @@ type ObserverEvent struct {
 	RequestID     string `json:"request_id,omitempty"`
 	NeedsReply    bool   `json:"needs_reply,omitempty"`
 	NeedsApproval bool   `json:"needs_approval,omitempty"`
-}
-
-type ChatContext struct {
-	Mode            string
-	Binding         *ThreadBinding
-	ObserverEnabled bool
-	ObserverTarget  *ObserverTarget
-	Thread          *Thread
-}
-
-type ThreadPanel struct {
-	ID                  int64
-	ChatID              int64
-	TopicID             int64
-	ProjectName         string
-	ThreadID            string
-	SourceMode          string
-	SummaryMessageID    int64
-	ToolMessageID       int64
-	OutputMessageID     int64
-	CurrentTurnID       string
-	Status              string
-	ArchiveEnabled      bool
-	LastSummaryHash     string
-	LastToolHash        string
-	LastOutputHash      string
-	LastFinalNoticeFP   string
-	RunNoticeMessageID  int64
-	LastRunNoticeFP     string
-	UserMessageID       int64
-	LastUserNoticeFP    string
-	PlanPromptMessageID int64
-	LastPlanPromptFP    string
-	DetailsViewJSON     string
-	LastFinalCardHash   string
-	IsCurrent           bool
-	CreatedAt           TimeString
-	UpdatedAt           TimeString
-}
-
-type SteerState struct {
-	ChatKey   string
-	ChatID    int64
-	TopicID   int64
-	ThreadID  string
-	TurnID    string
-	PanelID   int64
-	ExpiresAt TimeString
-	CreatedAt TimeString
-	UpdatedAt TimeString
 }
 
 type RouteSource string

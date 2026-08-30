@@ -1,73 +1,45 @@
 # Architecture
 
-`codex-tg` is moving from a Telegram-first bridge toward a local Codex Control
-Plane. The current production adapter is Telegram; future adapters can include
-tray workflows, local HTTP/unix-socket clients, voice assistants, or a separate
-router agent.
+`codex-tg` is a local Codex Control Plane with an AFC forum adapter.
 
 ```text
-Channel adapters
-  - Telegram
-  - macOS tray
-  - future voice / router / local API
-        |
-        v
-codex-control core
-  - thread and turn lifecycle
-  - event normalization
-  - approvals and user input
-  - notification policy
-  - durable routing state
-        |
-        v
-Codex connectors
-  - App Server
-  - optional SDK/MCP orchestration adapters
-        |
-        v
-local Codex sessions and workspaces
+Telegram AFC forum     cron / YMessenger / Arcanum
+        |                         |
+        +-----------+-------------+
+                    v
+             daemon/control core
+        routing, requests, health,
+        pollers, delivery, ownership
+                    |
+                    v
+             Codex App Server
+         threads, turns, approvals,
+          input, events, snapshots
+                    |
+                    v
+             local workspaces
 ```
 
-## Current Runtime
+## Runtime authority
 
-The v0.4 runtime still runs as a Go daemon with:
+Codex App Server is authoritative for interactive state. The daemon may spawn App Server over stdio or connect to a managed Unix-socket/loopback WebSocket endpoint. Shared modes fail closed and do not spawn a private fallback.
 
-- Telegram Bot API long polling;
-- route and callback handling;
-- observer and panel rendering;
-- SQLite state;
-- local Codex App Server connectivity.
+One poll session discovers and reads threads. Generation-aware writer leases serialize mutations and prevent two processes from owning the same thread.
 
-The bridge can start `codex app-server` over stdio, connect directly to the
-managed daemon Unix socket, or connect to an existing loopback TCP WebSocket
-listener. Shared transports keep App Server process ownership outside the
-bridge and never fall back to a private spawned runtime.
+## Telegram adapter
 
-## Integration Surface
+The adapter accepts one user in one exact private forum group. AFC topic state maps Telegram topic ids to durable Codex thread ids. Callback routes contain the coordinates required to fail closed on stale actions.
 
-App Server is the authoritative control surface for interactive Codex state:
-threads, turns, approvals, user input, live events, history, and snapshots.
-
-SDK and MCP integrations may be used as orchestration adapters for router-agent
-workflows, Agents SDK handoffs, traces, or multi-agent experiments. They do not
-replace App Server state for live rendering, Details, approvals, or notification
-truth in v0.5.
-
-## Observer Model
-
-Live App Server notifications are used for daemon-owned runs. Foreign GUI/CLI
-runs are covered through bounded `thread/read` polling. Local session JSONL is
-reserved for explicit log exports, not live observer state.
+The Telegram adapter does not contain a second direct-message router.
 
 ## State
 
-SQLite stores routes, callback tokens, bindings, observer target, panels,
-pending prompts, delivery metadata, and daemon state.
+SQLite stores current AFC state and topics, topic drafts, callback routes, receipts, external launch requests, delivery metadata, thread snapshots, and daemon state.
 
-Future control-plane work should keep adapter-specific state, such as Telegram
-message ids, outside the control core wherever practical.
+Fresh databases do not create retired DM binding, observer, panel, or approval tables. Old databases are opened non-destructively and any such tables remain inert.
 
-## Further Reading
+## External adapters
 
-- [Control Plane](Control-Plane.md)
-- [ADR-019: Codex Control Plane](../adr/ADR-019-codex-control-plane.md)
+Cron, Yandex Messenger, and Arcanum pollers normalize work into the same durable launch-request lifecycle. Source-specific cursors and health observations are persisted. Telegram renders approval/status cards; terminal delivery can reply to the original source.
+
+Further reading: [ADR-019](../adr/ADR-019-codex-control-plane.md), [ADR-032](../adr/ADR-032-sync-only-telegram-surface.md).

@@ -474,14 +474,14 @@ func TestRequestsCommandShowsOnlyActiveByDefault(t *testing.T) {
 		}
 	}
 
-	response, err := service.handleCommand(ctx, 123456789, 0, "/requests", 0)
+	response, err := service.HandleMessageWithID(ctx, -1001, 1, 1, 123456789, "/requests", 0)
 	if err != nil || response == nil {
 		t.Fatalf("requests response=%#v err=%v", response, err)
 	}
 	if !strings.Contains(response.Text, "test:list:pending_approval") || !strings.Contains(response.Text, "test:list:failed") || strings.Contains(response.Text, "test:list:session_completed") {
 		t.Fatalf("active requests:\n%s", response.Text)
 	}
-	all, err := service.handleCommand(ctx, 123456789, 0, "/requests all", 0)
+	all, err := service.HandleMessageWithID(ctx, -1001, 1, 2, 123456789, "/requests all", 0)
 	if err != nil || all == nil || !strings.Contains(all.Text, "test:list:session_completed") {
 		t.Fatalf("all requests=%#v err=%v", all, err)
 	}

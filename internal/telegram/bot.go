@@ -144,8 +144,11 @@ func (b *Bot) Start(ctx context.Context) error {
 		return err
 	}
 	b.me = me
-	if err := b.client.SetMyCommands(startCtx, defaultCommands()); err != nil {
-		b.logger.Printf("telegram setMyCommands failed: %s", sanitizeTelegramLogError(err))
+	if err := b.client.DeleteMyCommands(startCtx); err != nil {
+		return fmt.Errorf("clear default Telegram commands: %w", err)
+	}
+	if err := b.client.SetMyCommandsForChat(startCtx, b.cfg.AFCGroupID, defaultCommands()); err != nil {
+		return fmt.Errorf("set AFC Telegram commands: %w", err)
 	}
 	b.logger.Printf("telegram bot ready: @%s", me.Username)
 	return nil

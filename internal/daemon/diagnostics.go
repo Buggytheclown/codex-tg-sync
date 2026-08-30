@@ -182,7 +182,7 @@ func (s *Service) logTelegramInbound(kind string, chatID, topicID int64, replyTo
 	})
 }
 
-func (s *Service) logTelegramRenderContainsNil(threadID, turnID, panelKind string, messageID int64, text string) {
+func (s *Service) logTelegramRenderContainsNil(threadID, turnID, renderKind string, messageID int64, text string) {
 	if !strings.Contains(text, "<nil>") {
 		return
 	}
@@ -191,7 +191,7 @@ func (s *Service) logTelegramRenderContainsNil(threadID, turnID, panelKind strin
 		"telegram_render_contains_nil",
 		strings.TrimSpace(threadID),
 		strings.TrimSpace(turnID),
-		strings.TrimSpace(panelKind),
+		strings.TrimSpace(renderKind),
 		textHash,
 	}, ":")
 	if !s.allowDiagnosticRepeat(key, diagnosticRepeatWindow) {
@@ -200,22 +200,12 @@ func (s *Service) logTelegramRenderContainsNil(threadID, turnID, panelKind strin
 	s.logLifecycle("telegram_render_contains_nil", lifecycleFields{
 		"thread_id":    threadID,
 		"turn_id":      turnID,
-		"panel_kind":   panelKind,
+		"render_kind":  renderKind,
 		"message_id":   messageID,
 		"text_len":     len([]rune(text)),
 		"text_sha256":  textHash,
 		"contains_nil": true,
 	})
-}
-
-func (s *Service) logTelegramRenderedMessagesContainsNil(threadID, turnID, panelKind string, messageID int64, messages []model.RenderedMessage) {
-	for index, message := range messages {
-		kind := strings.TrimSpace(panelKind)
-		if len(messages) > 1 {
-			kind = fmt.Sprintf("%s:%d", kind, index+1)
-		}
-		s.logTelegramRenderContainsNil(threadID, turnID, kind, messageID, message.Text)
-	}
 }
 
 func (s *Service) logAppServerCall(method string, started time.Time, err error, session Session, fields lifecycleFields) {
@@ -257,32 +247,6 @@ func (s *Service) logAppServerCall(method string, started time.Time, err error, 
 	s.logLifecycle("appserver_call", fields)
 }
 
-func (s *Service) logObserverSyncResult(operation string, snapshot appserver.ThreadReadSnapshot) {
-	if strings.TrimSpace(snapshot.LatestTurnID) == "" &&
-		strings.TrimSpace(snapshot.LatestTurnStatus) == "" &&
-		len(snapshot.DetailItems) == 0 {
-		return
-	}
-	if operation == "poll_tracked" && !isTerminalTurnStatus(snapshot.LatestTurnStatus) && !snapshot.WaitingOnApproval && !snapshot.WaitingOnReply {
-		return
-	}
-	key := strings.Join([]string{
-		"observer_sync_result",
-		operation,
-		strings.TrimSpace(snapshot.Thread.ID),
-		strings.TrimSpace(snapshot.LatestTurnID),
-		strings.TrimSpace(snapshot.LatestTurnStatus),
-		fmt.Sprint(snapshot.WaitingOnApproval),
-		fmt.Sprint(snapshot.WaitingOnReply),
-	}, ":")
-	if !s.allowDiagnosticRepeat(key, diagnosticObserverRepeatWindow) {
-		return
-	}
-	fields := snapshotDiagnosticFields(snapshot)
-	fields["operation"] = operation
-	s.logLifecycle("observer_sync_result", fields)
-}
-
 func (s *Service) maybeLogTelegramOriginTerminal(ctx context.Context, snapshot appserver.ThreadReadSnapshot) {
 	threadID := strings.TrimSpace(snapshot.Thread.ID)
 	turnID := strings.TrimSpace(snapshot.LatestTurnID)
@@ -301,7 +265,7 @@ func (s *Service) maybeLogTelegramOriginTerminal(ctx context.Context, snapshot a
 		return
 	}
 	fields := snapshotDiagnosticFields(snapshot)
-	fields["chat_source"] = model.PanelSourceTelegramInput
+	fields["chat_source"] = model.TurnOriginTelegram
 	s.logLifecycle("telegram_origin_turn_terminal", fields)
 	_ = s.store.SetState(ctx, key, string(model.NowString()))
 	_ = s.clearTelegramOriginEmptyInterruptedDefer(ctx, threadID, turnID)

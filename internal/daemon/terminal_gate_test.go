@@ -16,7 +16,7 @@ func TestTelegramEmptyInterruptedGateDefersAndKeepsHotPollingMetadata(t *testing
 	t.Parallel()
 
 	service := newTerminalGateTestService(t)
-	service.cfg.ObserverPollInterval = 10 * time.Second
+	service.cfg.SyncPollInterval = 10 * time.Second
 	ctx := context.Background()
 	now := time.Date(2026, 4, 29, 12, 0, 0, 0, time.UTC)
 	snapshot := terminalGateTestSnapshot("thread-defer", "turn-defer", "interrupted")
@@ -69,7 +69,7 @@ func TestTelegramEmptyInterruptedGateRecoversAndClearsDefer(t *testing.T) {
 	t.Parallel()
 
 	service := newTerminalGateTestService(t)
-	service.cfg.ObserverPollInterval = 5 * time.Second
+	service.cfg.SyncPollInterval = 5 * time.Second
 	ctx := context.Background()
 	now := time.Date(2026, 4, 29, 12, 0, 0, 0, time.UTC)
 	if err := service.markTelegramOriginTurn(ctx, "thread-recover", "turn-recover"); err != nil {
@@ -271,7 +271,7 @@ func TestTelegramEmptyInterruptedGateGraceExpiryAccepts(t *testing.T) {
 	t.Parallel()
 
 	service := newTerminalGateTestService(t)
-	service.cfg.ObserverPollInterval = time.Second
+	service.cfg.SyncPollInterval = time.Second
 	ctx := context.Background()
 	now := time.Date(2026, 4, 29, 12, 0, 0, 0, time.UTC)
 	if err := service.markTelegramOriginTurn(ctx, "thread-expiry", "turn-expiry"); err != nil {

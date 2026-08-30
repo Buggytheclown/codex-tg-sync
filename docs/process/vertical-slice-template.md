@@ -27,7 +27,8 @@ Work the agent must not touch in this slice.
 5. Implement the minimum change.
 6. Run targeted checks.
 7. Run broader checks required by `AGENTS.md`.
-8. Record live Telegram validation if this changes UI, routing, observer, lifecycle, Plan Mode, or callbacks.
+8. Record live Telegram validation if this changes AFC routing, topic lifecycle,
+   approvals, input, rendering, or callbacks.
 9. Commit the focused slice.
 
 ## Acceptance Criteria
