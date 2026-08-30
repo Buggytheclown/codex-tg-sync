@@ -486,6 +486,43 @@ func TestStartupReconciliationClosesStoredTerminalExternalRequests(t *testing.T)
 	}
 }
 
+func TestStartupReconciliationClosesRequestSupersededByLaterTurn(t *testing.T) {
+	t.Parallel()
+	service := newTestService(t)
+	ctx := context.Background()
+	request := daemonExternalRequest("test:startup:superseded", "old work")
+	request.SourceChatID = "chat"
+	request.SourceMessageID = 42
+	oldTurnID := "00000000-0000-7000-8000-000000000001"
+	newTurnID := "00000000-0000-7000-8000-000000000002"
+	if _, err := service.IngestExternalRequests(ctx, "test", 1, []model.ExternalLaunchRequest{request}); err != nil {
+		t.Fatal(err)
+	}
+	if claimed, _ := service.store.ClaimExternalLaunchRequest(ctx, request.ID); !claimed {
+		t.Fatal("request was not claimed")
+	}
+	if changed, err := service.store.CompleteExternalLaunchRequest(ctx, request.ID, model.ExternalLaunchSessionStarted, "thread-superseded", oldTurnID, "", ""); err != nil || !changed {
+		t.Fatalf("start=%t err=%v", changed, err)
+	}
+	snapshot := appserver.SnapshotFromThreadRead(afcCompletedPayload("thread-superseded", newTurnID, "Later answer"))
+	compact, err := json.Marshal(snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := service.store.UpsertSnapshot(ctx, "thread-superseded", model.ThreadSnapshotState{CompactJSON: compact}); err != nil {
+		t.Fatal(err)
+	}
+
+	changed, err := service.reconcileStoredExternalLaunchTerminals(ctx)
+	if err != nil || changed != 1 {
+		t.Fatalf("reconcile=%d err=%v", changed, err)
+	}
+	stored, _ := service.store.GetExternalLaunchRequest(ctx, request.ID)
+	if stored.Status != model.ExternalLaunchSessionCompleted || !strings.Contains(stored.ReplyText, "later turn exists") {
+		t.Fatalf("reconciled request=%#v", stored)
+	}
+}
+
 func TestDispatchExternalLaunchRequestCreatesAFCThreadTurnAndTopic(t *testing.T) {
 	t.Parallel()
 	service := activeAFCService(t)

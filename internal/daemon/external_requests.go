@@ -144,7 +144,21 @@ func (s *Service) reconcileStoredExternalLaunchTerminals(ctx context.Context) (i
 			continue
 		}
 		var snapshot appserver.ThreadReadSnapshot
-		if json.Unmarshal(stored.CompactJSON, &snapshot) != nil || snapshot.LatestTurnID != request.TurnID {
+		if json.Unmarshal(stored.CompactJSON, &snapshot) != nil {
+			continue
+		}
+		if turnIDAfter(snapshot.LatestTurnID, request.TurnID) {
+			completed, err := s.store.CompleteExternalTurn(ctx, request.ThreadID, request.TurnID, model.ExternalLaunchSessionCompleted,
+				"The original Codex turn is no longer active; a later turn exists in the same thread.")
+			if err != nil {
+				return changed, err
+			}
+			if completed {
+				changed++
+			}
+			continue
+		}
+		if snapshot.LatestTurnID != request.TurnID {
 			continue
 		}
 		status, text, terminal := externalTerminalLaunchOutcome(snapshot)

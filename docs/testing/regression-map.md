@@ -251,6 +251,7 @@ Primary tests:
 - `internal/daemon/external_requests_test.go::TestFailedExternalLaunchCardCanRetryOrClose`
 - `internal/daemon/external_requests_test.go::TestRequestsCommandShowsOnlyActiveByDefault`
 - `internal/daemon/external_requests_test.go::TestStartupReconciliationClosesStoredTerminalExternalRequests`
+- `internal/daemon/external_requests_test.go::TestStartupReconciliationClosesRequestSupersededByLaterTurn`
 - `internal/daemon/external_requests_test.go::TestExternalLaunchAutoStartSkipsApprovalAndClaimsDurably`
 - `internal/daemon/external_requests_test.go::TestExternalFinalQueuesAndDeliversReplyToInvocation`
 - `internal/daemon/external_requests_test.go::TestRejectedExternalSenderGetsOnlyPolicyReplyAndCannotStartCodex`
