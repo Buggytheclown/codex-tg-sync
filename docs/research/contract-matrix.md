@@ -12,6 +12,8 @@ This file now serves two purposes:
 
 - `/sync on|off`
 - `/status`
+- `/pollers`
+- `/requests`
 - `/refresh`
 - `/projects`
 - `/newchat`

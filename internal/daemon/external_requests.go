@@ -103,13 +103,21 @@ func (s *Service) queueExternalReplyFromSnapshot(ctx context.Context, snapshot a
 			text = "The Codex turn ended without a final answer."
 		}
 	}
-	queued, err := s.store.QueueExternalReply(ctx, snapshot.Thread.ID, snapshot.LatestTurnID, text)
+	launchStatus := model.ExternalLaunchSessionCompleted
+	switch strings.ToLower(strings.TrimSpace(snapshot.LatestTurnStatus)) {
+	case "failed", "error":
+		launchStatus = model.ExternalLaunchSessionFailed
+	case "interrupted", "cancelled", "canceled", "aborted":
+		launchStatus = model.ExternalLaunchSessionInterrupted
+	}
+	queued, err := s.store.CompleteExternalTurn(ctx, snapshot.Thread.ID, snapshot.LatestTurnID, launchStatus, text)
 	if err != nil {
 		s.logLifecycle("external_reply_queue_failed", lifecycleFields{"thread_id": snapshot.Thread.ID, "turn_id": snapshot.LatestTurnID, "error": err})
 		return
 	}
 	if queued {
 		s.logLifecycle("external_reply_queued", lifecycleFields{"thread_id": snapshot.Thread.ID, "turn_id": snapshot.LatestTurnID})
+		s.processExternalLaunchRequests(ctx)
 	}
 }
 
@@ -198,20 +206,9 @@ func (s *Service) renderExternalLaunchRequest(ctx context.Context, sender Sender
 	text := externalLaunchRequestText(request)
 	if request.TelegramMessageID == 0 {
 		_ = s.store.ExpireExternalLaunchCallbackRoutes(ctx, request.ID)
-		var buttons [][]model.ButtonSpec
-		var routes []model.CallbackRoute
-		if !request.AutoStart {
-			startRoute, startButton, err := s.externalLaunchButton(ctx, request, "Start", "external_launch_start")
-			if err != nil {
-				return err
-			}
-			dismissRoute, dismissButton, err := s.externalLaunchButton(ctx, request, "Dismiss", "external_launch_dismiss")
-			if err != nil {
-				_ = s.store.ExpireExternalLaunchCallbackRoutes(ctx, request.ID)
-				return err
-			}
-			buttons = [][]model.ButtonSpec{{dismissButton, startButton}}
-			routes = []model.CallbackRoute{startRoute, dismissRoute}
+		buttons, routes, err := s.externalLaunchActions(ctx, request)
+		if err != nil {
+			return err
 		}
 		messageID, err := sender.SendMessage(ctx, s.cfg.AFCGroupID, request.TelegramTopicID, text,
 			buttons, notifySendOptions())
@@ -227,32 +224,54 @@ func (s *Service) renderExternalLaunchRequest(ctx context.Context, sender Sender
 		}
 		return s.store.MarkExternalLaunchRequestTelegramSent(ctx, request.ID, messageID, request.Status)
 	}
-	var buttons [][]model.ButtonSpec
-	if !request.AutoStart && request.Status == model.ExternalLaunchPendingApproval {
-		_ = s.store.ExpireExternalLaunchCallbackRoutes(ctx, request.ID)
-		startRoute, startButton, err := s.externalLaunchButton(ctx, request, "Start", "external_launch_start")
-		if err != nil {
+	_ = s.store.ExpireExternalLaunchCallbackRoutes(ctx, request.ID)
+	buttons, routes, err := s.externalLaunchActions(ctx, request)
+	if err != nil {
+		return err
+	}
+	for _, route := range routes {
+		route.TelegramMessageID = request.TelegramMessageID
+		if err := s.store.PutCallbackRoute(ctx, route); err != nil {
 			return err
 		}
-		dismissRoute, dismissButton, err := s.externalLaunchButton(ctx, request, "Dismiss", "external_launch_dismiss")
-		if err != nil {
-			_ = s.store.ExpireExternalLaunchCallbackRoutes(ctx, request.ID)
-			return err
-		}
-		startRoute.TelegramMessageID = request.TelegramMessageID
-		dismissRoute.TelegramMessageID = request.TelegramMessageID
-		if err := s.store.PutCallbackRoute(ctx, startRoute); err != nil {
-			return err
-		}
-		if err := s.store.PutCallbackRoute(ctx, dismissRoute); err != nil {
-			return err
-		}
-		buttons = [][]model.ButtonSpec{{dismissButton, startButton}}
 	}
 	if err := sender.EditMessage(ctx, s.cfg.AFCGroupID, request.TelegramTopicID, request.TelegramMessageID, text, buttons); err != nil {
 		return err
 	}
 	return s.store.MarkExternalLaunchRequestTelegramRendered(ctx, request.ID, request.TelegramMessageID, request.Status)
+}
+
+func (s *Service) externalLaunchActions(ctx context.Context, request model.ExternalLaunchRequest) ([][]model.ButtonSpec, []model.CallbackRoute, error) {
+	type action struct {
+		label string
+		name  string
+	}
+	var actions []action
+	switch request.Status {
+	case model.ExternalLaunchPendingApproval:
+		if !request.AutoStart {
+			actions = []action{{label: "Dismiss", name: "external_launch_dismiss"}, {label: "Start", name: "external_launch_start"}}
+		}
+	case model.ExternalLaunchFailed:
+		actions = []action{{label: "Close", name: "external_launch_close"}, {label: "Retry", name: "external_launch_retry"}}
+	case model.ExternalLaunchOutcomeUnknown:
+		actions = []action{{label: "Close", name: "external_launch_close"}, {label: "Check status", name: "external_launch_check"}}
+	}
+	if len(actions) == 0 {
+		return nil, nil, nil
+	}
+	buttons := make([]model.ButtonSpec, 0, len(actions))
+	routes := make([]model.CallbackRoute, 0, len(actions))
+	for _, action := range actions {
+		route, button, err := s.externalLaunchButton(ctx, request, action.label, action.name)
+		if err != nil {
+			_ = s.store.ExpireExternalLaunchCallbackRoutes(ctx, request.ID)
+			return nil, nil, err
+		}
+		buttons = append(buttons, button)
+		routes = append(routes, route)
+	}
+	return [][]model.ButtonSpec{buttons}, routes, nil
 }
 
 func (s *Service) externalLaunchButton(ctx context.Context, request model.ExternalLaunchRequest, label, action string) (model.CallbackRoute, model.ButtonSpec, error) {
@@ -275,17 +294,7 @@ func (s *Service) externalLaunchButton(ctx context.Context, request model.Extern
 }
 
 func externalLaunchRequestText(request model.ExternalLaunchRequest) string {
-	status := map[string]string{
-		model.ExternalLaunchPendingApproval: "Awaiting approval",
-		model.ExternalLaunchStarting:        "Starting",
-		model.ExternalLaunchSessionStarted:  "Started",
-		model.ExternalLaunchDismissed:       "Dismissed",
-		model.ExternalLaunchFailed:          "Failed",
-		model.ExternalLaunchOutcomeUnknown:  "Outcome unknown — not retried automatically",
-	}[request.Status]
-	if status == "" {
-		status = request.Status
-	}
+	status := externalLaunchStatusLabel(request.Status)
 	lines := []string{
 		"🚀 [Launch request]",
 		fmt.Sprintf("Source: %s", request.Source),
@@ -314,6 +323,24 @@ func externalLaunchRequestText(request model.ExternalLaunchRequest) string {
 	return text
 }
 
+func externalLaunchStatusLabel(status string) string {
+	label := map[string]string{
+		model.ExternalLaunchPendingApproval:    "Awaiting approval",
+		model.ExternalLaunchStarting:           "Starting",
+		model.ExternalLaunchSessionStarted:     "Started",
+		model.ExternalLaunchSessionCompleted:   "Completed",
+		model.ExternalLaunchSessionInterrupted: "Interrupted",
+		model.ExternalLaunchSessionFailed:      "Run failed",
+		model.ExternalLaunchDismissed:          "Dismissed",
+		model.ExternalLaunchFailed:             "Failed",
+		model.ExternalLaunchOutcomeUnknown:     "Outcome unknown — not retried automatically",
+	}[status]
+	if label == "" {
+		return status
+	}
+	return label
+}
+
 func externalLaunchTelegramPreview(request model.ExternalLaunchRequest) string {
 	if preview := strings.TrimSpace(request.SafePreview); preview != "" {
 		return preview
@@ -333,6 +360,9 @@ func (s *Service) handleExternalLaunchCallback(ctx context.Context, chatID, topi
 		route.TelegramMessageID != messageID || route.ThreadID != request.ID {
 		return &DirectResponse{CallbackText: "This launch request button is stale."}, nil
 	}
+	if route.Action == "external_launch_check" {
+		return s.checkExternalLaunchOutcome(ctx, *request)
+	}
 	var changed bool
 	switch route.Action {
 	case "external_launch_start":
@@ -348,6 +378,10 @@ func (s *Service) handleExternalLaunchCallback(ctx context.Context, chatID, topi
 		changed, err = s.store.ClaimExternalLaunchRequest(ctx, request.ID)
 	case "external_launch_dismiss":
 		changed, err = s.store.DismissExternalLaunchRequest(ctx, request.ID)
+	case "external_launch_retry":
+		changed, err = s.store.RetryExternalLaunchRequest(ctx, request.ID)
+	case "external_launch_close":
+		changed, err = s.store.CloseExternalLaunchRequest(ctx, request.ID)
 	default:
 		return &DirectResponse{CallbackText: "This launch request button is stale."}, nil
 	}
@@ -362,8 +396,48 @@ func (s *Service) handleExternalLaunchCallback(ctx context.Context, chatID, topi
 	if route.Action == "external_launch_dismiss" {
 		return &DirectResponse{CallbackText: "Dismissed."}, nil
 	}
+	if route.Action == "external_launch_close" {
+		return &DirectResponse{CallbackText: "Closed."}, nil
+	}
+	if route.Action == "external_launch_retry" {
+		s.startExternalLaunchDispatch(request.ID)
+		return &DirectResponse{CallbackText: "Retrying."}, nil
+	}
 	s.startExternalLaunchDispatch(request.ID)
 	return &DirectResponse{CallbackText: "Starting."}, nil
+}
+
+func (s *Service) checkExternalLaunchOutcome(ctx context.Context, request model.ExternalLaunchRequest) (*DirectResponse, error) {
+	if request.Status != model.ExternalLaunchOutcomeUnknown {
+		return &DirectResponse{CallbackText: "This launch request button is stale."}, nil
+	}
+	if strings.TrimSpace(request.ThreadID) == "" {
+		return &DirectResponse{CallbackText: "No durable thread id is available; outcome remains unknown."}, nil
+	}
+	stored, err := s.store.GetSnapshot(ctx, request.ThreadID)
+	if err != nil {
+		return nil, err
+	}
+	if stored == nil || len(stored.CompactJSON) == 0 {
+		return &DirectResponse{CallbackText: "No authoritative thread snapshot is available yet; outcome remains unknown."}, nil
+	}
+	var snapshot appserver.ThreadReadSnapshot
+	if err := json.Unmarshal(stored.CompactJSON, &snapshot); err != nil || strings.TrimSpace(snapshot.LatestTurnID) == "" {
+		return &DirectResponse{CallbackText: "The thread snapshot has no confirmed turn; outcome remains unknown."}, nil
+	}
+	changed, err := s.store.ResolveExternalLaunchOutcome(ctx, request.ID, request.ThreadID, snapshot.LatestTurnID)
+	if err != nil {
+		return nil, err
+	}
+	if !changed {
+		return &DirectResponse{CallbackText: "This launch request button is stale."}, nil
+	}
+	if isTerminalStatus(snapshot.LatestTurnStatus) {
+		s.queueExternalReplyFromSnapshot(ctx, snapshot)
+	} else {
+		s.processExternalLaunchRequests(ctx)
+	}
+	return &DirectResponse{CallbackText: "Codex session found; request status reconciled."}, nil
 }
 
 func (s *Service) startExternalLaunchDispatch(requestID string) {

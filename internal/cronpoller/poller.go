@@ -42,6 +42,8 @@ type taskSchedule struct {
 
 type RequestSink interface {
 	EnqueueExternalRequests(ctx context.Context, source string, requests []model.ExternalLaunchRequest) (int, error)
+	NoteExternalPollStarted(ctx context.Context, source string)
+	NoteExternalPollResult(ctx context.Context, source string, err error)
 }
 
 type File struct {
@@ -113,7 +115,9 @@ func (p *Poller) Run(ctx context.Context, interval time.Duration, onResult func(
 		interval = DefaultPollInterval
 	}
 	for {
+		p.sink.NoteExternalPollStarted(ctx, Source)
 		_, err := p.pollOnceAfterResume(ctx)
+		p.sink.NoteExternalPollResult(ctx, Source, err)
 		if onResult != nil {
 			onResult(err)
 		}

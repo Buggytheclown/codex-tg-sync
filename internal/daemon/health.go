@@ -28,6 +28,18 @@ type externalPollHealthState struct {
 	RecoveredAfterResume bool   `json:"recovered_after_resume,omitempty"`
 }
 
+type externalPollerState struct {
+	Source              string `json:"source"`
+	Enabled             bool   `json:"enabled"`
+	IntervalMillis      int64  `json:"interval_millis"`
+	RegisteredAt        string `json:"registered_at,omitempty"`
+	LastStartedAt       string `json:"last_started_at,omitempty"`
+	LastFinishedAt      string `json:"last_finished_at,omitempty"`
+	LastSuccessAt       string `json:"last_success_at,omitempty"`
+	LastError           string `json:"last_error,omitempty"`
+	ConsecutiveFailures int    `json:"consecutive_failures,omitempty"`
+}
+
 const (
 	externalPollObservationGap = 2 * time.Minute
 	externalPollResumeGrace    = 4 * time.Minute
@@ -195,6 +207,7 @@ func healthKey(value string) string {
 }
 
 func (s *Service) NoteExternalPollResult(ctx context.Context, source string, err error) {
+	s.noteExternalPollerResult(ctx, source, err)
 	key := healthKey(source)
 	if key == "" {
 		key = "external"
@@ -259,6 +272,165 @@ func (s *Service) NoteExternalPollResult(ctx context.Context, source string, err
 		tracker.RecoveredAfterResume = false
 	}
 	s.saveExternalPollHealthState(ctx, trackerKey, tracker)
+}
+
+func (s *Service) RegisterExternalPoller(ctx context.Context, source string, interval time.Duration, enabled bool) error {
+	source = healthKey(source)
+	if source == "" {
+		return fmt.Errorf("poller source is required")
+	}
+	if interval <= 0 {
+		return fmt.Errorf("poller interval must be positive")
+	}
+	state := externalPollerState{
+		Source:         source,
+		Enabled:        enabled,
+		IntervalMillis: interval.Milliseconds(),
+		RegisteredAt:   s.now().UTC().Format(time.RFC3339Nano),
+	}
+	return s.saveExternalPollerState(ctx, state)
+}
+
+func (s *Service) NoteExternalPollStarted(ctx context.Context, source string) {
+	state := s.loadExternalPollerState(ctx, source)
+	if state.Source == "" {
+		state.Source = healthKey(source)
+		state.Enabled = true
+	}
+	state.LastStartedAt = s.now().UTC().Format(time.RFC3339Nano)
+	_ = s.saveExternalPollerState(ctx, state)
+}
+
+func (s *Service) noteExternalPollerResult(ctx context.Context, source string, resultErr error) {
+	state := s.loadExternalPollerState(ctx, source)
+	if state.Source == "" {
+		state.Source = healthKey(source)
+		state.Enabled = true
+	}
+	now := s.now().UTC().Format(time.RFC3339Nano)
+	if state.LastStartedAt == "" {
+		state.LastStartedAt = now
+	}
+	state.LastFinishedAt = now
+	if resultErr == nil {
+		state.LastSuccessAt = now
+		state.LastError = ""
+		state.ConsecutiveFailures = 0
+	} else {
+		state.LastError = sanitizeDiagnosticString(resultErr.Error())
+		state.ConsecutiveFailures++
+	}
+	_ = s.saveExternalPollerState(ctx, state)
+}
+
+func (s *Service) loadExternalPollerState(ctx context.Context, source string) externalPollerState {
+	raw, _ := s.store.GetState(ctx, "poller."+healthKey(source))
+	var state externalPollerState
+	_ = json.Unmarshal([]byte(raw), &state)
+	return state
+}
+
+func (s *Service) saveExternalPollerState(ctx context.Context, state externalPollerState) error {
+	if state.Source == "" {
+		return nil
+	}
+	payload, err := json.Marshal(state)
+	if err != nil {
+		return err
+	}
+	return s.store.SetState(ctx, "poller."+healthKey(state.Source), string(payload))
+}
+
+func (s *Service) PollersSnapshot(ctx context.Context) (string, error) {
+	daemonState, err := s.store.ListState(ctx)
+	if err != nil {
+		return "", err
+	}
+	states := make([]externalPollerState, 0)
+	for key, raw := range daemonState {
+		if !strings.HasPrefix(key, "poller.") {
+			continue
+		}
+		var state externalPollerState
+		if json.Unmarshal([]byte(raw), &state) != nil || state.Source == "" {
+			continue
+		}
+		states = append(states, state)
+	}
+	sort.Slice(states, func(i, j int) bool { return states[i].Source < states[j].Source })
+	lines := []string{"Source pollers"}
+	if len(states) == 0 {
+		return strings.Join(append(lines, "", "No pollers registered."), "\n"), nil
+	}
+	now := s.now().UTC()
+	for _, state := range states {
+		marker, status := externalPollerDisplayState(state, now)
+		interval := time.Duration(state.IntervalMillis) * time.Millisecond
+		line := fmt.Sprintf("%s %s · %s", marker, state.Source, status)
+		if interval > 0 {
+			line += " · every " + interval.String()
+		}
+		lines = append(lines, "", line)
+		if state.LastFinishedAt != "" {
+			lines = append(lines, "Last cycle: "+formatPollerObservationAge(state.LastFinishedAt, now))
+		}
+		if state.LastSuccessAt != "" {
+			lines = append(lines, "Last success: "+formatPollerObservationAge(state.LastSuccessAt, now))
+		}
+		if state.ConsecutiveFailures > 0 {
+			lines = append(lines, fmt.Sprintf("Consecutive failures: %d", state.ConsecutiveFailures))
+		}
+		if state.LastError != "" {
+			lines = append(lines, "Error: "+state.LastError)
+		}
+	}
+	return strings.Join(lines, "\n"), nil
+}
+
+func externalPollerDisplayState(state externalPollerState, now time.Time) (string, string) {
+	if !state.Enabled {
+		return "⚪", "disabled"
+	}
+	interval := time.Duration(state.IntervalMillis) * time.Millisecond
+	staleAfter := 2 * interval
+	if staleAfter < 30*time.Second {
+		staleAfter = 30 * time.Second
+	}
+	started := parseHealthTime(state.LastStartedAt)
+	finished := parseHealthTime(state.LastFinishedAt)
+	latest := finished
+	if started.After(finished) {
+		latest = started
+	}
+	if latest.IsZero() {
+		return "🟡", "waiting"
+	}
+	age := now.Sub(latest)
+	if age < 0 {
+		age = 0
+	}
+	if age > staleAfter {
+		return "🟠", "stale"
+	}
+	if started.After(finished) {
+		return "🔵", "polling"
+	}
+	if state.LastError != "" {
+		return "🔴", "failing"
+	}
+	return "🟢", "healthy"
+}
+
+func formatPollerObservationAge(raw string, now time.Time) string {
+	at := parseHealthTime(raw)
+	if at.IsZero() {
+		return "never"
+	}
+	age := now.Sub(at)
+	if age < 0 {
+		age = 0
+	}
+	return age.Round(time.Second).String() + " ago"
 }
 
 func (s *Service) loadExternalPollHealthState(ctx context.Context, key string) externalPollHealthState {

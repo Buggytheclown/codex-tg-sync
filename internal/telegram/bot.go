@@ -409,6 +409,8 @@ func defaultCommands() []BotCommand {
 	return []BotCommand{
 		{Command: "sync", Description: "Enable or disable Sync mode"},
 		{Command: "status", Description: "Show Sync mode status"},
+		{Command: "pollers", Description: "Show source poller health"},
+		{Command: "requests", Description: "Show active launch requests"},
 		{Command: "refresh", Description: "Refresh Desktop chat topics"},
 		{Command: "projects", Description: "Start a task in a project"},
 		{Command: "newchat", Description: "Start a new Codex chat"},

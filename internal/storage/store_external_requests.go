@@ -285,16 +285,55 @@ func (s *Store) ClaimExternalLaunchRequest(ctx context.Context, id string) (bool
 }
 
 func (s *Store) DismissExternalLaunchRequest(ctx context.Context, id string) (bool, error) {
+	return s.CloseExternalLaunchRequest(ctx, id)
+}
+
+func (s *Store) CloseExternalLaunchRequest(ctx context.Context, id string) (bool, error) {
 	now := model.NowString()
 	result, err := s.db.ExecContext(ctx, `
 	UPDATE external_launch_requests
 	SET status=?,
-		reply_status=CASE WHEN coalesce(source_chat_id,'')<>'' AND source_message_id<>0 AND coalesce(reply_status,'')='' THEN ? ELSE reply_status END,
-		reply_text=CASE WHEN coalesce(source_chat_id,'')<>'' AND source_message_id<>0 AND coalesce(reply_status,'')='' THEN ? ELSE reply_text END,
-		reply_available_at=CASE WHEN coalesce(source_chat_id,'')<>'' AND source_message_id<>0 AND coalesce(reply_status,'')='' THEN ? ELSE reply_available_at END,
+		reply_status=CASE WHEN status=? AND coalesce(source_chat_id,'')<>'' AND source_message_id<>0 AND coalesce(reply_status,'')='' THEN ? ELSE reply_status END,
+		reply_text=CASE WHEN status=? AND coalesce(source_chat_id,'')<>'' AND source_message_id<>0 AND coalesce(reply_status,'')='' THEN ? ELSE reply_text END,
+		reply_available_at=CASE WHEN status=? AND coalesce(source_chat_id,'')<>'' AND source_message_id<>0 AND coalesce(reply_status,'')='' THEN ? ELSE reply_available_at END,
 		updated_at=?
-	WHERE id=? AND status=?`, model.ExternalLaunchDismissed, model.ExternalReplyPending,
-		"The owner dismissed this Codex request. No Codex session was started.", now, now, id, model.ExternalLaunchPendingApproval)
+	WHERE id=? AND status IN (?, ?, ?)`, model.ExternalLaunchDismissed,
+		model.ExternalLaunchPendingApproval, model.ExternalReplyPending,
+		model.ExternalLaunchPendingApproval, "The owner dismissed this Codex request. No Codex session was started.",
+		model.ExternalLaunchPendingApproval, now, now, id,
+		model.ExternalLaunchPendingApproval, model.ExternalLaunchFailed, model.ExternalLaunchOutcomeUnknown)
+	if err != nil {
+		return false, err
+	}
+	rows, err := result.RowsAffected()
+	return rows == 1, err
+}
+
+func (s *Store) RetryExternalLaunchRequest(ctx context.Context, id string) (bool, error) {
+	result, err := s.db.ExecContext(ctx, `
+	UPDATE external_launch_requests
+	SET status=?, thread_id=NULL, turn_id=NULL, error_type=NULL, error_summary=NULL,
+		reply_status=NULL, reply_text=NULL, reply_message_id=0, reply_attempts=0,
+		reply_available_at=NULL, reply_error=NULL, updated_at=?
+	WHERE id=? AND status=?`, model.ExternalLaunchStarting, model.NowString(), id, model.ExternalLaunchFailed)
+	if err != nil {
+		return false, err
+	}
+	rows, err := result.RowsAffected()
+	return rows == 1, err
+}
+
+func (s *Store) ResolveExternalLaunchOutcome(ctx context.Context, id, threadID, turnID string) (bool, error) {
+	threadID = strings.TrimSpace(threadID)
+	turnID = strings.TrimSpace(turnID)
+	if threadID == "" || turnID == "" {
+		return false, errors.New("resolved external launch requires thread and turn")
+	}
+	result, err := s.db.ExecContext(ctx, `
+	UPDATE external_launch_requests
+	SET status=?, thread_id=?, turn_id=?, error_type=NULL, error_summary=NULL, updated_at=?
+	WHERE id=? AND status=? AND thread_id=?`, model.ExternalLaunchSessionStarted, threadID, turnID,
+		model.NowString(), id, model.ExternalLaunchOutcomeUnknown, threadID)
 	if err != nil {
 		return false, err
 	}
@@ -409,6 +448,68 @@ func (s *Store) QueueExternalReply(ctx context.Context, threadID, turnID, text s
 	}
 	rows, err := result.RowsAffected()
 	return rows == 1, err
+}
+
+func (s *Store) CompleteExternalTurn(ctx context.Context, threadID, turnID, status, text string) (bool, error) {
+	threadID = strings.TrimSpace(threadID)
+	turnID = strings.TrimSpace(turnID)
+	text = strings.TrimSpace(text)
+	if threadID == "" || turnID == "" {
+		return false, errors.New("external turn completion requires thread and turn")
+	}
+	switch status {
+	case model.ExternalLaunchSessionCompleted, model.ExternalLaunchSessionInterrupted, model.ExternalLaunchSessionFailed:
+	default:
+		return false, errors.New("invalid external turn completion status")
+	}
+	now := model.NowString()
+	result, err := s.db.ExecContext(ctx, `
+	UPDATE external_launch_requests
+	SET status=?,
+		reply_status=CASE WHEN coalesce(source_chat_id,'')<>'' AND source_message_id<>0 AND coalesce(reply_status,'')='' THEN ? ELSE reply_status END,
+		reply_text=CASE WHEN coalesce(source_chat_id,'')<>'' AND source_message_id<>0 AND coalesce(reply_status,'')='' THEN ? ELSE reply_text END,
+		reply_available_at=CASE WHEN coalesce(source_chat_id,'')<>'' AND source_message_id<>0 AND coalesce(reply_status,'')='' THEN ? ELSE reply_available_at END,
+		reply_error=CASE WHEN coalesce(source_chat_id,'')<>'' AND source_message_id<>0 AND coalesce(reply_status,'')='' THEN '' ELSE reply_error END,
+		updated_at=?
+	WHERE thread_id=? AND turn_id=? AND status=?`, status, model.ExternalReplyPending, nullable(text), now, now,
+		threadID, turnID, model.ExternalLaunchSessionStarted)
+	if err != nil {
+		return false, err
+	}
+	rows, err := result.RowsAffected()
+	return rows == 1, err
+}
+
+func (s *Store) ListExternalLaunchRequestsByStatus(ctx context.Context, statuses []string, limit int) ([]model.ExternalLaunchRequest, error) {
+	if limit <= 0 {
+		limit = 20
+	}
+	query := `SELECT ` + externalLaunchRequestColumns + ` FROM external_launch_requests`
+	args := make([]any, 0, len(statuses)+1)
+	if len(statuses) > 0 {
+		placeholders := make([]string, 0, len(statuses))
+		for _, status := range statuses {
+			placeholders = append(placeholders, "?")
+			args = append(args, status)
+		}
+		query += ` WHERE status IN (` + strings.Join(placeholders, ",") + `)`
+	}
+	query += ` ORDER BY updated_at DESC, id LIMIT ?`
+	args = append(args, limit)
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	requests := make([]model.ExternalLaunchRequest, 0)
+	for rows.Next() {
+		var request model.ExternalLaunchRequest
+		if err := scanExternalLaunchRequest(rows, &request); err != nil {
+			return nil, err
+		}
+		requests = append(requests, request)
+	}
+	return requests, rows.Err()
 }
 
 func (s *Store) ClaimExternalAckBatch(ctx context.Context, limit int) ([]model.ExternalLaunchRequest, error) {

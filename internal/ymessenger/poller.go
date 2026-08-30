@@ -17,6 +17,7 @@ type UpdatesClient interface {
 type RequestSink interface {
 	ExternalSourceCursor(ctx context.Context, source string) (int64, error)
 	IngestExternalRequests(ctx context.Context, source string, cursor int64, requests []model.ExternalLaunchRequest) (int, error)
+	NoteExternalPollStarted(ctx context.Context, source string)
 	NoteExternalPollResult(ctx context.Context, source string, err error)
 }
 
@@ -124,6 +125,7 @@ func (p *Poller) Run(ctx context.Context, interval time.Duration, onError func(e
 	}
 	errorDelay := retryDelay(interval)
 	for {
+		p.sink.NoteExternalPollStarted(ctx, Source)
 		err := p.PollOnce(ctx)
 		if ctx.Err() != nil {
 			return

@@ -18,6 +18,7 @@ const (
 
 type RequestSink interface {
 	EnqueueExternalRequests(ctx context.Context, source string, requests []model.ExternalLaunchRequest) (int, error)
+	NoteExternalPollStarted(ctx context.Context, source string)
 	NoteExternalPollResult(ctx context.Context, source string, err error)
 }
 
@@ -74,6 +75,7 @@ func (p *Poller) Run(ctx context.Context, interval time.Duration, onError func(e
 		interval = DefaultPollInterval
 	}
 	for {
+		p.sink.NoteExternalPollStarted(ctx, Source)
 		_, err := p.PollOnce(ctx)
 		if ctx.Err() != nil {
 			return

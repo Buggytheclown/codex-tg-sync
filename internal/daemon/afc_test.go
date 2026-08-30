@@ -2299,6 +2299,8 @@ func TestAFCControlHelpListsNewTaskCommands(t *testing.T) {
 	}
 	status, err := service.HandleMessageWithID(context.Background(), -1001, 1, 904, 123456789, "/status", 0)
 	if err != nil || status == nil || !strings.Contains(status.Text, "New task commands: /projects, /newchat") ||
+		!strings.Contains(status.Text, "Poller status: /pollers") ||
+		!strings.Contains(status.Text, "External requests: /requests") ||
 		!strings.Contains(status.Text, "Repair command: /repair") ||
 		!strings.Contains(status.Text, "Dead deliveries:") ||
 		!strings.Contains(status.Text, "App-server heartbeat:") ||

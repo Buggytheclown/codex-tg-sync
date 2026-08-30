@@ -118,6 +118,18 @@ func (s *Service) handleAFCMessage(ctx context.Context, topicID, messageID, user
 			return s.deactivateAFC(ctx)
 		case len(fields) == 1 && fields[0] == "/status":
 			return s.afcStatus(ctx)
+		case len(fields) == 1 && fields[0] == "/pollers":
+			text, err := s.PollersSnapshot(ctx)
+			if err != nil {
+				return nil, err
+			}
+			return &DirectResponse{Text: text}, nil
+		case len(fields) >= 1 && len(fields) <= 2 && fields[0] == "/requests":
+			filter := ""
+			if len(fields) == 2 {
+				filter = fields[1]
+			}
+			return s.externalRequestsOverview(ctx, filter)
 		case len(fields) == 1 && fields[0] == "/refresh":
 			return s.syncAFCCommand(ctx)
 		case len(fields) == 1 && fields[0] == "/repair":
@@ -128,7 +140,7 @@ func (s *Service) handleAFCMessage(ctx context.Context, topicID, messageID, user
 		case len(fields) == 1 && (fields[0] == "/projects" || fields[0] == "/newchat"):
 			return s.afcProjectsMenu(ctx, topicID)
 		default:
-			return &DirectResponse{Text: "Sync Control accepts /sync on, /sync off, /status, /refresh, /repair, /projects, and /newchat. Legacy commands are disabled in this group."}, nil
+			return &DirectResponse{Text: "Sync Control accepts /sync on, /sync off, /status, /pollers, /requests, /refresh, /repair, /projects, and /newchat. Legacy commands are disabled in this group."}, nil
 		}
 	}
 	topic, err := s.store.GetActiveAFCTopic(ctx, s.cfg.AFCGroupID, topicID)
@@ -411,11 +423,14 @@ func (s *Service) afcOwnsTelegramMutations(ctx context.Context) (bool, error) {
 
 func afcLegacyReadOnlyCommand(text string) bool {
 	fields := strings.Fields(strings.TrimSpace(strings.ToLower(text)))
-	if len(fields) != 1 {
+	if len(fields) == 0 || len(fields) > 2 {
 		return false
 	}
 	command, _, _ := strings.Cut(fields[0], "@")
-	return command == "/help" || command == "/status"
+	if command == "/requests" {
+		return true
+	}
+	return len(fields) == 1 && (command == "/help" || command == "/status" || command == "/pollers")
 }
 
 func isAFCNoRolloutError(err error) bool {
@@ -581,7 +596,7 @@ func (s *Service) afcStatus(ctx context.Context) (*DirectResponse, error) {
 		return nil, err
 	}
 	health := strings.Join(s.healthStatusLines(ctx, time.Now().UTC()), "\n")
-	return &DirectResponse{Text: fmt.Sprintf("AFC state: %s\nSession: %s\nInitial topic limit: %d\nConnected topics: %d\nReady drafts: %d\n%s\nRefresh command: /refresh\nRepair command: /repair\nNew task commands: /projects, /newchat\nActivation summary: %s",
+	return &DirectResponse{Text: fmt.Sprintf("AFC state: %s\nSession: %s\nInitial topic limit: %d\nConnected topics: %d\nReady drafts: %d\n%s\nPoller status: /pollers\nExternal requests: /requests\nRefresh command: /refresh\nRepair command: /repair\nNew task commands: /projects, /newchat\nActivation summary: %s",
 		state.State, state.SessionID, afcInitialTopicLimit(s.cfg.AFCInitialTopicLimit), countConnectedAFCTopics(topics), countReadyAFCDrafts(drafts), health, strings.TrimSpace(state.ActivationSummaryJSON))}, nil
 }
 

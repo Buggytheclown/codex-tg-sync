@@ -204,6 +204,42 @@ func TestStatusShowsHeartbeatDeadLettersAndOpenHealthIncidents(t *testing.T) {
 	}
 }
 
+func TestPollersCommandShowsDurableHealthyFailingStaleAndDisabledState(t *testing.T) {
+	service := newTestService(t)
+	ctx := context.Background()
+	base := time.Date(2026, 8, 30, 10, 0, 0, 0, time.UTC)
+	service.now = func() time.Time { return base }
+	if err := service.RegisterExternalPoller(ctx, "stale", 10*time.Second, true); err != nil {
+		t.Fatal(err)
+	}
+	service.NoteExternalPollStarted(ctx, "stale")
+	service.NoteExternalPollResult(ctx, "stale", nil)
+	service.now = func() time.Time { return base.Add(time.Minute) }
+	if err := service.RegisterExternalPoller(ctx, "healthy", 15*time.Second, true); err != nil {
+		t.Fatal(err)
+	}
+	service.NoteExternalPollStarted(ctx, "healthy")
+	service.NoteExternalPollResult(ctx, "healthy", nil)
+	if err := service.RegisterExternalPoller(ctx, "failing", time.Minute, true); err != nil {
+		t.Fatal(err)
+	}
+	service.NoteExternalPollStarted(ctx, "failing")
+	service.NoteExternalPollResult(ctx, "failing", errors.New("token expired"))
+	if err := service.RegisterExternalPoller(ctx, "disabled", time.Minute, false); err != nil {
+		t.Fatal(err)
+	}
+
+	response, err := service.handleCommand(ctx, 123456789, 0, "/pollers", 0)
+	if err != nil || response == nil {
+		t.Fatalf("pollers response=%#v err=%v", response, err)
+	}
+	for _, want := range []string{"🟢 healthy · healthy", "🔴 failing · failing", "⚪ disabled · disabled", "🟠 stale · stale", "token expired"} {
+		if !strings.Contains(strings.ToLower(response.Text), want) {
+			t.Fatalf("pollers missing %q:\n%s", want, response.Text)
+		}
+	}
+}
+
 func TestSharedAppServerHeartbeatFailureTruthfullyResetsAFCWithoutReplay(t *testing.T) {
 	service := activeAFCService(t)
 	service.cfg.AppServerMode = "websocket"

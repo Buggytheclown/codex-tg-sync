@@ -243,8 +243,12 @@ Primary tests:
 - `internal/storage/store_external_requests_test.go::TestExternalAckIsDurableRetryableAndRejectedRequestIsNotRendered`
 - `internal/storage/store_external_requests_test.go::TestExternalLaunchRequestTransitionsAreConditional`
 - `internal/storage/store_external_requests_test.go::TestRecoverStartingExternalLaunchRequestsMarksOutcomeUnknown`
+- `internal/storage/store_external_requests_test.go::TestExternalLaunchRecoveryTransitionsAreConditional`
+- `internal/storage/store_external_requests_test.go::TestCompleteExternalTurnClosesActiveRequest`
 - `internal/daemon/external_requests_test.go::TestExternalLaunchApprovalRendersOnceAndDismissEditsSameMessage`
 - `internal/daemon/external_requests_test.go::TestExternalLaunchApprovalCallbackFailsClosedAndStartClaimsOnce`
+- `internal/daemon/external_requests_test.go::TestFailedExternalLaunchCardCanRetryOrClose`
+- `internal/daemon/external_requests_test.go::TestRequestsCommandShowsOnlyActiveByDefault`
 - `internal/daemon/external_requests_test.go::TestExternalLaunchAutoStartSkipsApprovalAndClaimsDurably`
 - `internal/daemon/external_requests_test.go::TestExternalFinalQueuesAndDeliversReplyToInvocation`
 - `internal/daemon/external_requests_test.go::TestRejectedExternalSenderGetsOnlyPolicyReplyAndCannotStartCodex`
@@ -274,6 +278,11 @@ Contract notes:
   create Telegram approval or Codex work.
 - Duplicate updates and callbacks are safe; ambiguous App Server dispatch is
   visible and non-replayable.
+- Known pre-turn failures are explicitly retryable; ambiguous outcomes are
+  closeable but remain non-replayable. `/requests` exposes actionable and
+  running launch requests.
+- `/pollers` reports durable source-cycle observations and marks overdue
+  observations stale instead of treating configured goroutines as healthy.
 
 ## Cron Launch Requests
 

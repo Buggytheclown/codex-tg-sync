@@ -126,6 +126,19 @@ func runDaemon(cfg config.Config) error {
 	if err := bot.Start(ctx); err != nil {
 		return err
 	}
+	for _, poller := range []struct {
+		source   string
+		interval time.Duration
+		enabled  bool
+	}{
+		{source: ymessenger.Source, interval: cfg.YMessengerPollInterval, enabled: cfg.YMessengerEnabled},
+		{source: arcanumreview.Source, interval: cfg.ArcanumReviewPollInterval, enabled: cfg.ArcanumReviewEnabled},
+		{source: cronpoller.Source, interval: cronpoller.DefaultPollInterval, enabled: true},
+	} {
+		if err := service.RegisterExternalPoller(ctx, poller.source, poller.interval, poller.enabled); err != nil {
+			return fmt.Errorf("register %s poller: %w", poller.source, err)
+		}
+	}
 	startYMessengerPoller(ctx, cfg, service, logger)
 	startArcanumReviewPoller(ctx, cfg, service, logger)
 	startCronPoller(ctx, cfg, service, logger)

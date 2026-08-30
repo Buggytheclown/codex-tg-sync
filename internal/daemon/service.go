@@ -1714,13 +1714,21 @@ func (s *Service) handleCommand(ctx context.Context, chatID, topicID int64, raw 
 	case "/start":
 		return &DirectResponse{Text: "ctr-go is online.\nUse /status, /threads, /projects, /context, or /observe all."}, nil
 	case "/help":
-		return &DirectResponse{Text: "Commands:\n/start\n/help\n/threads [limit|search]\n/projects\n/new <project> <prompt>\n/newchat <prompt>\n/newthread <prompt>\n/show <thread>\n/bind <thread>\n/reply [--plan] <thread> <text>\n/plan <text>\n/plan <thread_id> <text>\n/settings\n/model\n/effort\n/context\n/observe all|off\n/panelmode [per_run|stable]\n/status\n/repair\n/stop [thread]\n/approve <request_id>\n/deny <request_id>"}, nil
+		return &DirectResponse{Text: "Commands:\n/start\n/help\n/threads [limit|search]\n/projects\n/new <project> <prompt>\n/newchat <prompt>\n/newthread <prompt>\n/show <thread>\n/bind <thread>\n/reply [--plan] <thread> <text>\n/plan <text>\n/plan <thread_id> <text>\n/settings\n/model\n/effort\n/context\n/observe all|off\n/panelmode [per_run|stable]\n/status\n/pollers\n/requests [active|running|failed|all]\n/repair\n/stop [thread]\n/approve <request_id>\n/deny <request_id>"}, nil
 	case "/status":
 		text, err := s.StatusSnapshot(ctx, chatID, topicID)
 		if err != nil {
 			return nil, err
 		}
 		return &DirectResponse{Text: text}, nil
+	case "/pollers":
+		text, err := s.PollersSnapshot(ctx)
+		if err != nil {
+			return nil, err
+		}
+		return &DirectResponse{Text: text}, nil
+	case "/requests":
+		return s.externalRequestsOverview(ctx, rest)
 	case "/context", "/whereami":
 		text, err := s.contextCard(ctx, chatID, topicID)
 		if err != nil {

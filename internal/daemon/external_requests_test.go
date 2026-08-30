@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"strings"
@@ -302,6 +303,153 @@ func TestExternalLaunchApprovalSendAndEditFailuresRemainRetryable(t *testing.T) 
 	service.processExternalLaunchRequests(context.Background())
 	if len(sender.edits) != 1 || sender.edits[0].messageID != 1 {
 		t.Fatalf("retry edits=%#v", sender.edits)
+	}
+}
+
+func TestFailedExternalLaunchCardCanRetryOrClose(t *testing.T) {
+	t.Parallel()
+	service := newTestService(t)
+	service.cfg.AFCGroupID = -1001
+	sender := &recordingSender{}
+	service.SetSender(sender)
+	ctx := context.Background()
+
+	retryRequest := daemonExternalRequest("test:failed:retry", "retry work")
+	if _, err := service.IngestExternalRequests(ctx, "test", 1, []model.ExternalLaunchRequest{retryRequest}); err != nil {
+		t.Fatal(err)
+	}
+	if claimed, _ := service.store.ClaimExternalLaunchRequest(ctx, retryRequest.ID); !claimed {
+		t.Fatal("retry request was not claimed")
+	}
+	if changed, err := service.store.CompleteExternalLaunchRequest(ctx, retryRequest.ID, model.ExternalLaunchFailed, "", "", "telegram_topic", "topic failed"); err != nil || !changed {
+		t.Fatalf("fail retry request=%t err=%v", changed, err)
+	}
+	service.processExternalLaunchRequests(ctx)
+	if len(sender.edits) == 0 {
+		t.Fatal("failed request card was not edited")
+	}
+	retryEdit := sender.edits[len(sender.edits)-1]
+	retryToken := callbackTokenForButton(retryEdit.buttons, "Retry")
+	if retryToken == "" || callbackTokenForButton(retryEdit.buttons, "Close") == "" {
+		t.Fatalf("failed buttons=%#v", retryEdit.buttons)
+	}
+	retryStored, _ := service.store.GetExternalLaunchRequest(ctx, retryRequest.ID)
+	response, err := service.HandleCallback(ctx, -1001, retryStored.TelegramTopicID, retryStored.TelegramMessageID, 123456789, retryToken)
+	if err != nil || response == nil || !strings.Contains(response.CallbackText, "Retrying") {
+		t.Fatalf("retry response=%#v err=%v", response, err)
+	}
+	stored, _ := service.store.GetExternalLaunchRequest(ctx, retryRequest.ID)
+	if stored.Status != model.ExternalLaunchStarting {
+		t.Fatalf("retry status=%q, want starting", stored.Status)
+	}
+	response, err = service.HandleCallback(ctx, -1001, retryStored.TelegramTopicID, retryStored.TelegramMessageID, 123456789, retryToken)
+	if err != nil || response == nil || !strings.Contains(response.CallbackText, "stale") {
+		t.Fatalf("duplicate retry=%#v err=%v", response, err)
+	}
+
+	closeRequest := daemonExternalRequest("test:failed:close", "close work")
+	if _, err := service.IngestExternalRequests(ctx, "test", 2, []model.ExternalLaunchRequest{closeRequest}); err != nil {
+		t.Fatal(err)
+	}
+	if claimed, _ := service.store.ClaimExternalLaunchRequest(ctx, closeRequest.ID); !claimed {
+		t.Fatal("close request was not claimed")
+	}
+	if changed, err := service.store.CompleteExternalLaunchRequest(ctx, closeRequest.ID, model.ExternalLaunchOutcomeUnknown, "", "", "dispatch_unknown", "unknown"); err != nil || !changed {
+		t.Fatalf("mark unknown=%t err=%v", changed, err)
+	}
+	service.processExternalLaunchRequests(ctx)
+	closeEdit := sender.edits[len(sender.edits)-1]
+	closeToken := callbackTokenForButton(closeEdit.buttons, "Close")
+	checkToken := callbackTokenForButton(closeEdit.buttons, "Check status")
+	if closeToken == "" || checkToken == "" || callbackTokenForButton(closeEdit.buttons, "Retry") != "" {
+		t.Fatalf("unknown buttons=%#v", closeEdit.buttons)
+	}
+	closeStored, _ := service.store.GetExternalLaunchRequest(ctx, closeRequest.ID)
+	checkResponse, err := service.HandleCallback(ctx, -1001, closeStored.TelegramTopicID, closeStored.TelegramMessageID, 123456789, checkToken)
+	if err != nil || checkResponse == nil || !strings.Contains(checkResponse.CallbackText, "remains unknown") {
+		t.Fatalf("check response=%#v err=%v", checkResponse, err)
+	}
+	response, err = service.HandleCallback(ctx, -1001, closeStored.TelegramTopicID, closeStored.TelegramMessageID, 123456789, closeToken)
+	if err != nil || response == nil || !strings.Contains(response.CallbackText, "Closed") {
+		t.Fatalf("close response=%#v err=%v", response, err)
+	}
+	stored, _ = service.store.GetExternalLaunchRequest(ctx, closeRequest.ID)
+	if stored.Status != model.ExternalLaunchDismissed {
+		t.Fatalf("close status=%q, want dismissed", stored.Status)
+	}
+}
+
+func TestRequestsCommandShowsOnlyActiveByDefault(t *testing.T) {
+	t.Parallel()
+	service := newTestService(t)
+	ctx := context.Background()
+	for index, status := range []string{model.ExternalLaunchPendingApproval, model.ExternalLaunchFailed, model.ExternalLaunchSessionCompleted} {
+		request := daemonExternalRequest("test:list:"+status, status+" work")
+		if _, err := service.IngestExternalRequests(ctx, "test", int64(index+1), []model.ExternalLaunchRequest{request}); err != nil {
+			t.Fatal(err)
+		}
+		if status != model.ExternalLaunchPendingApproval {
+			if claimed, _ := service.store.ClaimExternalLaunchRequest(ctx, request.ID); !claimed {
+				t.Fatalf("claim %s failed", status)
+			}
+			if status == model.ExternalLaunchFailed {
+				_, _ = service.store.CompleteExternalLaunchRequest(ctx, request.ID, status, "", "", "test", "failed")
+			} else {
+				_, _ = service.store.CompleteExternalLaunchRequest(ctx, request.ID, model.ExternalLaunchSessionStarted, "thread-complete", "turn-complete", "", "")
+				_, _ = service.store.CompleteExternalTurn(ctx, "thread-complete", "turn-complete", status, "done")
+			}
+		}
+	}
+
+	response, err := service.handleCommand(ctx, 123456789, 0, "/requests", 0)
+	if err != nil || response == nil {
+		t.Fatalf("requests response=%#v err=%v", response, err)
+	}
+	if !strings.Contains(response.Text, "test:list:pending_approval") || !strings.Contains(response.Text, "test:list:failed") || strings.Contains(response.Text, "test:list:session_completed") {
+		t.Fatalf("active requests:\n%s", response.Text)
+	}
+	all, err := service.handleCommand(ctx, 123456789, 0, "/requests all", 0)
+	if err != nil || all == nil || !strings.Contains(all.Text, "test:list:session_completed") {
+		t.Fatalf("all requests=%#v err=%v", all, err)
+	}
+}
+
+func TestExternalOutcomeCheckReconcilesStoredTerminalSnapshot(t *testing.T) {
+	t.Parallel()
+	service := newTestService(t)
+	service.cfg.AFCGroupID = -1001
+	sender := &recordingSender{}
+	service.SetSender(sender)
+	ctx := context.Background()
+	request := daemonExternalRequest("test:unknown:reconcile", "check work")
+	if _, err := service.IngestExternalRequests(ctx, "test", 1, []model.ExternalLaunchRequest{request}); err != nil {
+		t.Fatal(err)
+	}
+	if claimed, _ := service.store.ClaimExternalLaunchRequest(ctx, request.ID); !claimed {
+		t.Fatal("request was not claimed")
+	}
+	if changed, err := service.store.CompleteExternalLaunchRequest(ctx, request.ID, model.ExternalLaunchOutcomeUnknown, "thread-check", "", "dispatch_unknown", "unknown"); err != nil || !changed {
+		t.Fatalf("mark unknown=%t err=%v", changed, err)
+	}
+	snapshot := appserver.SnapshotFromThreadRead(afcCompletedPayload("thread-check", "turn-check", "Done"))
+	compact, err := json.Marshal(snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := service.store.UpsertSnapshot(ctx, "thread-check", model.ThreadSnapshotState{CompactJSON: compact}); err != nil {
+		t.Fatal(err)
+	}
+	service.processExternalLaunchRequests(ctx)
+	edit := sender.edits[len(sender.edits)-1]
+	checkToken := callbackTokenForButton(edit.buttons, "Check status")
+	stored, _ := service.store.GetExternalLaunchRequest(ctx, request.ID)
+	response, err := service.HandleCallback(ctx, -1001, stored.TelegramTopicID, stored.TelegramMessageID, 123456789, checkToken)
+	if err != nil || response == nil || !strings.Contains(response.CallbackText, "session found") {
+		t.Fatalf("check response=%#v err=%v", response, err)
+	}
+	stored, _ = service.store.GetExternalLaunchRequest(ctx, request.ID)
+	if stored.Status != model.ExternalLaunchSessionCompleted || stored.TurnID != "turn-check" {
+		t.Fatalf("reconciled request=%#v", stored)
 	}
 }
 

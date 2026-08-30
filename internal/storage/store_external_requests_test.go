@@ -217,6 +217,81 @@ func TestExternalLaunchRequestTransitionsAreConditional(t *testing.T) {
 	}
 }
 
+func TestExternalLaunchRecoveryTransitionsAreConditional(t *testing.T) {
+	t.Parallel()
+	store := openTestStore(t)
+	ctx := context.Background()
+	request := testExternalLaunchRequest("test:chat:recover")
+	request.SourceChatID = "chat"
+	request.SourceMessageID = 42
+	if _, err := store.IngestExternalLaunchRequests(ctx, "test", 1, []model.ExternalLaunchRequest{request}); err != nil {
+		t.Fatal(err)
+	}
+	if claimed, err := store.ClaimExternalLaunchRequest(ctx, request.ID); err != nil || !claimed {
+		t.Fatalf("claim=%t err=%v", claimed, err)
+	}
+	if changed, err := store.CompleteExternalLaunchRequest(ctx, request.ID, model.ExternalLaunchFailed, "", "", "telegram_topic", "topic failed"); err != nil || !changed {
+		t.Fatalf("fail=%t err=%v", changed, err)
+	}
+
+	retried, err := store.RetryExternalLaunchRequest(ctx, request.ID)
+	if err != nil || !retried {
+		t.Fatalf("retry=%t err=%v", retried, err)
+	}
+	if retried, err = store.RetryExternalLaunchRequest(ctx, request.ID); err != nil || retried {
+		t.Fatalf("duplicate retry=%t err=%v, want false", retried, err)
+	}
+	stored, err := store.GetExternalLaunchRequest(ctx, request.ID)
+	if err != nil || stored == nil || stored.Status != model.ExternalLaunchStarting || stored.ErrorType != "" || stored.ErrorSummary != "" || stored.ReplyStatus != "" {
+		t.Fatalf("retried request=%#v err=%v", stored, err)
+	}
+
+	if changed, err := store.CompleteExternalLaunchRequest(ctx, request.ID, model.ExternalLaunchOutcomeUnknown, "thread-maybe", "", "dispatch_unknown", "unknown"); err != nil || !changed {
+		t.Fatalf("unknown=%t err=%v", changed, err)
+	}
+	closed, err := store.CloseExternalLaunchRequest(ctx, request.ID)
+	if err != nil || !closed {
+		t.Fatalf("close=%t err=%v", closed, err)
+	}
+	if closed, err = store.CloseExternalLaunchRequest(ctx, request.ID); err != nil || closed {
+		t.Fatalf("duplicate close=%t err=%v, want false", closed, err)
+	}
+	stored, _ = store.GetExternalLaunchRequest(ctx, request.ID)
+	if stored.Status != model.ExternalLaunchDismissed {
+		t.Fatalf("closed status=%q, want dismissed", stored.Status)
+	}
+}
+
+func TestCompleteExternalTurnClosesActiveRequest(t *testing.T) {
+	t.Parallel()
+	store := openTestStore(t)
+	ctx := context.Background()
+	request := testExternalLaunchRequest("test:chat:terminal")
+	request.SourceChatID = "chat"
+	request.SourceMessageID = 42
+	if _, err := store.IngestExternalLaunchRequests(ctx, "test", 1, []model.ExternalLaunchRequest{request}); err != nil {
+		t.Fatal(err)
+	}
+	if claimed, _ := store.ClaimExternalLaunchRequest(ctx, request.ID); !claimed {
+		t.Fatal("request was not claimed")
+	}
+	if changed, err := store.CompleteExternalLaunchRequest(ctx, request.ID, model.ExternalLaunchSessionStarted, "thread", "turn", "", ""); err != nil || !changed {
+		t.Fatalf("start=%t err=%v", changed, err)
+	}
+
+	changed, err := store.CompleteExternalTurn(ctx, "thread", "turn", model.ExternalLaunchSessionCompleted, "Done")
+	if err != nil || !changed {
+		t.Fatalf("complete turn=%t err=%v", changed, err)
+	}
+	if changed, err = store.CompleteExternalTurn(ctx, "thread", "turn", model.ExternalLaunchSessionCompleted, "Duplicate"); err != nil || changed {
+		t.Fatalf("duplicate complete=%t err=%v, want false", changed, err)
+	}
+	stored, err := store.GetExternalLaunchRequest(ctx, request.ID)
+	if err != nil || stored == nil || stored.Status != model.ExternalLaunchSessionCompleted || stored.ReplyStatus != model.ExternalReplyPending || stored.ReplyText != "Done" {
+		t.Fatalf("completed request=%#v err=%v", stored, err)
+	}
+}
+
 func TestExternalDismissAtomicallyQueuesTerminalReply(t *testing.T) {
 	t.Parallel()
 	store := openTestStore(t)

@@ -28,6 +28,7 @@ type dedupeRequestSink struct {
 }
 
 func (*dedupeRequestSink) NoteExternalPollResult(context.Context, string, error) {}
+func (*dedupeRequestSink) NoteExternalPollStarted(context.Context, string)       {}
 
 func (s *dedupeRequestSink) EnqueueExternalRequests(_ context.Context, source string, requests []model.ExternalLaunchRequest) (int, error) {
 	s.calls++
@@ -116,6 +117,7 @@ func (s storageRequestSink) EnqueueExternalRequests(ctx context.Context, source 
 }
 
 func (storageRequestSink) NoteExternalPollResult(context.Context, string, error) {}
+func (storageRequestSink) NoteExternalPollStarted(context.Context, string)       {}
 
 func TestPollerRestartUsesSQLiteDedupe(t *testing.T) {
 	t.Parallel()

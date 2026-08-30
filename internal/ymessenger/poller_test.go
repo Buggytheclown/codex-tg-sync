@@ -43,6 +43,7 @@ type fakeRequestSink struct {
 }
 
 func (f *fakeRequestSink) NoteExternalPollResult(context.Context, string, error) {}
+func (f *fakeRequestSink) NoteExternalPollStarted(context.Context, string)       {}
 
 func (f *fakeRequestSink) ExternalSourceCursor(_ context.Context, _ string) (int64, error) {
 	return f.cursor, nil

@@ -46,6 +46,15 @@ update behind one message.
 - Diagnostic events, durable delivery retry metadata, and raw App Server thread
   and snapshot projections sanitize Telegram Bot API credentials before writing
   logs or SQLite.
+- A launch failure that is known to precede the first Codex turn may be retried
+  by an explicit operator action. Retry is a conditional durable transition
+  from `failed` to `starting`; ambiguous outcomes remain non-replayable.
+- Failed and ambiguous launch requests may be closed explicitly. Closing an
+  ambiguous request stops tracking it and does not claim that no Codex thread
+  exists.
+- Source pollers persist cycle observations in the existing `daemon_state`
+  table. Operator status derives liveness from the observation age and poll
+  interval, so a stale process cannot remain visibly healthy.
 - In managed-daemon mode, a periodic bounded `thread/list` heartbeat detects a
   half-open poll connection. Transport loss makes the connection status false,
   requests poll repair, and applies the ADR-027 reset boundary immediately:
@@ -82,4 +91,5 @@ signal on laptops.
 - Preserving or rebinding AFC topics across transport loss.
 - Automatically replaying prompts or re-enabling AFC.
 - A generic external outbox or separate health database schema.
+- A launch-attempt history table or automatic replay of ambiguous dispatch.
 - Uploading Telegram or YMessenger attachments to Codex.

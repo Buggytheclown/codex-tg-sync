@@ -15,6 +15,9 @@ type fakeRequestSink struct {
 	requests map[string]model.ExternalLaunchRequest
 }
 
+func (*fakeRequestSink) NoteExternalPollStarted(context.Context, string)       {}
+func (*fakeRequestSink) NoteExternalPollResult(context.Context, string, error) {}
+
 func (s *fakeRequestSink) EnqueueExternalRequests(_ context.Context, source string, requests []model.ExternalLaunchRequest) (int, error) {
 	if s.requests == nil {
 		s.requests = make(map[string]model.ExternalLaunchRequest)
