@@ -55,6 +55,10 @@ update behind one message.
 - Source pollers persist cycle observations in the existing `daemon_state`
   table. Operator status derives liveness from the observation age and poll
   interval, so a stale process cannot remain visibly healthy.
+- Startup reconciles an existing `session_started` request only when its exact
+  durable `(thread_id, turn_id)` snapshot is terminal. It also invalidates the
+  Telegram render marker for failed and ambiguous requests so an upgrade adds
+  recovery controls to already-rendered cards.
 - In managed-daemon mode, a periodic bounded `thread/list` heartbeat detects a
   half-open poll connection. Transport loss makes the connection status false,
   requests poll repair, and applies the ADR-027 reset boundary immediately:

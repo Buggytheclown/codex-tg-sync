@@ -89,26 +89,9 @@ func (s *Service) renderExternalLaunchRequestsLocked(ctx context.Context, sender
 }
 
 func (s *Service) queueExternalReplyFromSnapshot(ctx context.Context, snapshot appserver.ThreadReadSnapshot) {
-	if !isTerminalStatus(snapshot.LatestTurnStatus) || strings.TrimSpace(snapshot.LatestTurnID) == "" {
+	launchStatus, text, ok := externalTerminalLaunchOutcome(snapshot)
+	if !ok {
 		return
-	}
-	text := strings.TrimSpace(snapshot.LatestFinalText)
-	if text == "" {
-		switch strings.ToLower(strings.TrimSpace(snapshot.LatestTurnStatus)) {
-		case "failed", "error":
-			text = "The Codex turn failed before producing a final answer."
-		case "interrupted", "cancelled", "canceled", "aborted":
-			text = "The Codex turn was interrupted before producing a final answer."
-		default:
-			text = "The Codex turn ended without a final answer."
-		}
-	}
-	launchStatus := model.ExternalLaunchSessionCompleted
-	switch strings.ToLower(strings.TrimSpace(snapshot.LatestTurnStatus)) {
-	case "failed", "error":
-		launchStatus = model.ExternalLaunchSessionFailed
-	case "interrupted", "cancelled", "canceled", "aborted":
-		launchStatus = model.ExternalLaunchSessionInterrupted
 	}
 	queued, err := s.store.CompleteExternalTurn(ctx, snapshot.Thread.ID, snapshot.LatestTurnID, launchStatus, text)
 	if err != nil {
@@ -119,6 +102,64 @@ func (s *Service) queueExternalReplyFromSnapshot(ctx context.Context, snapshot a
 		s.logLifecycle("external_reply_queued", lifecycleFields{"thread_id": snapshot.Thread.ID, "turn_id": snapshot.LatestTurnID})
 		s.processExternalLaunchRequests(ctx)
 	}
+}
+
+func externalTerminalLaunchOutcome(snapshot appserver.ThreadReadSnapshot) (string, string, bool) {
+	if !isTerminalStatus(snapshot.LatestTurnStatus) || strings.TrimSpace(snapshot.LatestTurnID) == "" {
+		return "", "", false
+	}
+	launchStatus := model.ExternalLaunchSessionCompleted
+	text := strings.TrimSpace(snapshot.LatestFinalText)
+	switch strings.ToLower(strings.TrimSpace(snapshot.LatestTurnStatus)) {
+	case "failed", "error":
+		launchStatus = model.ExternalLaunchSessionFailed
+		if text == "" {
+			text = "The Codex turn failed before producing a final answer."
+		}
+	case "interrupted", "cancelled", "canceled", "aborted":
+		launchStatus = model.ExternalLaunchSessionInterrupted
+		if text == "" {
+			text = "The Codex turn was interrupted before producing a final answer."
+		}
+	default:
+		if text == "" {
+			text = "The Codex turn ended without a final answer."
+		}
+	}
+	return launchStatus, text, true
+}
+
+func (s *Service) reconcileStoredExternalLaunchTerminals(ctx context.Context) (int, error) {
+	requests, err := s.store.ListExternalLaunchRequestsByStatus(ctx, []string{model.ExternalLaunchSessionStarted}, 1000)
+	if err != nil {
+		return 0, err
+	}
+	changed := 0
+	for _, request := range requests {
+		stored, err := s.store.GetSnapshot(ctx, request.ThreadID)
+		if err != nil {
+			return changed, err
+		}
+		if stored == nil || len(stored.CompactJSON) == 0 {
+			continue
+		}
+		var snapshot appserver.ThreadReadSnapshot
+		if json.Unmarshal(stored.CompactJSON, &snapshot) != nil || snapshot.LatestTurnID != request.TurnID {
+			continue
+		}
+		status, text, terminal := externalTerminalLaunchOutcome(snapshot)
+		if !terminal {
+			continue
+		}
+		completed, err := s.store.CompleteExternalTurn(ctx, request.ThreadID, request.TurnID, status, text)
+		if err != nil {
+			return changed, err
+		}
+		if completed {
+			changed++
+		}
+	}
+	return changed, nil
 }
 
 func (s *Service) queueExternalReplyFromStoredSnapshot(ctx context.Context, threadID string) {

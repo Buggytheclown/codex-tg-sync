@@ -453,6 +453,39 @@ func TestExternalOutcomeCheckReconcilesStoredTerminalSnapshot(t *testing.T) {
 	}
 }
 
+func TestStartupReconciliationClosesStoredTerminalExternalRequests(t *testing.T) {
+	t.Parallel()
+	service := newTestService(t)
+	ctx := context.Background()
+	request := daemonExternalRequest("test:startup:terminal", "old work")
+	if _, err := service.IngestExternalRequests(ctx, "test", 1, []model.ExternalLaunchRequest{request}); err != nil {
+		t.Fatal(err)
+	}
+	if claimed, _ := service.store.ClaimExternalLaunchRequest(ctx, request.ID); !claimed {
+		t.Fatal("request was not claimed")
+	}
+	if changed, err := service.store.CompleteExternalLaunchRequest(ctx, request.ID, model.ExternalLaunchSessionStarted, "thread-old", "turn-old", "", ""); err != nil || !changed {
+		t.Fatalf("start=%t err=%v", changed, err)
+	}
+	snapshot := appserver.SnapshotFromThreadRead(afcCompletedPayload("thread-old", "turn-old", "Done"))
+	compact, err := json.Marshal(snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := service.store.UpsertSnapshot(ctx, "thread-old", model.ThreadSnapshotState{CompactJSON: compact}); err != nil {
+		t.Fatal(err)
+	}
+
+	changed, err := service.reconcileStoredExternalLaunchTerminals(ctx)
+	if err != nil || changed != 1 {
+		t.Fatalf("reconcile=%d err=%v", changed, err)
+	}
+	stored, _ := service.store.GetExternalLaunchRequest(ctx, request.ID)
+	if stored.Status != model.ExternalLaunchSessionCompleted {
+		t.Fatalf("reconciled request=%#v", stored)
+	}
+}
+
 func TestDispatchExternalLaunchRequestCreatesAFCThreadTurnAndTopic(t *testing.T) {
 	t.Parallel()
 	service := activeAFCService(t)

@@ -245,10 +245,12 @@ Primary tests:
 - `internal/storage/store_external_requests_test.go::TestRecoverStartingExternalLaunchRequestsMarksOutcomeUnknown`
 - `internal/storage/store_external_requests_test.go::TestExternalLaunchRecoveryTransitionsAreConditional`
 - `internal/storage/store_external_requests_test.go::TestCompleteExternalTurnClosesActiveRequest`
+- `internal/storage/store_external_requests_test.go::TestRefreshExternalLaunchActionCardsForStartup`
 - `internal/daemon/external_requests_test.go::TestExternalLaunchApprovalRendersOnceAndDismissEditsSameMessage`
 - `internal/daemon/external_requests_test.go::TestExternalLaunchApprovalCallbackFailsClosedAndStartClaimsOnce`
 - `internal/daemon/external_requests_test.go::TestFailedExternalLaunchCardCanRetryOrClose`
 - `internal/daemon/external_requests_test.go::TestRequestsCommandShowsOnlyActiveByDefault`
+- `internal/daemon/external_requests_test.go::TestStartupReconciliationClosesStoredTerminalExternalRequests`
 - `internal/daemon/external_requests_test.go::TestExternalLaunchAutoStartSkipsApprovalAndClaimsDurably`
 - `internal/daemon/external_requests_test.go::TestExternalFinalQueuesAndDeliversReplyToInvocation`
 - `internal/daemon/external_requests_test.go::TestRejectedExternalSenderGetsOnlyPolicyReplyAndCannotStartCodex`

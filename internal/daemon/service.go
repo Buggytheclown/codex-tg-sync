@@ -275,10 +275,12 @@ func (s *Service) Start(ctx context.Context) error {
 	_ = s.store.SetState(runCtx, "appserver.poll_connected", "false")
 	repairResetErr := s.resetRepairRequestOnStartup(runCtx)
 	_, recoveryErr := s.store.RecoverStartingExternalLaunchRequests(runCtx)
+	_, terminalRecoveryErr := s.reconcileStoredExternalLaunchTerminals(runCtx)
+	_, actionCardRecoveryErr := s.store.RefreshExternalLaunchActionCards(runCtx)
 	_, ackRecoveryErr := s.store.RecoverSendingExternalAcks(runCtx)
 	_, replyRecoveryErr := s.store.RecoverSendingExternalReplies(runCtx)
 	cleanupSessionID, resetErr := s.store.ResetAFCOnStartup(runCtx)
-	err := errors.Join(repairResetErr, recoveryErr, ackRecoveryErr, replyRecoveryErr, resetErr)
+	err := errors.Join(repairResetErr, recoveryErr, terminalRecoveryErr, actionCardRecoveryErr, ackRecoveryErr, replyRecoveryErr, resetErr)
 	if err != nil {
 		cancel()
 		s.mu.Lock()

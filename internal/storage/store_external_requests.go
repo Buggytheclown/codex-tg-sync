@@ -430,6 +430,17 @@ func (s *Store) RecoverStartingExternalLaunchRequests(ctx context.Context) (int6
 	return result.RowsAffected()
 }
 
+func (s *Store) RefreshExternalLaunchActionCards(ctx context.Context) (int64, error) {
+	result, err := s.db.ExecContext(ctx, `
+	UPDATE external_launch_requests
+	SET telegram_rendered_status='', updated_at=?
+	WHERE telegram_message_id<>0 AND status IN (?, ?)`, model.NowString(), model.ExternalLaunchFailed, model.ExternalLaunchOutcomeUnknown)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 func (s *Store) QueueExternalReply(ctx context.Context, threadID, turnID, text string) (bool, error) {
 	threadID = strings.TrimSpace(threadID)
 	turnID = strings.TrimSpace(turnID)

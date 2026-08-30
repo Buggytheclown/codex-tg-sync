@@ -47,6 +47,9 @@ need attention.
   `session_failed`, so completed work does not stay in the active list.
 - Poller observations are JSON values under `daemon_state` keys named
   `poller.<source>`.
+- Startup reconciles legacy `session_started` rows against exact stored
+  `(thread_id, turn_id)` terminal snapshots and invalidates rendered error-card
+  markers so upgraded cards gain their recovery buttons.
 - Every action and terminal transition is a conditional SQLite update from the
   expected prior state.
 

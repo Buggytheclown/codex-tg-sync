@@ -382,6 +382,37 @@ func TestRecoverStartingExternalLaunchRequestsMarksOutcomeUnknown(t *testing.T) 
 	}
 }
 
+func TestRefreshExternalLaunchActionCardsForStartup(t *testing.T) {
+	t.Parallel()
+	store := openTestStore(t)
+	ctx := context.Background()
+	request := testExternalLaunchRequest("test:card:refresh")
+	if _, err := store.IngestExternalLaunchRequests(ctx, "test", 1, []model.ExternalLaunchRequest{request}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.MarkExternalLaunchRequestTelegramSent(ctx, request.ID, 501, model.ExternalLaunchPendingApproval); err != nil {
+		t.Fatal(err)
+	}
+	if claimed, _ := store.ClaimExternalLaunchRequest(ctx, request.ID); !claimed {
+		t.Fatal("request was not claimed")
+	}
+	if changed, err := store.CompleteExternalLaunchRequest(ctx, request.ID, model.ExternalLaunchFailed, "", "", "test", "failed"); err != nil || !changed {
+		t.Fatalf("fail=%t err=%v", changed, err)
+	}
+	if err := store.MarkExternalLaunchRequestTelegramRendered(ctx, request.ID, 501, model.ExternalLaunchFailed); err != nil {
+		t.Fatal(err)
+	}
+
+	changed, err := store.RefreshExternalLaunchActionCards(ctx)
+	if err != nil || changed != 1 {
+		t.Fatalf("refresh=%d err=%v", changed, err)
+	}
+	stored, _ := store.GetExternalLaunchRequest(ctx, request.ID)
+	if stored.Status != model.ExternalLaunchFailed || stored.TelegramRenderedStatus != "" {
+		t.Fatalf("refreshed request=%#v", stored)
+	}
+}
+
 func TestCompleteExternalLaunchRequestRequiresStartingState(t *testing.T) {
 	t.Parallel()
 	store := openTestStore(t)
