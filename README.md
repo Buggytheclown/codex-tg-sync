@@ -190,6 +190,7 @@ Primary environment variables:
 - `CTR_GO_ARCANUM_YA_BIN` (absolute `ya` path recommended for service operation)
 - `CTR_GO_ARCANUM_REVIEW_POLL_SECONDS` (`60` by default)
 - `CTR_GO_ARCANUM_REVIEW_CWD` (falls back to the external request default cwd)
+- `CTR_GO_ARCANUM_REVIEW_AUTO_START_AUTHORS` (optional comma-separated exact author-login allowlist for future PRs)
 - `CTR_GO_EXTERNAL_REQUESTS_TOPIC_ID` (permanent Telegram request/status topic id)
 - `CTR_GO_EXTERNAL_REQUEST_DEFAULT_CWD` (falls back to `CTR_GO_DEFAULT_CWD`)
 - `CTR_GO_EXTERNAL_REQUEST_APPROVAL_POLICY` (`never`, `on-request`, or `untrusted`; empty inherits the App Server default)
@@ -289,6 +290,7 @@ CTR_GO_ARCANUM_REVIEW_LOGIN=<reviewer-login>
 CTR_GO_ARCANUM_YA_BIN=/absolute/path/to/ya
 CTR_GO_ARCANUM_REVIEW_POLL_SECONDS=60
 CTR_GO_ARCANUM_REVIEW_CWD=/absolute/path/to/projects
+CTR_GO_ARCANUM_REVIEW_AUTO_START_AUTHORS=alice,bob
 CTR_GO_EXTERNAL_REQUESTS_TOPIC_ID=<permanent-requests-topic-id>
 ```
 
@@ -299,10 +301,17 @@ service-readable location such as `~/.codex-tg/bin/ya` and configure that path.
 
 The working directory should contain the location where the installed
 `arc-pr-review` skill may create its isolated temporary Arc mount. Approval is
-always required. Repeated polling uses an in-memory seen set, while SQLite
+required by default. A future PR whose exact author login appears in
+`CTR_GO_ARCANUM_REVIEW_AUTO_START_AUTHORS` renders a buttonless Requests card
+before it can auto-start; changing the allowlist does not start already stored
+pending requests. Repeated polling uses an in-memory seen set, while SQLite
 `(source, external_id)` uniqueness prevents duplicate cards after restart. One
 PR id creates at most one request, including after reassignment or later review
 iterations.
+
+When a launched external turn completes, fails, or is interrupted, the daemon
+edits the original card and sends one short audible terminal notice in the
+Requests topic. The full Codex Final remains in the managed session topic.
 
 ### Cron launch requests
 

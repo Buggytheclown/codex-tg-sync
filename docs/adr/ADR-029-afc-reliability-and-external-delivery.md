@@ -61,6 +61,10 @@ update behind one message.
   active. It also invalidates the Telegram render marker for failed and
   ambiguous requests so an upgrade adds recovery controls to already-rendered
   cards.
+- A newly observed terminal external turn edits the same Requests card and
+  enqueues one short audible terminal notice through the existing durable
+  Telegram delivery queue. The stable event id and target deduplicate retries
+  and restart re-renders; the full Final remains in the managed session topic.
 - In managed-daemon mode, a periodic bounded `thread/list` heartbeat detects a
   half-open poll connection. Transport loss makes the connection status false,
   requests poll repair, and applies the ADR-027 reset boundary immediately:

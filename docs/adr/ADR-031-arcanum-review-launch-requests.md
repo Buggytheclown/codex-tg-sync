@@ -7,10 +7,12 @@
 ## Context
 
 An operator wants each newly assigned open Arcadia pull request to enter the
-existing durable Telegram approval flow and start the installed
-`$arc-pr-review` skill after explicit approval. Parsing the Arcanum web UI is
-fragile, while owning another OAuth implementation or a second daemon would
-duplicate local authentication and lifecycle responsibilities.
+existing durable Telegram launch flow and start the installed `$arc-pr-review`
+skill. Most authors require explicit approval, while a small operator-owned
+allowlist may auto-start without making the launch invisible. Parsing the
+Arcanum web UI is fragile, while owning another OAuth implementation or a
+second daemon would duplicate local authentication and lifecycle
+responsibilities.
 
 ## Decision
 
@@ -41,9 +43,17 @@ duplicate local authentication and lifecycle responsibilities.
 - The generic external request card renders `Source`, `From`, `Title`, `Status`,
   `Link`, and `Request`. Source adapters do not render Telegram text or own
   callback/status behavior.
-- Telegram approval is mandatory. Starting a request uses the existing AFC
-  durable claim and App Server dispatch path. No final answer is posted back to
-  Arcanum.
+- Telegram approval is the default. An optional comma-separated exact-login
+  allowlist marks future PR requests for auto-start; author matching is
+  case-insensitive after trimming whitespace and a leading `@`. Existing
+  persisted pending requests are not reclassified after config changes.
+- An auto-start with a configured Requests topic is not claimable until the
+  initial buttonless `[Launch request]` card has a persisted Telegram message
+  id. The card says `Queued for automatic start`; a later delivery cycle claims
+  and dispatches it through the same durable AFC path.
+- No final answer is posted back to Arcanum. Terminal state edits the original
+  card and the generic external delivery contract emits one short durable
+  Requests-topic notification without copying the full Final.
 - External polling health messages are source-neutral, use the shared Requests
   topic, and retain the existing resume warm-up, failure delay, recovery delay,
   durable delivery, and General-topic fallback when the Requests topic is gone.
@@ -73,4 +83,4 @@ read-only with respect to the reviewed PR and the user's primary Arc checkout.
 - Polling review iterations, issue replies, or CI transitions independently.
 - A generic polling plugin protocol or arbitrary Telegram card renderer.
 - A native Arcanum OAuth client, HTML scraping, or webhook service.
-- Auto-start without Telegram approval.
+- Wildcard, team, or display-name author trust policies.

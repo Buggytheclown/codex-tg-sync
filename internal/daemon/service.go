@@ -1637,7 +1637,7 @@ func (s *Service) processDeliveryBatch(ctx context.Context) {
 		}
 		s.logTelegramRenderContainsNil(payload.ThreadID, payload.TurnID, "delivery", 0, payload.Text)
 		options := silentSendOptions()
-		if item.Kind == "health" {
+		if item.Kind == "health" || item.Kind == externalTerminalDeliveryKind {
 			options = notifySendOptions()
 		}
 		deliveryTopicID := item.TopicID

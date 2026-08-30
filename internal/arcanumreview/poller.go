@@ -23,9 +23,10 @@ type RequestSink interface {
 }
 
 type Config struct {
-	Login           string
-	CWD             string
-	TelegramTopicID int64
+	Login            string
+	CWD              string
+	TelegramTopicID  int64
+	AutoStartAuthors []string
 }
 
 type Poller struct {
@@ -38,6 +39,7 @@ type Poller struct {
 func NewPoller(client AssignedClient, sink RequestSink, config Config) *Poller {
 	config.Login = strings.TrimSpace(config.Login)
 	config.CWD = strings.TrimSpace(config.CWD)
+	config.AutoStartAuthors = normalizeAuthors(config.AutoStartAuthors)
 	return &Poller{client: client, sink: sink, config: config, seen: make(map[string]struct{})}
 }
 
@@ -104,6 +106,38 @@ func requestForPullRequest(pullRequest PullRequest, config Config) model.Externa
 		Sender: strings.TrimSpace(pullRequest.Author), Title: strings.TrimSpace(pullRequest.Summary),
 		SafePreview: "Review Arcadia PR #" + externalID, SourceURL: url, Prompt: prompt,
 		CWD: config.CWD, Status: model.ExternalLaunchPendingApproval, TelegramTopicID: config.TelegramTopicID,
+		AutoStart: authorAllowed(pullRequest.Author, config.AutoStartAuthors),
 		CreatedAt: now, UpdatedAt: now,
 	}
+}
+
+func normalizeAuthors(values []string) []string {
+	result := make([]string, 0, len(values))
+	seen := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		author := normalizeAuthor(value)
+		if author == "" {
+			continue
+		}
+		if _, ok := seen[author]; ok {
+			continue
+		}
+		seen[author] = struct{}{}
+		result = append(result, author)
+	}
+	return result
+}
+
+func authorAllowed(author string, allowed []string) bool {
+	author = normalizeAuthor(author)
+	for _, candidate := range allowed {
+		if author == candidate {
+			return true
+		}
+	}
+	return false
+}
+
+func normalizeAuthor(value string) string {
+	return strings.ToLower(strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(value), "@")))
 }

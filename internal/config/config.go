@@ -62,6 +62,7 @@ type Config struct {
 	ArcanumYABin                string
 	ArcanumReviewPollInterval   time.Duration
 	ArcanumReviewCWD            string
+	ArcanumAutoStartAuthors     []string
 	ExternalRequestsTopicID     int64
 	ExternalRequestDefaultCWD   string
 	ExternalApprovalPolicy      string
@@ -179,6 +180,7 @@ func fromSource(source envSource) Config {
 		ArcanumYABin:                arcanumYABin,
 		ArcanumReviewPollInterval:   source.durationSeconds("CTR_GO_ARCANUM_REVIEW_POLL_SECONDS", time.Minute),
 		ArcanumReviewCWD:            source.path("CTR_GO_ARCANUM_REVIEW_CWD", externalRequestDefaultCWD),
+		ArcanumAutoStartAuthors:     parseStringList(source.get("CTR_GO_ARCANUM_REVIEW_AUTO_START_AUTHORS")),
 		ExternalRequestsTopicID:     parseInt64(source.get("CTR_GO_EXTERNAL_REQUESTS_TOPIC_ID")),
 		ExternalRequestDefaultCWD:   externalRequestDefaultCWD,
 		ExternalApprovalPolicy:      strings.TrimSpace(source.get("CTR_GO_EXTERNAL_REQUEST_APPROVAL_POLICY")),

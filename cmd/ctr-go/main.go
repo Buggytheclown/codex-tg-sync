@@ -196,6 +196,7 @@ func startArcanumReviewPoller(ctx context.Context, cfg config.Config, sink arcan
 	client := arcanumreview.NewCLIClient(cfg.ArcanumYABin, nil)
 	poller := arcanumreview.NewPoller(client, sink, arcanumreview.Config{
 		Login: cfg.ArcanumReviewLogin, CWD: cfg.ArcanumReviewCWD, TelegramTopicID: cfg.ExternalRequestsTopicID,
+		AutoStartAuthors: cfg.ArcanumAutoStartAuthors,
 	})
 	go poller.Run(ctx, cfg.ArcanumReviewPollInterval, func(err error) {
 		if logger != nil {

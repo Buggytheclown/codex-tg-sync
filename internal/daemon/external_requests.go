@@ -12,6 +12,8 @@ import (
 	"github.com/mideco-tech/codex-tg/internal/storage"
 )
 
+const externalTerminalDeliveryKind = "external_terminal"
+
 // ExternalSourceCursor and IngestExternalRequests form the intentionally small
 // boundary used by optional source adapters. Adapters do not depend on the
 // Telegram or App Server implementation owned by Service.
@@ -259,6 +261,9 @@ func (s *Service) deliverExternalMessage(ctx context.Context, sender ExternalRep
 
 func (s *Service) renderExternalLaunchRequest(ctx context.Context, sender Sender, request model.ExternalLaunchRequest) error {
 	text := externalLaunchRequestText(request)
+	if err := s.enqueueExternalTerminalNotice(ctx, request); err != nil {
+		return err
+	}
 	if request.TelegramMessageID == 0 {
 		_ = s.store.ExpireExternalLaunchCallbackRoutes(ctx, request.ID)
 		buttons, routes, err := s.externalLaunchActions(ctx, request)
@@ -350,6 +355,9 @@ func (s *Service) externalLaunchButton(ctx context.Context, request model.Extern
 
 func externalLaunchRequestText(request model.ExternalLaunchRequest) string {
 	status := externalLaunchStatusLabel(request.Status)
+	if request.Status == model.ExternalLaunchPendingApproval && request.AutoStart {
+		status = "Queued for automatic start"
+	}
 	lines := []string{
 		"🚀 [Launch request]",
 		fmt.Sprintf("Source: %s", request.Source),
@@ -383,9 +391,9 @@ func externalLaunchStatusLabel(status string) string {
 		model.ExternalLaunchPendingApproval:    "Awaiting approval",
 		model.ExternalLaunchStarting:           "Starting",
 		model.ExternalLaunchSessionStarted:     "Started",
-		model.ExternalLaunchSessionCompleted:   "Completed",
-		model.ExternalLaunchSessionInterrupted: "Interrupted",
-		model.ExternalLaunchSessionFailed:      "Run failed",
+		model.ExternalLaunchSessionCompleted:   "✅ Completed",
+		model.ExternalLaunchSessionInterrupted: "⏹ Interrupted",
+		model.ExternalLaunchSessionFailed:      "❌ Run failed",
 		model.ExternalLaunchDismissed:          "Dismissed",
 		model.ExternalLaunchFailed:             "Failed",
 		model.ExternalLaunchOutcomeUnknown:     "Outcome unknown — not retried automatically",
@@ -394,6 +402,45 @@ func externalLaunchStatusLabel(status string) string {
 		return status
 	}
 	return label
+}
+
+func (s *Service) enqueueExternalTerminalNotice(ctx context.Context, request model.ExternalLaunchRequest) error {
+	if s.cfg.AFCGroupID == 0 || request.TelegramTopicID == 0 || request.TelegramMessageID == 0 {
+		return nil
+	}
+	eventID, text, ok := externalTerminalNotice(request)
+	if !ok {
+		return nil
+	}
+	payload := model.DeliveryPayload{
+		Text: text, ThreadID: request.ThreadID, TurnID: request.TurnID, EventID: eventID,
+	}
+	return s.store.EnqueueDelivery(ctx, model.DeliveryQueueItem{
+		EventID: eventID, ChatKey: model.ChatKey(s.cfg.AFCGroupID, request.TelegramTopicID),
+		ChatID: s.cfg.AFCGroupID, TopicID: request.TelegramTopicID, ThreadID: request.ThreadID,
+		Kind: externalTerminalDeliveryKind, Status: model.DeliveryStatusPending, AvailableAt: model.NowString(),
+		PayloadJSON: storage.MustJSON(payload), CreatedAt: model.NowString(), UpdatedAt: model.NowString(),
+	})
+}
+
+func externalTerminalNotice(request model.ExternalLaunchRequest) (string, string, bool) {
+	label := ""
+	switch request.Status {
+	case model.ExternalLaunchSessionCompleted:
+		label = "✅ [Launch request completed]"
+	case model.ExternalLaunchSessionInterrupted:
+		label = "⏹ [Launch request interrupted]"
+	case model.ExternalLaunchSessionFailed:
+		label = "❌ [Launch request failed]"
+	default:
+		return "", "", false
+	}
+	eventID := "external-terminal:" + request.ID + ":" + request.Status
+	lines := []string{label}
+	if preview := externalLaunchTelegramPreview(request); preview != "" {
+		lines = append(lines, preview)
+	}
+	return eventID, strings.Join(lines, "\n"), true
 }
 
 func externalLaunchTelegramPreview(request model.ExternalLaunchRequest) string {

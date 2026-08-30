@@ -160,6 +160,11 @@ ADR: `docs/adr/ADR-031-arcanum-review-launch-requests.md`.
   the executable prompt.
 - `Start` sends only `$arc-pr-review [<URL>](<URL>)` to Codex and never posts or
   approves anything in Arcanum.
+- Telegram approval is the default. A configured exact author-login allowlist
+  may auto-start future PRs, but a configured-topic request is not claimable
+  before its buttonless Requests card has a persisted message id.
+- Newly observed terminal external turns edit their original card and enqueue
+  one short audible Requests-topic notice; full Finals remain in session topics.
 
 ## Telegram Adapter Contract
 

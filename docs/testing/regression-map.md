@@ -328,12 +328,16 @@ Primary tests:
 - `internal/arcanumreview/client_test.go::TestCLIClientListsAssignedPullRequestsWithExactQuery`
 - `internal/arcanumreview/client_test.go::TestCLIClientRejectsMalformedAssignedPullRequest`
 - `internal/arcanumreview/poller_test.go::TestPollOnceCreatesDisplayMetadataAndExactReviewPrompt`
+- `internal/arcanumreview/poller_test.go::TestPollOnceAutoStartsOnlyExactConfiguredAuthors`
 - `internal/arcanumreview/poller_test.go::TestPollerSeenAvoidsWritesDuringProcessLifetime`
 - `internal/arcanumreview/poller_test.go::TestPollerRestartUsesSQLiteDedupe`
 - `internal/arcanumreview/poller_test.go::TestPollerMarksSeenOnlyAfterSuccessfulEnqueue`
 - `internal/config/config_test.go::TestFromEnvReadsArcanumReviewConfig`
 - `internal/config/config_test.go::TestValidateArcanumReviewRequiresEnabledFields`
 - `internal/daemon/external_requests_test.go::TestExternalLaunchApprovalRendersOnceAndDismissEditsSameMessage`
+- `internal/daemon/external_requests_test.go::TestExternalLaunchAutoStartRendersStatusWithoutApprovalButtonsAndClaimsDurably`
+- `internal/daemon/external_requests_test.go::TestExternalTerminalEditsCardAndDeliversOneAudibleNotice`
+- `internal/storage/store_external_requests_test.go::TestAutoStartTelegramVisibilityAppliesOnlyToNewMarkedRequests`
 - `cmd/ctr-go/main_test.go::TestArcanumReviewPollerRemainsDisabledByDefault`
 
 Contract notes:
@@ -344,7 +348,11 @@ Contract notes:
   after a successful enqueue; SQLite remains authoritative after restart.
 - PR author, summary, and URL are display metadata. The Codex prompt contains
   only the exact `$arc-pr-review` invocation.
-- Telegram approval remains mandatory and no result is posted to Arcanum.
+- Telegram approval is the default. Exact configured author logins may
+  auto-start future requests only after the Requests card is visible; no result
+  is posted to Arcanum.
+- New terminal transitions edit the original card and emit one deduplicated
+  audible notice without copying the full Final into Requests.
 
 ## Distribution And Local Config
 

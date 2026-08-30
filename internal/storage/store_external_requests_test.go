@@ -352,7 +352,18 @@ func TestAutoStartTelegramVisibilityAppliesOnlyToNewMarkedRequests(t *testing.T)
 	if err != nil || len(pending) != 1 {
 		t.Fatalf("new auto-start visibility=%#v err=%v", pending, err)
 	}
-	if _, err := store.db.ExecContext(ctx, `UPDATE external_launch_requests SET telegram_rendered_status='' WHERE id=?`, request.ID); err != nil {
+	auto, err := store.ListExternalLaunchRequestsForAutoStart(ctx, 10)
+	if err != nil || len(auto) != 0 {
+		t.Fatalf("auto-start became claimable before Telegram visibility: %#v err=%v", auto, err)
+	}
+	if err := store.MarkExternalLaunchRequestTelegramSent(ctx, request.ID, 501, model.ExternalLaunchPendingApproval); err != nil {
+		t.Fatal(err)
+	}
+	auto, err = store.ListExternalLaunchRequestsForAutoStart(ctx, 10)
+	if err != nil || len(auto) != 1 || auto[0].TelegramMessageID != 501 {
+		t.Fatalf("visible auto-start request not claimable: %#v err=%v", auto, err)
+	}
+	if _, err := store.db.ExecContext(ctx, `UPDATE external_launch_requests SET telegram_message_id=0, telegram_rendered_status='' WHERE id=?`, request.ID); err != nil {
 		t.Fatal(err)
 	}
 	pending, err = store.ListExternalLaunchRequestsForTelegram(ctx, 10)

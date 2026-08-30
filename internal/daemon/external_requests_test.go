@@ -89,13 +89,86 @@ func TestExternalLaunchAutoStartRendersStatusWithoutApprovalButtonsAndClaimsDura
 	if _, err := service.IngestExternalRequests(context.Background(), "test", 1, []model.ExternalLaunchRequest{request}); err != nil {
 		t.Fatal(err)
 	}
-	service.processExternalLaunchRequests(context.Background())
 	stored, _ := service.store.GetExternalLaunchRequest(context.Background(), request.ID)
+	if stored == nil || stored.Status != model.ExternalLaunchPendingApproval || stored.TelegramMessageID == 0 {
+		t.Fatalf("stored=%#v, want visible pending auto-start before claim", stored)
+	}
+	if len(sender.messages) != 1 || !strings.Contains(sender.messages[0].text, "Status: Queued for automatic start") || len(sender.messages[0].buttons) != 0 {
+		t.Fatalf("initial auto-start card=%#v", sender.messages)
+	}
+	service.processExternalLaunchRequests(context.Background())
+	stored, _ = service.store.GetExternalLaunchRequest(context.Background(), request.ID)
 	if stored == nil || stored.Status != model.ExternalLaunchStarting {
 		t.Fatalf("stored=%#v, want starting", stored)
 	}
 	if len(sender.messages) != 1 || sender.messages[0].topicID != 77 || len(sender.messages[0].buttons) != 0 {
 		t.Fatalf("auto-start status messages=%#v, want one buttonless Telegram card", sender.messages)
+	}
+}
+
+func TestExternalTerminalEditsCardAndDeliversOneAudibleNotice(t *testing.T) {
+	t.Parallel()
+	service := newTestService(t)
+	service.cfg.AFCGroupID = -1001
+	sender := &recordingSender{}
+	service.SetSender(sender)
+	request := daemonExternalRequest("test:terminal-notice", "do work")
+	request.SafePreview = "Review Arcadia PR #12345678"
+	request.TelegramTopicID = 77
+	ctx := context.Background()
+	if _, err := service.IngestExternalRequests(ctx, "test", 1, []model.ExternalLaunchRequest{request}); err != nil {
+		t.Fatal(err)
+	}
+	if claimed, err := service.store.ClaimExternalLaunchRequest(ctx, request.ID); err != nil || !claimed {
+		t.Fatalf("claim=%t err=%v", claimed, err)
+	}
+	if changed, err := service.store.CompleteExternalLaunchRequest(ctx, request.ID, model.ExternalLaunchSessionStarted, "thread", "turn", "", ""); err != nil || !changed {
+		t.Fatalf("start=%t err=%v", changed, err)
+	}
+	service.processExternalLaunchRequests(ctx)
+	snapshot := appserver.SnapshotFromThreadRead(afcCompletedPayload("thread", "turn", "Full final must stay in the session topic."))
+	service.queueExternalReplyFromSnapshot(ctx, snapshot)
+	service.queueExternalReplyFromSnapshot(ctx, snapshot)
+	service.processDeliveryBatch(ctx)
+	service.processDeliveryBatch(ctx)
+
+	if len(sender.edits) < 2 {
+		t.Fatalf("terminal edits=%#v", sender.edits)
+	}
+	terminalEdit := sender.edits[len(sender.edits)-1]
+	if terminalEdit.messageID != sender.messages[0].messageID || !strings.Contains(terminalEdit.text, "Status: ✅ Completed") || len(terminalEdit.buttons) != 0 {
+		t.Fatalf("terminal edit=%#v", terminalEdit)
+	}
+	if len(sender.messages) != 2 {
+		t.Fatalf("messages=%#v, want card plus one terminal notice", sender.messages)
+	}
+	notice := sender.messages[1]
+	if notice.topicID != 77 || notice.options.Silent || !strings.Contains(notice.text, "✅ [Launch request completed]") || !strings.Contains(notice.text, request.SafePreview) || strings.Contains(notice.text, "Full final") {
+		t.Fatalf("terminal notice=%#v", notice)
+	}
+}
+
+func TestExternalTerminalCardAndNoticeLabels(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		status string
+		card   string
+		notice string
+	}{
+		{model.ExternalLaunchSessionCompleted, "Status: ✅ Completed", "✅ [Launch request completed]"},
+		{model.ExternalLaunchSessionInterrupted, "Status: ⏹ Interrupted", "⏹ [Launch request interrupted]"},
+		{model.ExternalLaunchSessionFailed, "Status: ❌ Run failed", "❌ [Launch request failed]"},
+	}
+	for _, tc := range tests {
+		request := daemonExternalRequest("test:terminal-label:"+tc.status, "do work")
+		request.Status = tc.status
+		if card := externalLaunchRequestText(request); !strings.Contains(card, tc.card) {
+			t.Errorf("status %q card = %q, want %q", tc.status, card, tc.card)
+		}
+		_, notice, ok := externalTerminalNotice(request)
+		if !ok || !strings.Contains(notice, tc.notice) {
+			t.Errorf("status %q notice = %q ok=%t, want %q", tc.status, notice, ok, tc.notice)
+		}
 	}
 }
 

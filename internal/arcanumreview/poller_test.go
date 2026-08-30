@@ -94,6 +94,30 @@ func TestPollOnceCreatesDisplayMetadataAndExactReviewPrompt(t *testing.T) {
 	}
 }
 
+func TestPollOnceAutoStartsOnlyExactConfiguredAuthors(t *testing.T) {
+	t.Parallel()
+	client := &fakeAssignedClient{requests: []PullRequest{
+		{ID: 12345678, Author: "AMPIR9999", Summary: "Trusted pull request"},
+		{ID: 12345679, Author: "ampir99990", Summary: "Prefix must not match"},
+		{ID: 12345680, Author: "plastinina-ls", Summary: "Second trusted pull request"},
+	}}
+	sink := &dedupeRequestSink{}
+	poller := NewPoller(client, sink, Config{
+		Login: "reviewer-example", CWD: "/projects", TelegramTopicID: 77,
+		AutoStartAuthors: []string{"@ampir9999", " Plastinina-LS "},
+	})
+
+	if created, err := poller.PollOnce(context.Background()); err != nil || created != 3 {
+		t.Fatalf("PollOnce created=%d err=%v", created, err)
+	}
+	if !sink.requests[Source+"|12345678"].AutoStart || !sink.requests[Source+"|12345680"].AutoStart {
+		t.Fatalf("trusted requests did not auto-start: %#v", sink.requests)
+	}
+	if sink.requests[Source+"|12345679"].AutoStart {
+		t.Fatalf("non-exact author auto-started: %#v", sink.requests[Source+"|12345679"])
+	}
+}
+
 func TestPollerSeenAvoidsWritesDuringProcessLifetime(t *testing.T) {
 	t.Parallel()
 	client := &fakeAssignedClient{requests: []PullRequest{{ID: 12345678, Author: "alice", Summary: "Title"}}}

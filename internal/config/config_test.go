@@ -99,6 +99,7 @@ func TestFromEnvReadsArcanumReviewConfig(t *testing.T) {
 	t.Setenv("CTR_GO_ARCANUM_YA_BIN", "/usr/local/bin/ya")
 	t.Setenv("CTR_GO_ARCANUM_REVIEW_POLL_SECONDS", "45")
 	t.Setenv("CTR_GO_ARCANUM_REVIEW_CWD", filepath.Join(t.TempDir(), "projects"))
+	t.Setenv("CTR_GO_ARCANUM_REVIEW_AUTO_START_AUTHORS", "ampir9999, @Plastinina-LS")
 
 	cfg := FromEnv()
 
@@ -107,6 +108,9 @@ func TestFromEnvReadsArcanumReviewConfig(t *testing.T) {
 	}
 	if cfg.ArcanumReviewPollInterval != 45*time.Second || cfg.ArcanumReviewCWD == "" {
 		t.Fatalf("Arcanum poll/cwd = %s / %q", cfg.ArcanumReviewPollInterval, cfg.ArcanumReviewCWD)
+	}
+	if got := strings.Join(cfg.ArcanumAutoStartAuthors, ","); got != "ampir9999,@plastinina-ls" {
+		t.Fatalf("Arcanum auto-start authors = %q", got)
 	}
 }
 

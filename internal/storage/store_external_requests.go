@@ -197,7 +197,7 @@ func (s *Store) ListExternalLaunchRequestsForAutoStart(ctx context.Context, limi
 	}
 	rows, err := s.db.QueryContext(ctx, `SELECT `+externalLaunchRequestColumns+`
 	FROM external_launch_requests
-	WHERE auto_start=1 AND status=?
+	WHERE auto_start=1 AND status=? AND (telegram_topic_id=0 OR telegram_message_id<>0)
 	ORDER BY created_at, id LIMIT ?`, model.ExternalLaunchPendingApproval, limit)
 	if err != nil {
 		return nil, err

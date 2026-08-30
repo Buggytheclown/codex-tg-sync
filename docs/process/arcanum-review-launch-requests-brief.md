@@ -11,7 +11,8 @@ start the same read-only Codex review command each time.
 - Create one durable Telegram launch request per pull request.
 - Show the PR author, summary, and URL in the shared Requests topic.
 - Send only the exact `$arc-pr-review <PR URL>` invocation to Codex.
-- Keep Telegram approval mandatory.
+- Keep Telegram approval as the default while allowing exact configured author
+  logins to auto-start future requests after card visibility.
 - Report sustained polling failures and recoveries in the same Requests topic.
 
 ## Non-goals
@@ -25,8 +26,9 @@ start the same read-only Codex review command each time.
 
 The optional poller reads the current assigned-review list through the official
 `gena-arcanum-cli`. A newly observed PR appears in the existing Requests topic
-with its author, title, source link, and `Dismiss` / `Start` buttons. `Start`
-uses the existing durable AFC dispatch path.
+with its author, title, and source link. Normal requests show `Dismiss` /
+`Start`; trusted-author requests first show a buttonless `Queued for automatic
+start` card and become claimable only after Telegram visibility is persisted.
 
 ## Domain Model
 
@@ -34,6 +36,8 @@ uses the existing durable AFC dispatch path.
 - External identity: decimal PR id.
 - `Sender`, `Title`, `SourceURL`, and `SafePreview` are Telegram-only metadata.
 - `Prompt` is exactly `$arc-pr-review [<URL>](<URL>)`.
+- `CTR_GO_ARCANUM_REVIEW_AUTO_START_AUTHORS` applies exact normalized login
+  matching to future requests only.
 - SQLite `(source, external_id)` remains the restart-safe idempotency authority;
   an in-memory seen set avoids repeated writes during one process lifetime.
 
@@ -62,3 +66,4 @@ owns the Telegram card.
 - [x] Codex receives only the exact arc-pr-review invocation.
 - [x] The adapter is optional and disabled by default.
 - [x] Sustained polling failures and recoveries are delivered to Requests.
+- [x] Trusted future PR authors may auto-start only after their card is visible.
