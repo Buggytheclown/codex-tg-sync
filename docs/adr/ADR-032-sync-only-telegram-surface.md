@@ -1,0 +1,39 @@
+# ADR-032: Sync-only Telegram Surface
+
+Status: Accepted
+
+## Context
+
+The daemon currently contains two Telegram products: a direct-message observer
+with bindings, panels, Details, Plan, and settings; and the AFC forum-group
+surface used for synchronized Codex chats and external launch requests. The
+dual router adds configuration, persistence, lifecycle, and test coupling while
+the operator uses only AFC.
+
+## Decision
+
+The configured AFC forum group is the sole Telegram ingress and egress target.
+The daemon admits exactly one configured user in that exact group and rejects
+all other updates before route lookup or App Server work.
+
+Telegram commands are removed from the default Bot API scope and registered
+only for the AFC chat. Startup enforces a delivery allowlist: only `health` and
+`external_terminal` deliveries addressed to the AFC group remain active.
+
+Legacy writer, observer, panel, Details, Plan, settings, binding, and DM routing
+code is removed. Fresh databases stop creating their legacy-only tables.
+Existing databases keep those tables inert; no destructive migration is run.
+
+Shared AFC helpers are retained under current-mode names. App Server wire-event
+compatibility is not part of this retirement.
+
+## Consequences
+
+- Setup requires `CTR_GO_AFC_GROUP_ID` and exactly one value in
+  `CTR_GO_ALLOWED_USER_IDS`.
+- Old DM buttons and queued observer deliveries cannot execute after upgrade.
+- `/pollers`, `/requests`, and external launch request flows remain independent
+  of the retired observer.
+- Historical ADRs and release notes remain as history; this ADR supersedes the
+  active Telegram observer, panel, Details, Plan, and settings contracts in
+  ADR-001 through ADR-016 where they conflict.
