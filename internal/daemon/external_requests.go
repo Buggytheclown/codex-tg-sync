@@ -46,11 +46,11 @@ func (s *Service) finishExternalRequestIngest(ctx context.Context, requests []mo
 func (s *Service) processExternalLaunchRequests(ctx context.Context) {
 	s.externalRequestMu.Lock()
 	requestIDs := make([]string, 0)
-	state, stateErr := s.store.GetAFCState(ctx)
+	state, stateErr := s.store.GetSyncState(ctx)
 	if stateErr != nil {
 		s.logLifecycle("external_launch_state_read_failed", lifecycleFields{"error": stateErr})
 	}
-	if state.State == model.AFCStateActive {
+	if state.State == model.SyncStateActive {
 		autoRequests, listErr := s.store.ListExternalLaunchRequestsForAutoStart(ctx, 20)
 		if listErr != nil {
 			s.logLifecycle("external_launch_auto_list_failed", lifecycleFields{"error": listErr})
@@ -76,7 +76,7 @@ func (s *Service) processExternalLaunchRequests(ctx context.Context) {
 }
 
 func (s *Service) renderExternalLaunchRequestsLocked(ctx context.Context, sender Sender) {
-	if sender != nil && s.cfg.AFCGroupID != 0 {
+	if sender != nil && s.cfg.SyncGroupID != 0 {
 		requests, err := s.store.ListExternalLaunchRequestsForTelegram(ctx, 20)
 		if err != nil {
 			s.logLifecycle("external_launch_telegram_list_failed", lifecycleFields{"error": err})
@@ -270,7 +270,7 @@ func (s *Service) renderExternalLaunchRequest(ctx context.Context, sender Sender
 		if err != nil {
 			return err
 		}
-		messageID, err := sender.SendMessage(ctx, s.cfg.AFCGroupID, request.TelegramTopicID, text,
+		messageID, err := sender.SendMessage(ctx, s.cfg.SyncGroupID, request.TelegramTopicID, text,
 			buttons, notifySendOptions())
 		if err != nil {
 			_ = s.store.ExpireExternalLaunchCallbackRoutes(ctx, request.ID)
@@ -295,7 +295,7 @@ func (s *Service) renderExternalLaunchRequest(ctx context.Context, sender Sender
 			return err
 		}
 	}
-	if err := sender.EditMessage(ctx, s.cfg.AFCGroupID, request.TelegramTopicID, request.TelegramMessageID, text, buttons); err != nil {
+	if err := sender.EditMessage(ctx, s.cfg.SyncGroupID, request.TelegramTopicID, request.TelegramMessageID, text, buttons); err != nil {
 		return err
 	}
 	return s.store.MarkExternalLaunchRequestTelegramRendered(ctx, request.ID, request.TelegramMessageID, request.Status)
@@ -342,7 +342,7 @@ func (s *Service) externalLaunchButton(ctx context.Context, request model.Extern
 		RequestID: request.ID,
 		Status:    model.CallbackStatusActive,
 		PayloadJSON: storage.MustJSON(map[string]any{
-			"chat_id":  s.cfg.AFCGroupID,
+			"chat_id":  s.cfg.SyncGroupID,
 			"topic_id": request.TelegramTopicID,
 		}),
 		CreatedAt: model.NowString(),
@@ -405,7 +405,7 @@ func externalLaunchStatusLabel(status string) string {
 }
 
 func (s *Service) enqueueExternalTerminalNotice(ctx context.Context, request model.ExternalLaunchRequest) error {
-	if s.cfg.AFCGroupID == 0 || request.TelegramTopicID == 0 || request.TelegramMessageID == 0 {
+	if s.cfg.SyncGroupID == 0 || request.TelegramTopicID == 0 || request.TelegramMessageID == 0 {
 		return nil
 	}
 	eventID, text, ok := externalTerminalNotice(request)
@@ -416,8 +416,8 @@ func (s *Service) enqueueExternalTerminalNotice(ctx context.Context, request mod
 		Text: text, ThreadID: request.ThreadID, TurnID: request.TurnID, EventID: eventID,
 	}
 	return s.store.EnqueueDelivery(ctx, model.DeliveryQueueItem{
-		EventID: eventID, ChatKey: model.ChatKey(s.cfg.AFCGroupID, request.TelegramTopicID),
-		ChatID: s.cfg.AFCGroupID, TopicID: request.TelegramTopicID, ThreadID: request.ThreadID,
+		EventID: eventID, ChatKey: model.ChatKey(s.cfg.SyncGroupID, request.TelegramTopicID),
+		ChatID: s.cfg.SyncGroupID, TopicID: request.TelegramTopicID, ThreadID: request.ThreadID,
 		Kind: externalTerminalDeliveryKind, Status: model.DeliveryStatusPending, AvailableAt: model.NowString(),
 		PayloadJSON: storage.MustJSON(payload), CreatedAt: model.NowString(), UpdatedAt: model.NowString(),
 	})
@@ -458,7 +458,7 @@ func (s *Service) handleExternalLaunchCallback(ctx context.Context, chatID, topi
 	if err != nil {
 		return nil, err
 	}
-	if request == nil || chatID != s.cfg.AFCGroupID || topicID != request.TelegramTopicID || messageID != request.TelegramMessageID ||
+	if request == nil || chatID != s.cfg.SyncGroupID || topicID != request.TelegramTopicID || messageID != request.TelegramMessageID ||
 		route.TelegramMessageID != messageID || route.ThreadID != request.ID {
 		return &DirectResponse{CallbackText: "This launch request button is stale."}, nil
 	}
@@ -468,14 +468,14 @@ func (s *Service) handleExternalLaunchCallback(ctx context.Context, chatID, topi
 	var changed bool
 	switch route.Action {
 	case "external_launch_start":
-		state, stateErr := s.store.GetAFCState(ctx)
+		state, stateErr := s.store.GetSyncState(ctx)
 		if stateErr != nil {
 			return nil, stateErr
 		}
-		if state.State != model.AFCStateActive {
-			_ = s.store.NoteExternalLaunchRequestPendingError(ctx, request.ID, "afc_inactive", "AFC is inactive; enable AFC and press Start again.")
+		if state.State != model.SyncStateActive {
+			_ = s.store.NoteExternalLaunchRequestPendingError(ctx, request.ID, "sync_inactive", "Sync is inactive; enable Sync and press Start again.")
 			s.processExternalLaunchRequests(ctx)
-			return &DirectResponse{CallbackText: "AFC is inactive; request remains pending."}, nil
+			return &DirectResponse{CallbackText: "Sync is inactive; request remains pending."}, nil
 		}
 		changed, err = s.store.ClaimExternalLaunchRequest(ctx, request.ID)
 	case "external_launch_dismiss":

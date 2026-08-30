@@ -1,16 +1,16 @@
 # Regression Map
 
-Use this map for changes to the active AFC/Sync Telegram surface. ADR-032 supersedes legacy direct-message observer contracts in older ADRs.
+Use this map for changes to the active Sync Telegram surface. ADR-032 supersedes legacy direct-message observer contracts in older ADRs.
 
 ## Admission, setup, and commands
 
 Primary tests:
 
 - `internal/daemon/retirement_test.go`: out-of-group messages and callbacks are rejected before storage; retired settings are ignored.
-- `internal/config/config_test.go`: AFC group and exactly one allowed user, transport modes, paths, and external adapters.
-- `cmd/ctr-go/main_test.go`, `cmd/ctr-go/service_test.go`: init/service setup writes the AFC-only configuration.
-- `internal/telegram/api_test.go::TestClientScopesCommandsToExactAFCChat`: exact Bot API scope payload.
-- `internal/telegram/bot_test.go::TestBotStartScopesCommandsToConfiguredAFCGroup`: startup clears default commands before setting the AFC chat menu.
+- `internal/config/config_test.go`: Sync group and exactly one allowed user, transport modes, paths, and external adapters.
+- `cmd/ctr-go/main_test.go`, `cmd/ctr-go/service_test.go`: init/service setup writes the Sync-only configuration.
+- `internal/telegram/api_test.go::TestClientScopesCommandsToExactSyncChat`: exact Bot API scope payload.
+- `internal/telegram/bot_test.go::TestBotStartScopesCommandsToConfiguredSyncGroup`: startup clears default commands before setting the Sync chat menu.
 - `internal/telegram/bot_test.go::TestDefaultCommandsExposeSyncAndOperatorStatusCommands`: exact eight-command menu.
 
 Required invariants:
@@ -20,14 +20,14 @@ Required invariants:
 - Startup fails closed if command scoping fails.
 - `/repair` remains hidden but accepted in Control.
 
-## AFC activation, discovery, and transport
+## Sync activation, discovery, and transport
 
 ADRs: ADR-020 through ADR-027, ADR-029, and ADR-032.
 
 Primary suites:
 
-- `internal/daemon/afc_test.go`
-- `internal/storage/store_afc_test.go`
+- `internal/daemon/sync_test.go`
+- `internal/storage/store_sync_test.go`
 - `internal/appserver/client_test.go`
 - `internal/appserver/writer_manager_test.go`
 - `internal/telegram/api_test.go`
@@ -45,7 +45,7 @@ Coverage includes:
 
 ## Prompt, steer, stop, and lifecycle
 
-Primary suite: `internal/daemon/afc_test.go`.
+Primary suite: `internal/daemon/sync_test.go`.
 
 Required scenarios:
 
@@ -65,9 +65,9 @@ Terminal ambiguity logic lives in `internal/daemon/terminal_gate_test.go`. Prese
 
 Primary tests:
 
-- `internal/daemon/afc_test.go::TestAFCApprovalCallbackIsGuardedByTopicTurnAndGeneration`
-- `internal/daemon/afc_test.go::TestAFCApprovalDecisionsResolveSameCard`
-- structured input callback tests in `internal/daemon/afc_test.go`
+- `internal/daemon/sync_test.go::TestSyncApprovalCallbackIsGuardedByTopicTurnAndGeneration`
+- `internal/daemon/sync_test.go::TestSyncApprovalDecisionsResolveSameCard`
+- structured input callback tests in `internal/daemon/sync_test.go`
 
 Required invariants:
 
@@ -86,16 +86,16 @@ Primary tests:
 
 - `internal/storage/store_test.go::TestLegacyTelegramTablesAreNotCreatedOrDropped`
 - delivery retirement matrix in `internal/storage/store_test.go`
-- AFC state tests in `internal/storage/store_afc_test.go`
+- Sync state tests in `internal/storage/store_sync_test.go`
 - callback, receipt, request, delivery, and snapshot repository tests across `internal/storage/*_test.go`
 
 Required invariants:
 
 - fresh DB has no retired Telegram tables;
 - old DB tables are left untouched;
-- startup supersedes pending/retry/processing deliveries outside the AFC group and retired observer delivery kinds;
+- startup supersedes pending/retry/processing deliveries outside the Sync group and retired observer delivery kinds;
 - historical delivered/dead rows remain historical;
-- current health and external terminal deliveries to the AFC group remain eligible.
+- current health and external terminal deliveries to the Sync group remain eligible.
 
 ## Launch requests
 
@@ -117,7 +117,7 @@ Required scenarios:
 - auto-start author policy applies only to new Arcanum requests;
 - start claims once and ambiguous thread creation is not replayed;
 - terminal state closes the request and external reply delivery is retryable/idempotent;
-- `/requests` enters through public AFC Control routing and lists active requests;
+- `/requests` enters through public Sync Control routing and lists active requests;
 - unauthorized YMessenger messages cannot create or start Codex work.
 
 ## Poller and health status
@@ -130,12 +130,12 @@ Primary tests:
 
 Required invariants:
 
-- `/pollers` enters through public AFC Control routing;
+- `/pollers` enters through public Sync Control routing;
 - output distinguishes disabled, polling, healthy, degraded, and failed sources;
 - last attempt/success and consecutive failures are truthful;
 - sleep/resume gaps do not cause false flapping;
 - warning/recovery order is preserved;
-- health deliveries fall back to General only inside the configured AFC group.
+- health deliveries fall back to General only inside the configured Sync group.
 
 ## Configuration and secrets
 
@@ -161,7 +161,7 @@ git diff --check
 
 For live Telegram QA, verify:
 
-1. command menu exists only in the AFC group;
+1. command menu exists only in the Sync group;
 2. a direct message produces no response or state change;
 3. `/status`, `/pollers`, and `/requests` work in Control;
 4. `/sync on` creates/updates topics;

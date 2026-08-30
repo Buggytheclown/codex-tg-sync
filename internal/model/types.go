@@ -24,31 +24,31 @@ const (
 	ExternalReplySent                = "sent"
 	ExternalReplyDead                = "dead"
 
-	AFCStateOff        = "off"
-	AFCStateActivating = "activating"
-	AFCStateActive     = "active"
-	AFCStateDraining   = "draining"
+	SyncStateOff        = "off"
+	SyncStateActivating = "activating"
+	SyncStateActive     = "active"
+	SyncStateDraining   = "draining"
 
-	AFCSecurityValid   = "valid"
-	AFCSecurityUnknown = "unknown"
+	SyncSecurityValid   = "valid"
+	SyncSecurityUnknown = "unknown"
 
-	AFCTopicConnected = "connected"
-	AFCTopicCleanup   = "cleanup"
+	SyncTopicConnected = "connected"
+	SyncTopicCleanup   = "cleanup"
 
-	AFCDraftReady    = "ready"
-	AFCDraftStarting = "starting"
-	AFCDraftUnknown  = "unknown"
-	AFCDraftCleanup  = "cleanup"
+	SyncDraftReady    = "ready"
+	SyncDraftStarting = "starting"
+	SyncDraftUnknown  = "unknown"
+	SyncDraftCleanup  = "cleanup"
 
-	AFCTurnStarting = "starting"
-	AFCTurnActive   = "active"
-	AFCTurnTerminal = "terminal"
-	AFCTurnUnknown  = "unknown"
+	SyncTurnStarting = "starting"
+	SyncTurnActive   = "active"
+	SyncTurnTerminal = "terminal"
+	SyncTurnUnknown  = "unknown"
 
-	AFCReceiptAccepted   = "accepted"
-	AFCReceiptDispatched = "dispatched"
-	AFCReceiptRejected   = "rejected"
-	AFCReceiptUnknown    = "unknown"
+	SyncReceiptAccepted   = "accepted"
+	SyncReceiptDispatched = "dispatched"
+	SyncReceiptRejected   = "rejected"
+	SyncReceiptUnknown    = "unknown"
 
 	TurnOriginTelegram = "telegram_input"
 
@@ -77,7 +77,7 @@ const (
 	DeliveryModeSendDocument = "send_document"
 )
 
-type AFCState struct {
+type SyncState struct {
 	SessionID             string
 	ChatID                int64
 	State                 string
@@ -88,7 +88,7 @@ type AFCState struct {
 	EndedAt               TimeString
 }
 
-type AFCTopic struct {
+type SyncTopic struct {
 	SessionID             string
 	ChatID                int64
 	TopicID               int64
@@ -110,7 +110,7 @@ type AFCTopic struct {
 	UpdatedAt             TimeString
 }
 
-type AFCTopicDraft struct {
+type SyncTopicDraft struct {
 	SessionID       string
 	ChatID          int64
 	TopicID         int64
@@ -125,7 +125,7 @@ type AFCTopicDraft struct {
 	UpdatedAt       TimeString
 }
 
-type AFCMessageReceipt struct {
+type SyncMessageReceipt struct {
 	ChatID    int64
 	TopicID   int64
 	MessageID int64

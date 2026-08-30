@@ -5,31 +5,31 @@ Status: Accepted
 ## Context
 
 The daemon currently contains two Telegram products: a direct-message observer
-with bindings, panels, Details, Plan, and settings; and the AFC forum-group
+with bindings, panels, Details, Plan, and settings; and the Sync forum-group
 surface used for synchronized Codex chats and external launch requests. The
 dual router adds configuration, persistence, lifecycle, and test coupling while
-the operator uses only AFC.
+the operator uses only Sync.
 
 ## Decision
 
-The configured AFC forum group is the sole Telegram ingress and egress target.
+The configured Sync forum group is the sole Telegram ingress and egress target.
 The daemon admits exactly one configured user in that exact group and rejects
 all other updates before route lookup or App Server work.
 
 Telegram commands are removed from the default Bot API scope and registered
-only for the AFC chat. Startup enforces a delivery allowlist: only `health` and
-`external_terminal` deliveries addressed to the AFC group remain active.
+only for the Sync chat. Startup enforces a delivery allowlist: only `health` and
+`external_terminal` deliveries addressed to the Sync group remain active.
 
 Legacy writer, observer, panel, Details, Plan, settings, binding, and DM routing
 code is removed. Fresh databases stop creating their legacy-only tables.
 Existing databases keep those tables inert; no destructive migration is run.
 
-Shared AFC helpers are retained under current-mode names. App Server wire-event
+Shared Sync helpers are retained under current-mode names. App Server wire-event
 compatibility is not part of this retirement.
 
 ## Consequences
 
-- Setup requires `CTR_GO_AFC_GROUP_ID` and exactly one value in
+- Setup requires `CTR_GO_SYNC_GROUP_ID` and exactly one value in
   `CTR_GO_ALLOWED_USER_IDS`.
 - Old DM buttons and queued observer deliveries cannot execute after upgrade.
 - `/pollers`, `/requests`, and external launch request flows remain independent

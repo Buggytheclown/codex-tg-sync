@@ -22,29 +22,29 @@ func TestFromEnvReadsCodexChatsRoot(t *testing.T) {
 	}
 }
 
-func TestFromEnvReadsAFCGroupID(t *testing.T) {
+func TestFromEnvReadsSyncGroupID(t *testing.T) {
 	t.Setenv("CTR_GO_CONFIG", filepath.Join(t.TempDir(), "missing.env"))
-	t.Setenv("CTR_GO_AFC_GROUP_ID", "-1001234567890")
-	t.Setenv("CTR_GO_AFC_INITIAL_TOPIC_LIMIT", "9")
+	t.Setenv("CTR_GO_SYNC_GROUP_ID", "-1001234567890")
+	t.Setenv("CTR_GO_SYNC_INITIAL_TOPIC_LIMIT", "9")
 
 	cfg := FromEnv()
 
-	if cfg.AFCGroupID != -1001234567890 {
-		t.Fatalf("AFCGroupID = %d, want -1001234567890", cfg.AFCGroupID)
+	if cfg.SyncGroupID != -1001234567890 {
+		t.Fatalf("SyncGroupID = %d, want -1001234567890", cfg.SyncGroupID)
 	}
-	if cfg.AFCInitialTopicLimit != 9 {
-		t.Fatalf("AFCInitialTopicLimit = %d, want 9", cfg.AFCInitialTopicLimit)
+	if cfg.SyncInitialTopicLimit != 9 {
+		t.Fatalf("SyncInitialTopicLimit = %d, want 9", cfg.SyncInitialTopicLimit)
 	}
 }
 
-func TestFromEnvDefaultsAFCInitialTopicLimitToFive(t *testing.T) {
+func TestFromEnvDefaultsSyncInitialTopicLimitToFive(t *testing.T) {
 	t.Setenv("CTR_GO_CONFIG", filepath.Join(t.TempDir(), "missing.env"))
-	t.Setenv("CTR_GO_AFC_INITIAL_TOPIC_LIMIT", "0")
+	t.Setenv("CTR_GO_SYNC_INITIAL_TOPIC_LIMIT", "0")
 
 	cfg := FromEnv()
 
-	if cfg.AFCInitialTopicLimit != 5 {
-		t.Fatalf("AFCInitialTopicLimit = %d, want 5", cfg.AFCInitialTopicLimit)
+	if cfg.SyncInitialTopicLimit != 5 {
+		t.Fatalf("SyncInitialTopicLimit = %d, want 5", cfg.SyncInitialTopicLimit)
 	}
 }
 
@@ -124,7 +124,7 @@ func TestValidateArcanumReviewRequiresEnabledFields(t *testing.T) {
 	cfg.ArcanumYABin = "/usr/local/bin/ya"
 	cfg.ArcanumReviewPollInterval = time.Minute
 	cfg.ArcanumReviewCWD = t.TempDir()
-	cfg.AFCGroupID = -10042
+	cfg.SyncGroupID = -10042
 	cfg.ExternalRequestsTopicID = 77
 	if err := cfg.ValidateArcanumReview(); err != nil {
 		t.Fatalf("ValidateArcanumReview(valid) failed: %v", err)
@@ -144,7 +144,7 @@ func TestValidateYMessengerRequiresEnabledFields(t *testing.T) {
 	cfg.YMessengerOAuthTeamToken = "token"
 	cfg.YMessengerAllowedSenders = []string{"alice"}
 	cfg.YMessengerPollInterval = 2 * time.Second
-	cfg.AFCGroupID = -10042
+	cfg.SyncGroupID = -10042
 	cfg.ExternalRequestsTopicID = 77
 	cfg.ExternalRequestDefaultCWD = t.TempDir()
 	if err := cfg.ValidateYMessenger(); err != nil {
@@ -157,7 +157,7 @@ func TestValidateYMessengerRequiresVisibilityTopicWhenApprovalDisabled(t *testin
 	cfg := Config{
 		YMessengerEnabled: true, YMessengerRobotLogin: "robot-example", YMessengerOAuthTeamToken: "token",
 		YMessengerAllowedSenders: []string{"alice"}, YMessengerPollInterval: 2 * time.Second,
-		YMessengerRequireApproval: false, AFCGroupID: -1001, ExternalRequestDefaultCWD: t.TempDir(),
+		YMessengerRequireApproval: false, SyncGroupID: -1001, ExternalRequestDefaultCWD: t.TempDir(),
 	}
 	if err := cfg.ValidateYMessenger(); err == nil {
 		t.Fatal("ValidateYMessenger succeeded without required Telegram visibility topic")
@@ -217,7 +217,7 @@ func TestFromEnvDefaultsToSpawnedAppServer(t *testing.T) {
 func TestMarshalJSONIncludesPublicRuntimeConfig(t *testing.T) {
 	t.Parallel()
 
-	data, err := json.Marshal(Config{AppServerMode: "daemon", AppServerSocket: "/tmp/codex.sock", SyncPollInterval: 7 * time.Second, ControlAPIListen: "127.0.0.1:8765", AFCGroupID: -100123, AFCInitialTopicLimit: 9})
+	data, err := json.Marshal(Config{AppServerMode: "daemon", AppServerSocket: "/tmp/codex.sock", SyncPollInterval: 7 * time.Second, ControlAPIListen: "127.0.0.1:8765", SyncGroupID: -100123, SyncInitialTopicLimit: 9})
 	if err != nil {
 		t.Fatalf("json.Marshal failed: %v", err)
 	}
@@ -231,11 +231,11 @@ func TestMarshalJSONIncludesPublicRuntimeConfig(t *testing.T) {
 	if got["control_api_listen"] != "127.0.0.1:8765" {
 		t.Fatalf("control_api_listen = %#v, want listen address", got["control_api_listen"])
 	}
-	if got["afc_group_id"] != float64(-100123) {
-		t.Fatalf("afc_group_id = %#v, want -100123", got["afc_group_id"])
+	if got["sync_group_id"] != float64(-100123) {
+		t.Fatalf("sync_group_id = %#v, want -100123", got["sync_group_id"])
 	}
-	if got["afc_initial_topic_limit"] != float64(9) {
-		t.Fatalf("afc_initial_topic_limit = %#v, want 9", got["afc_initial_topic_limit"])
+	if got["sync_initial_topic_limit"] != float64(9) {
+		t.Fatalf("sync_initial_topic_limit = %#v, want 9", got["sync_initial_topic_limit"])
 	}
 	if got["app_server_mode"] != "daemon" {
 		t.Fatalf("app_server_mode = %#v, want daemon", got["app_server_mode"])
@@ -262,7 +262,7 @@ func TestParseEnvFileSupportsCommentsAndQuotes(t *testing.T) {
 # comment
 CTR_GO_TELEGRAM_BOT_TOKEN="token with spaces"
 CTR_GO_ALLOWED_USER_IDS='123,456'
-CTR_GO_AFC_GROUP_ID=-100123
+CTR_GO_SYNC_GROUP_ID=-100123
 `), "test.env")
 	if err != nil {
 		t.Fatalf("ParseEnvFile failed: %v", err)
@@ -270,7 +270,7 @@ CTR_GO_AFC_GROUP_ID=-100123
 	want := map[string]string{
 		"CTR_GO_TELEGRAM_BOT_TOKEN": "token with spaces",
 		"CTR_GO_ALLOWED_USER_IDS":   "123,456",
-		"CTR_GO_AFC_GROUP_ID":       "-100123",
+		"CTR_GO_SYNC_GROUP_ID":      "-100123",
 	}
 	if !reflect.DeepEqual(values, want) {
 		t.Fatalf("values = %#v, want %#v", values, want)
@@ -299,7 +299,7 @@ func TestLoadReadsConfigFileAndEnvOverridesIt(t *testing.T) {
 		`CTR_GO_HOME="` + home + `"`,
 		`CTR_GO_TELEGRAM_BOT_TOKEN="file-token"`,
 		`CTR_GO_ALLOWED_USER_IDS="101"`,
-		`CTR_GO_AFC_GROUP_ID="-100123"`,
+		`CTR_GO_SYNC_GROUP_ID="-100123"`,
 		`CTR_GO_DEFAULT_CWD="` + fileDefaultCWD + `"`,
 		`CTR_GO_CONTROL_API_LISTEN="127.0.0.1:9876"`,
 		"",
@@ -336,13 +336,13 @@ func TestValidateTelegramSurfaceRequiresGroupAndExactlyOneUser(t *testing.T) {
 		cfg  Config
 		ok   bool
 	}{
-		{"valid", Config{AFCGroupID: -1001, AllowedUserIDs: []int64{42}}, true},
+		{"valid", Config{SyncGroupID: -1001, AllowedUserIDs: []int64{42}}, true},
 		{"missing group", Config{AllowedUserIDs: []int64{42}}, false},
-		{"positive group", Config{AFCGroupID: 1001, AllowedUserIDs: []int64{42}}, false},
-		{"missing user", Config{AFCGroupID: -1001}, false},
-		{"zero user", Config{AFCGroupID: -1001, AllowedUserIDs: []int64{0}}, false},
-		{"negative user", Config{AFCGroupID: -1001, AllowedUserIDs: []int64{-42}}, false},
-		{"multiple users", Config{AFCGroupID: -1001, AllowedUserIDs: []int64{42, 43}}, false},
+		{"positive group", Config{SyncGroupID: 1001, AllowedUserIDs: []int64{42}}, false},
+		{"missing user", Config{SyncGroupID: -1001}, false},
+		{"zero user", Config{SyncGroupID: -1001, AllowedUserIDs: []int64{0}}, false},
+		{"negative user", Config{SyncGroupID: -1001, AllowedUserIDs: []int64{-42}}, false},
+		{"multiple users", Config{SyncGroupID: -1001, AllowedUserIDs: []int64{42, 43}}, false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

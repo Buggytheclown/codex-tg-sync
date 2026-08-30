@@ -48,15 +48,15 @@ func (p *fakeWriterProcess) calls() (int, int) {
 func TestThreadClaimRegistryRejectsCrossWriterOwnership(t *testing.T) {
 	registry := NewThreadClaimRegistry()
 	legacy := ThreadClaim{Writer: "legacy", Generation: 1}
-	afc := ThreadClaim{Writer: "afc", Generation: 1}
+	sync := ThreadClaim{Writer: "sync", Generation: 1}
 
 	if err := registry.Acquire("thread-a", legacy); err != nil {
 		t.Fatalf("Acquire legacy thread-a: %v", err)
 	}
-	if err := registry.Acquire("thread-b", afc); err != nil {
-		t.Fatalf("Acquire afc thread-b: %v", err)
+	if err := registry.Acquire("thread-b", sync); err != nil {
+		t.Fatalf("Acquire sync thread-b: %v", err)
 	}
-	if err := registry.Acquire("thread-a", afc); !errors.Is(err, ErrThreadClaimed) {
+	if err := registry.Acquire("thread-a", sync); !errors.Is(err, ErrThreadClaimed) {
 		t.Fatalf("cross-writer Acquire error = %v, want ErrThreadClaimed", err)
 	}
 	if got, ok := registry.Lookup("thread-a"); !ok || got != legacy {
@@ -64,7 +64,7 @@ func TestThreadClaimRegistryRejectsCrossWriterOwnership(t *testing.T) {
 	}
 
 	registry.ReleaseWriter(legacy)
-	if err := registry.Acquire("thread-a", afc); err != nil {
+	if err := registry.Acquire("thread-a", sync); err != nil {
 		t.Fatalf("Acquire after process release: %v", err)
 	}
 }
@@ -73,7 +73,7 @@ func TestWriterManagerConcurrentReservationsShareOneStart(t *testing.T) {
 	registry := NewThreadClaimRegistry()
 	startGate := make(chan struct{})
 	process := &fakeWriterProcess{startGate: startGate}
-	manager := NewWriterManager("afc", registry, func() (*fakeWriterProcess, error) {
+	manager := NewWriterManager("sync", registry, func() (*fakeWriterProcess, error) {
 		return process, nil
 	})
 
@@ -110,7 +110,7 @@ func TestWriterManagerConcurrentReservationsShareOneStart(t *testing.T) {
 func TestWriterManagerKeepsClaimsUntilLastTerminalClosesProcess(t *testing.T) {
 	registry := NewThreadClaimRegistry()
 	process := &fakeWriterProcess{}
-	manager := NewWriterManager("afc", registry, func() (*fakeWriterProcess, error) {
+	manager := NewWriterManager("sync", registry, func() (*fakeWriterProcess, error) {
 		return process, nil
 	})
 
@@ -156,7 +156,7 @@ func TestWriterManagerKeepsClaimsUntilLastTerminalClosesProcess(t *testing.T) {
 func TestWriterManagerUnknownDispatchBlocksCloseAndReplay(t *testing.T) {
 	registry := NewThreadClaimRegistry()
 	process := &fakeWriterProcess{}
-	manager := NewWriterManager("afc", registry, func() (*fakeWriterProcess, error) {
+	manager := NewWriterManager("sync", registry, func() (*fakeWriterProcess, error) {
 		return process, nil
 	})
 	lease, err := manager.Reserve(context.Background(), "thread-a")
@@ -239,7 +239,7 @@ func TestWriterManagerClaimsThreadAfterUnclaimedProcessReservation(t *testing.T)
 func TestWriterManagerCloseFailureKeepsClaimsAndFailsClosed(t *testing.T) {
 	registry := NewThreadClaimRegistry()
 	process := &fakeWriterProcess{closeErr: errors.New("close failed")}
-	manager := NewWriterManager("afc", registry, func() (*fakeWriterProcess, error) {
+	manager := NewWriterManager("sync", registry, func() (*fakeWriterProcess, error) {
 		return process, nil
 	})
 	lease, err := manager.Reserve(context.Background(), "thread-a")
@@ -266,7 +266,7 @@ func TestWriterManagerCloseFailureKeepsClaimsAndFailsClosed(t *testing.T) {
 func TestWriterManagerForceCloseDropsUnfinishedWorkOnlyAfterProcessClose(t *testing.T) {
 	registry := NewThreadClaimRegistry()
 	process := &fakeWriterProcess{}
-	manager := NewWriterManager("afc", registry, func() (*fakeWriterProcess, error) { return process, nil })
+	manager := NewWriterManager("sync", registry, func() (*fakeWriterProcess, error) { return process, nil })
 	lease, err := manager.Reserve(context.Background(), "thread-a")
 	if err != nil {
 		t.Fatal(err)

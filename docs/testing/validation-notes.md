@@ -11,13 +11,13 @@ go build -buildvcs=false ./...
 git diff --check
 ```
 
-The regression map names the focused suites for admission, setup, AFC lifecycle, writer ownership, approvals/input, storage upgrades, requests, pollers, health, and delivery.
+The regression map names the focused suites for admission, setup, Sync lifecycle, writer ownership, approvals/input, storage upgrades, requests, pollers, health, and delivery.
 
 ## Live Telegram checks
 
 When a configured contour is available:
 
-1. Inspect Bot API command scopes: default is empty and the exact AFC group has the eight public commands.
+1. Inspect Bot API command scopes: default is empty and the exact Sync group has the eight public commands.
 2. Send a direct message and verify there is no response, route, callback, or App Server work.
 3. In Control, verify `/status`, `/pollers`, `/requests`, and `/projects`.
 4. Enable `/sync on`; verify topic creation/reconciliation and no duplicate topics.

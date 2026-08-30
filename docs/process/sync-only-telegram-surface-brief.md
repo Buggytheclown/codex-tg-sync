@@ -2,8 +2,8 @@
 
 ## Goal
 
-Retire the legacy direct-message observer and make the configured private AFC
-forum group the only Telegram control surface. Keep AFC topics, Control
+Retire the legacy direct-message observer and make the configured private Sync
+forum group the only Telegram control surface. Keep Sync topics, Control
 commands, approvals, external launch requests, health delivery, and pollers
 working without a compatibility router.
 
@@ -16,23 +16,23 @@ working without a compatibility router.
 
 ## Product contract
 
-- Exactly one configured Telegram user may act in the exact AFC group.
+- Exactly one configured Telegram user may act in the exact Sync group.
 - Messages and callbacks outside that group are ignored before storage or App
   Server access.
-- The default Bot API command scope is empty. The AFC group exposes exactly
+- The default Bot API command scope is empty. The Sync group exposes exactly
   `/sync`, `/status`, `/pollers`, `/requests`, `/refresh`, `/projects`,
   `/newchat`, and `/stop`; `/repair` remains an unadvertised Control command.
 - Startup supersedes undelivered observer traffic and any undelivered Telegram
-  traffic addressed outside the AFC group. Current health and external terminal
+  traffic addressed outside the Sync group. Current health and external terminal
   notifications addressed to the group remain deliverable.
-- Normal AFC turns use the thread-preferred model or App Server defaults and do
+- Normal Sync turns use the thread-preferred model or App Server defaults and do
   not read retired Telegram model/reasoning settings. Explicit request-local
   execution options remain supported for external launch requests.
-- Fresh setup requires an AFC group id and exactly one allowed user.
+- Fresh setup requires an Sync group id and exactly one allowed user.
 
 ## Acceptance
 
-- AFC prompt, steer, stop, approvals, structured input, project topics, and
+- Sync prompt, steer, stop, approvals, structured input, project topics, and
   Control commands pass their existing tests.
 - Requests cards, retry/check/close, terminal notifications, auto-start, and
   external replies pass their existing tests.

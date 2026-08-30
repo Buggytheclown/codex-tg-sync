@@ -1,12 +1,12 @@
-# ADR-020: AFC and Legacy Writer Ownership
+# ADR-020: Sync and Legacy Writer Ownership
 
-- Status: accepted; AFC/legacy mutation policy amended by ADR-026
+- Status: accepted; Sync/legacy mutation policy amended by ADR-026
 - Amends: ADR-001, ADR-012, ADR-019
 - Related: `docs/testing/regression-map.md`
 
 ## Context
 
-The daemon needs a full AFC surface in one configured Telegram forum group while
+The daemon needs a full Sync surface in one configured Telegram forum group while
 preserving the existing bot-DM product. Both surfaces can mutate Codex threads,
 but two independent App Server processes must never resume or start turns in the
 same thread concurrently.
@@ -20,7 +20,7 @@ must not replay the prompt or kill the process blindly.
 ## Decision
 
 - The daemon uses one generic generation-aware lazy writer manager, instantiated
-  independently for legacy DM mutations and AFC group mutations.
+  independently for legacy DM mutations and Sync group mutations.
 - A shared process-local thread-claim registry coordinates the two managers.
 - A writer reserves a thread before any mutating App Server call.
 - `thread/start` is the sole exception where no durable thread id exists yet:
@@ -42,15 +42,15 @@ must not replay the prompt or kill the process blindly.
 - Daemon startup, reconciliation, repair, and observer bootstrap start or repair
   only the read-only poll client. They never start the legacy writer.
 
-## AFC and legacy consequences
+## Sync and legacy consequences
 
-- A legacy turn that started before AFC activation may finish normally. In the
-  shared-daemon AFC product mode, ADR-026 disables legacy DM mutations,
-  including old approval and Stop controls, until AFC is off; passive runtime
+- A legacy turn that started before Sync activation may finish normally. In the
+  shared-daemon Sync product mode, ADR-026 disables legacy DM mutations,
+  including old approval and Stop controls, until Sync is off; passive runtime
   completion is still observed without replay.
-- New legacy mutations of an AFC-managed thread fail before an App Server
+- New legacy mutations of an Sync-managed thread fail before an App Server
   mutation while another process generation owns that thread.
-- AFC shutdown drains and closes only the AFC writer. It does not interrupt a
+- Sync shutdown drains and closes only the Sync writer. It does not interrupt a
   legacy writer that owns other threads.
 - `/sync off` does not restore the observer, start an eager legacy writer, or
   resume tracked legacy threads. A later explicit legacy mutation may lazily

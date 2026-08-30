@@ -61,48 +61,48 @@ type Service struct {
 	liveFactory  func() Session
 	pollFactory  func() Session
 	threadClaims *appserver.ThreadClaimRegistry
-	afcWriter    *appserver.WriterManager[Session]
+	syncWriter   *appserver.WriterManager[Session]
 
-	sessionMu                   sync.Mutex
-	mu                          sync.RWMutex
-	poll                        Session
-	runCtx                      context.Context
-	pollGeneration              uint64
-	cancel                      context.CancelFunc
-	wg                          sync.WaitGroup
-	externalRequestMu           sync.Mutex
-	afcMu                       sync.Mutex
-	afcForum                    AFCForum
-	afcLeases                   map[string]appserver.WriterLease[Session]
-	afcEventProcess             Session
-	afcEventGeneration          uint64
-	afcEventCancel              context.CancelFunc
-	afcSubscribedPollGeneration uint64
-	afcSubscribedThreads        map[string]struct{}
-	sender                      Sender
-	externalReplySender         ExternalReplySender
-	logger                      *log.Logger
-	diagnosticMu                sync.Mutex
-	healthMu                    sync.Mutex
-	diagnosticWin               time.Time
-	diagnosticN                 int
-	diagnosticBy                map[string]int
-	diagnosticLast              map[string]time.Time
-	now                         func() time.Time
-	started                     bool
-	startedAt                   time.Time
-	ready                       bool
-	phase                       string
-	lastError                   string
-	pollConnected               bool
-	startupCleanupSessionID     string
-	startupFinished             bool
-	startupDone                 chan struct{}
-	lastPollHeartbeat           time.Time
+	sessionMu                    sync.Mutex
+	mu                           sync.RWMutex
+	poll                         Session
+	runCtx                       context.Context
+	pollGeneration               uint64
+	cancel                       context.CancelFunc
+	wg                           sync.WaitGroup
+	externalRequestMu            sync.Mutex
+	syncMu                       sync.Mutex
+	syncForum                    SyncForum
+	syncLeases                   map[string]appserver.WriterLease[Session]
+	syncEventProcess             Session
+	syncEventGeneration          uint64
+	syncEventCancel              context.CancelFunc
+	syncSubscribedPollGeneration uint64
+	syncSubscribedThreads        map[string]struct{}
+	sender                       Sender
+	externalReplySender          ExternalReplySender
+	logger                       *log.Logger
+	diagnosticMu                 sync.Mutex
+	healthMu                     sync.Mutex
+	diagnosticWin                time.Time
+	diagnosticN                  int
+	diagnosticBy                 map[string]int
+	diagnosticLast               map[string]time.Time
+	now                          func() time.Time
+	started                      bool
+	startedAt                    time.Time
+	ready                        bool
+	phase                        string
+	lastError                    string
+	pollConnected                bool
+	startupCleanupSessionID      string
+	startupFinished              bool
+	startupDone                  chan struct{}
+	lastPollHeartbeat            time.Time
 }
 
 const (
-	afcRecentThreadLimit      = 50
+	syncRecentThreadLimit     = 50
 	collaborationModeDefault  = "default"
 	telegramOriginHotPollMax  = 75 * time.Second
 	telegramOriginHotPollTick = 3 * time.Second
@@ -142,11 +142,11 @@ func New(cfg config.Config) (*Service, error) {
 		return appserver.NewClientWithTransport(cfg.CodexBin, transport, cfg.DefaultCWD, cfg.RequestTimeout)
 	}
 	service.threadClaims = appserver.NewThreadClaimRegistry()
-	service.afcWriter = appserver.NewWriterManager("afc", service.threadClaims, func() (Session, error) {
+	service.syncWriter = appserver.NewWriterManager("sync", service.threadClaims, func() (Session, error) {
 		return service.liveFactory(), nil
 	})
-	service.afcLeases = map[string]appserver.WriterLease[Session]{}
-	service.afcSubscribedThreads = map[string]struct{}{}
+	service.syncLeases = map[string]appserver.WriterLease[Session]{}
+	service.syncSubscribedThreads = map[string]struct{}{}
 	service.poll = service.pollFactory()
 	return service, nil
 }
@@ -166,16 +166,16 @@ func (s *Service) Close() error {
 		cancel()
 	}
 	s.wg.Wait()
-	s.afcMu.Lock()
-	afcEventCancel := s.afcEventCancel
-	s.afcEventCancel = nil
-	s.afcMu.Unlock()
-	if afcEventCancel != nil {
-		afcEventCancel()
+	s.syncMu.Lock()
+	syncEventCancel := s.syncEventCancel
+	s.syncEventCancel = nil
+	s.syncMu.Unlock()
+	if syncEventCancel != nil {
+		syncEventCancel()
 	}
-	var afcCloseErr error
-	if s.afcWriter != nil {
-		afcCloseErr = s.afcWriter.ForceClose()
+	var syncCloseErr error
+	if s.syncWriter != nil {
+		syncCloseErr = s.syncWriter.ForceClose()
 	}
 	s.sessionMu.Lock()
 	s.mu.Lock()
@@ -189,7 +189,7 @@ func (s *Service) Close() error {
 	if poll != nil {
 		_ = poll.Close()
 	}
-	return errors.Join(afcCloseErr, s.store.Close())
+	return errors.Join(syncCloseErr, s.store.Close())
 }
 
 func (s *Service) SetSender(sender Sender) {
@@ -204,10 +204,10 @@ func (s *Service) SetExternalReplySender(sender ExternalReplySender) {
 	s.externalReplySender = sender
 }
 
-func (s *Service) SetAFCForum(forum AFCForum) {
+func (s *Service) SetSyncForum(forum SyncForum) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.afcForum = forum
+	s.syncForum = forum
 }
 
 func (s *Service) Start(ctx context.Context) error {
@@ -237,13 +237,13 @@ func (s *Service) Start(ctx context.Context) error {
 	_ = s.store.DeleteState(runCtx, "appserver.live_connected")
 	_ = s.store.SetState(runCtx, "appserver.poll_connected", "false")
 	repairResetErr := s.resetRepairRequestOnStartup(runCtx)
-	_, deliveryRetirementErr := s.store.RetireUnsupportedTelegramDeliveries(runCtx, s.cfg.AFCGroupID)
+	_, deliveryRetirementErr := s.store.RetireUnsupportedTelegramDeliveries(runCtx, s.cfg.SyncGroupID)
 	_, recoveryErr := s.store.RecoverStartingExternalLaunchRequests(runCtx)
 	_, terminalRecoveryErr := s.reconcileStoredExternalLaunchTerminals(runCtx)
 	_, actionCardRecoveryErr := s.store.RefreshExternalLaunchActionCards(runCtx)
 	_, ackRecoveryErr := s.store.RecoverSendingExternalAcks(runCtx)
 	_, replyRecoveryErr := s.store.RecoverSendingExternalReplies(runCtx)
-	cleanupSessionID, resetErr := s.store.ResetAFCOnStartup(runCtx)
+	cleanupSessionID, resetErr := s.store.ResetSyncOnStartup(runCtx)
 	err := errors.Join(repairResetErr, deliveryRetirementErr, recoveryErr, terminalRecoveryErr, actionCardRecoveryErr, ackRecoveryErr, replyRecoveryErr, resetErr)
 	if err != nil {
 		cancel()
@@ -325,7 +325,7 @@ func (s *Service) HandleMessageWithID(ctx context.Context, chatID, topicID, mess
 	if !s.IsAllowed(userID, chatID) {
 		return nil, nil
 	}
-	return s.handleAFCMessage(ctx, topicID, messageID, userID, text)
+	return s.handleSyncMessage(ctx, topicID, messageID, userID, text)
 }
 
 func (s *Service) HandleCallback(ctx context.Context, chatID, topicID, messageID, userID int64, token string) (*DirectResponse, error) {
@@ -339,12 +339,12 @@ func (s *Service) HandleCallback(ctx context.Context, chatID, topicID, messageID
 	if route != nil && strings.HasPrefix(route.Action, "external_launch_") {
 		return s.handleExternalLaunchCallback(ctx, chatID, topicID, messageID, route)
 	}
-	return s.handleAFCCallback(ctx, topicID, messageID, token)
+	return s.handleSyncCallback(ctx, topicID, messageID, token)
 }
 
 func (s *Service) RegisterDirectDelivery(ctx context.Context, chatID, topicID, messageID int64, response *DirectResponse) error {
 	if response != nil {
-		s.reanchorAFCDirectDelivery(ctx, chatID, topicID, response)
+		s.reanchorSyncDirectDelivery(ctx, chatID, topicID, response)
 	}
 	return nil
 }
@@ -365,7 +365,7 @@ func (s *Service) resetRepairRequestOnStartup(ctx context.Context) error {
 }
 
 func (s *Service) IsAllowed(userID, chatID int64) bool {
-	return s.isAFCGroup(chatID) && len(s.cfg.AllowedUserIDs) == 1 && s.cfg.AllowedUserIDs[0] == userID
+	return s.isSyncGroup(chatID) && len(s.cfg.AllowedUserIDs) == 1 && s.cfg.AllowedUserIDs[0] == userID
 }
 
 func (s *Service) spawn(ctx context.Context, fn func(context.Context)) {
@@ -656,7 +656,7 @@ func (s *Service) pollLoop(ctx context.Context) {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {
-		s.syncAFC(ctx)
+		s.reconcileSync(ctx)
 		select {
 		case <-ctx.Done():
 			return
@@ -745,48 +745,48 @@ func (s *Service) heartbeatPollSession(ctx context.Context) {
 	s.mu.Unlock()
 	_ = s.store.SetState(ctx, "appserver.poll_connected", "false")
 	_ = s.store.SetState(ctx, "appserver.poll.last_error", sanitizeDiagnosticString(err.Error()))
-	s.softResetAFCAfterTransportLoss(ctx, err)
+	s.softResetSyncAfterTransportLoss(ctx, err)
 	s.notePollSessionError(ctx, "heartbeat", poll, generation, err)
 }
 
-func (s *Service) softResetAFCAfterTransportLoss(ctx context.Context, cause error) {
+func (s *Service) softResetSyncAfterTransportLoss(ctx context.Context, cause error) {
 	if !s.usesSharedAppServer() || ctx.Err() != nil {
 		return
 	}
-	summary := "The shared App Server connection was lost. AFC was reset to off; unfinished Telegram receipts are unknown and no request was replayed."
+	summary := "The shared App Server connection was lost. Sync was reset to off; unfinished Telegram receipts are unknown and no request was replayed."
 	if cause != nil {
 		summary += " " + sanitizeDiagnosticString(cause.Error())
 	}
 	s.reportHealthFailure(ctx, "appserver.transport", "Shared Codex App Server connection lost", summary, "Wait for reconnect, then run /sync on again.")
-	s.afcMu.Lock()
-	state, stateErr := s.store.GetAFCState(ctx)
-	if stateErr != nil || state.State == model.AFCStateOff || strings.TrimSpace(state.SessionID) == "" {
-		s.afcMu.Unlock()
+	s.syncMu.Lock()
+	state, stateErr := s.store.GetSyncState(ctx)
+	if stateErr != nil || state.State == model.SyncStateOff || strings.TrimSpace(state.SessionID) == "" {
+		s.syncMu.Unlock()
 		if stateErr != nil {
-			s.logLifecycle("afc_transport_reset_failed", lifecycleFields{"error": stateErr})
+			s.logLifecycle("sync_transport_reset_failed", lifecycleFields{"error": stateErr})
 		}
 		return
 	}
-	sessionID, resetErr := s.store.ResetAFCOnTransportLoss(ctx)
+	sessionID, resetErr := s.store.ResetSyncOnTransportLoss(ctx)
 	if resetErr == nil {
-		if s.afcEventCancel != nil {
-			s.afcEventCancel()
-			s.afcEventCancel = nil
+		if s.syncEventCancel != nil {
+			s.syncEventCancel()
+			s.syncEventCancel = nil
 		}
-		s.afcEventProcess = nil
-		s.afcEventGeneration = 0
-		s.afcSubscribedPollGeneration = 0
-		s.afcSubscribedThreads = map[string]struct{}{}
-		s.afcLeases = map[string]appserver.WriterLease[Session]{}
+		s.syncEventProcess = nil
+		s.syncEventGeneration = 0
+		s.syncSubscribedPollGeneration = 0
+		s.syncSubscribedThreads = map[string]struct{}{}
+		s.syncLeases = map[string]appserver.WriterLease[Session]{}
 	}
-	s.afcMu.Unlock()
+	s.syncMu.Unlock()
 	if resetErr != nil {
-		s.logLifecycle("afc_transport_reset_failed", lifecycleFields{"error": resetErr})
+		s.logLifecycle("sync_transport_reset_failed", lifecycleFields{"error": resetErr})
 		return
 	}
-	_ = s.afcWriter.ForceClose()
-	s.cleanupAFCTopics(ctx, sessionID)
-	s.logLifecycle("afc_transport_reset", lifecycleFields{"session_id": sessionID, "error": cause})
+	_ = s.syncWriter.ForceClose()
+	s.cleanupSyncTopics(ctx, sessionID)
+	s.logLifecycle("sync_transport_reset", lifecycleFields{"session_id": sessionID, "error": cause})
 }
 
 func (s *Service) reconcileSessions(ctx context.Context) {
@@ -897,10 +897,10 @@ func (s *Service) processDeliveryBatch(ctx context.Context) {
 		}
 		deliveryTopicID := item.TopicID
 		_, err := sender.SendMessage(ctx, item.ChatID, deliveryTopicID, payload.Text, payload.Buttons, options)
-		if err != nil && item.Kind == "health" && deliveryTopicID != afcGeneralSendTopicID && isMessageThreadNotFoundError(err) {
+		if err != nil && item.Kind == "health" && deliveryTopicID != syncGeneralSendTopicID && isMessageThreadNotFoundError(err) {
 			attempt := item.RetryCount + 1
 			_ = s.store.RecordDeliveryAttempt(ctx, item.ID, attempt, "general_fallback", sanitizeDiagnosticString(err.Error()))
-			deliveryTopicID = afcGeneralSendTopicID
+			deliveryTopicID = syncGeneralSendTopicID
 			_, err = sender.SendMessage(ctx, item.ChatID, deliveryTopicID, payload.Text, payload.Buttons, options)
 		}
 		if err != nil {

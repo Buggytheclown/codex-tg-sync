@@ -35,7 +35,7 @@ func TestServiceImplementsExternalRequestSink(t *testing.T) {
 func TestExternalLaunchApprovalRendersOnceAndDismissEditsSameMessage(t *testing.T) {
 	t.Parallel()
 	service := newTestService(t)
-	service.cfg.AFCGroupID = -1001
+	service.cfg.SyncGroupID = -1001
 	service.cfg.ExternalRequestsTopicID = 77
 	sender := &recordingSender{}
 	service.SetSender(sender)
@@ -79,7 +79,7 @@ func TestExternalLaunchApprovalRendersOnceAndDismissEditsSameMessage(t *testing.
 
 func TestExternalLaunchAutoStartRendersStatusWithoutApprovalButtonsAndClaimsDurably(t *testing.T) {
 	t.Parallel()
-	service := activeAFCService(t)
+	service := activeSyncService(t)
 	service.cfg.ExternalRequestsTopicID = 77
 	sender := &recordingSender{}
 	service.SetSender(sender)
@@ -109,7 +109,7 @@ func TestExternalLaunchAutoStartRendersStatusWithoutApprovalButtonsAndClaimsDura
 func TestExternalTerminalEditsCardAndDeliversOneAudibleNotice(t *testing.T) {
 	t.Parallel()
 	service := newTestService(t)
-	service.cfg.AFCGroupID = -1001
+	service.cfg.SyncGroupID = -1001
 	sender := &recordingSender{}
 	service.SetSender(sender)
 	request := daemonExternalRequest("test:terminal-notice", "do work")
@@ -126,7 +126,7 @@ func TestExternalTerminalEditsCardAndDeliversOneAudibleNotice(t *testing.T) {
 		t.Fatalf("start=%t err=%v", changed, err)
 	}
 	service.processExternalLaunchRequests(ctx)
-	snapshot := appserver.SnapshotFromThreadRead(afcCompletedPayload("thread", "turn", "Full final must stay in the session topic."))
+	snapshot := appserver.SnapshotFromThreadRead(syncCompletedPayload("thread", "turn", "Full final must stay in the session topic."))
 	service.queueExternalReplyFromSnapshot(ctx, snapshot)
 	service.queueExternalReplyFromSnapshot(ctx, snapshot)
 	service.processDeliveryBatch(ctx)
@@ -175,7 +175,7 @@ func TestExternalTerminalCardAndNoticeLabels(t *testing.T) {
 func TestExternalLaunchAutoStartCardEditsToTerminalStatus(t *testing.T) {
 	t.Parallel()
 	service := newTestService(t)
-	service.cfg.AFCGroupID = -1001
+	service.cfg.SyncGroupID = -1001
 	sender := &recordingSender{}
 	service.SetSender(sender)
 	request := daemonExternalRequest("test:auto:terminal", "do work")
@@ -231,7 +231,7 @@ func TestExternalFinalQueuesAndDeliversReplyToInvocation(t *testing.T) {
 	if changed, err := service.store.CompleteExternalLaunchRequest(ctx, request.ID, model.ExternalLaunchSessionStarted, "thread", "turn", "", ""); err != nil || !changed {
 		t.Fatalf("complete=%t err=%v", changed, err)
 	}
-	snapshot := appserver.SnapshotFromThreadRead(afcCompletedPayload("thread", "turn", "Investigated."))
+	snapshot := appserver.SnapshotFromThreadRead(syncCompletedPayload("thread", "turn", "Investigated."))
 	service.queueExternalReplyFromSnapshot(ctx, snapshot)
 	service.queueExternalReplyFromSnapshot(ctx, snapshot)
 	sender := &recordingExternalReplySender{returnedMessage: 99}
@@ -261,7 +261,7 @@ func TestExternalTerminalWithoutFinalQueuesExplicitFallback(t *testing.T) {
 	if changed, err := service.store.CompleteExternalLaunchRequest(ctx, request.ID, model.ExternalLaunchSessionStarted, "thread", "turn", "", ""); err != nil || !changed {
 		t.Fatalf("complete=%t err=%v", changed, err)
 	}
-	snapshot := appserver.SnapshotFromThreadRead(afcCompletedPayload("thread", "turn", ""))
+	snapshot := appserver.SnapshotFromThreadRead(syncCompletedPayload("thread", "turn", ""))
 	service.queueExternalReplyFromSnapshot(ctx, snapshot)
 	stored, err := service.store.GetExternalLaunchRequest(ctx, request.ID)
 	if err != nil || stored == nil || stored.ReplyStatus != model.ExternalReplyPending || !strings.Contains(stored.ReplyText, "without a final answer") {
@@ -270,7 +270,7 @@ func TestExternalTerminalWithoutFinalQueuesExplicitFallback(t *testing.T) {
 }
 
 func TestRejectedExternalSenderGetsOnlyPolicyReplyAndCannotStartCodex(t *testing.T) {
-	service := activeAFCService(t)
+	service := activeSyncService(t)
 	ctx := context.Background()
 	writer := &stubSession{threadStartResult: map[string]any{"thread": map[string]any{"id": "must-not-start"}}}
 	service.liveFactory = func() Session { return writer }
@@ -305,7 +305,7 @@ func TestRejectedExternalSenderGetsOnlyPolicyReplyAndCannotStartCodex(t *testing
 
 func TestExternalLaunchApprovalCallbackFailsClosedAndStartClaimsOnce(t *testing.T) {
 	t.Parallel()
-	service := activeAFCService(t)
+	service := activeSyncService(t)
 	service.cfg.ExternalRequestsTopicID = 77
 	sender := &recordingSender{}
 	service.SetSender(sender)
@@ -343,7 +343,7 @@ func TestExternalLaunchApprovalCallbackFailsClosedAndStartClaimsOnce(t *testing.
 func TestExternalLaunchApprovalSendAndEditFailuresRemainRetryable(t *testing.T) {
 	t.Parallel()
 	service := newTestService(t)
-	service.cfg.AFCGroupID = -1001
+	service.cfg.SyncGroupID = -1001
 	service.cfg.ExternalRequestsTopicID = 77
 	sender := &recordingSender{sendErr: errors.New("send unavailable")}
 	service.SetSender(sender)
@@ -382,7 +382,7 @@ func TestExternalLaunchApprovalSendAndEditFailuresRemainRetryable(t *testing.T) 
 func TestFailedExternalLaunchCardCanRetryOrClose(t *testing.T) {
 	t.Parallel()
 	service := newTestService(t)
-	service.cfg.AFCGroupID = -1001
+	service.cfg.SyncGroupID = -1001
 	sender := &recordingSender{}
 	service.SetSender(sender)
 	ctx := context.Background()
@@ -490,7 +490,7 @@ func TestRequestsCommandShowsOnlyActiveByDefault(t *testing.T) {
 func TestExternalOutcomeCheckReconcilesStoredTerminalSnapshot(t *testing.T) {
 	t.Parallel()
 	service := newTestService(t)
-	service.cfg.AFCGroupID = -1001
+	service.cfg.SyncGroupID = -1001
 	sender := &recordingSender{}
 	service.SetSender(sender)
 	ctx := context.Background()
@@ -504,7 +504,7 @@ func TestExternalOutcomeCheckReconcilesStoredTerminalSnapshot(t *testing.T) {
 	if changed, err := service.store.CompleteExternalLaunchRequest(ctx, request.ID, model.ExternalLaunchOutcomeUnknown, "thread-check", "", "dispatch_unknown", "unknown"); err != nil || !changed {
 		t.Fatalf("mark unknown=%t err=%v", changed, err)
 	}
-	snapshot := appserver.SnapshotFromThreadRead(afcCompletedPayload("thread-check", "turn-check", "Done"))
+	snapshot := appserver.SnapshotFromThreadRead(syncCompletedPayload("thread-check", "turn-check", "Done"))
 	compact, err := json.Marshal(snapshot)
 	if err != nil {
 		t.Fatal(err)
@@ -540,7 +540,7 @@ func TestStartupReconciliationClosesStoredTerminalExternalRequests(t *testing.T)
 	if changed, err := service.store.CompleteExternalLaunchRequest(ctx, request.ID, model.ExternalLaunchSessionStarted, "thread-old", "turn-old", "", ""); err != nil || !changed {
 		t.Fatalf("start=%t err=%v", changed, err)
 	}
-	snapshot := appserver.SnapshotFromThreadRead(afcCompletedPayload("thread-old", "turn-old", "Done"))
+	snapshot := appserver.SnapshotFromThreadRead(syncCompletedPayload("thread-old", "turn-old", "Done"))
 	compact, err := json.Marshal(snapshot)
 	if err != nil {
 		t.Fatal(err)
@@ -577,7 +577,7 @@ func TestStartupReconciliationClosesRequestSupersededByLaterTurn(t *testing.T) {
 	if changed, err := service.store.CompleteExternalLaunchRequest(ctx, request.ID, model.ExternalLaunchSessionStarted, "thread-superseded", oldTurnID, "", ""); err != nil || !changed {
 		t.Fatalf("start=%t err=%v", changed, err)
 	}
-	snapshot := appserver.SnapshotFromThreadRead(afcCompletedPayload("thread-superseded", newTurnID, "Later answer"))
+	snapshot := appserver.SnapshotFromThreadRead(syncCompletedPayload("thread-superseded", newTurnID, "Later answer"))
 	compact, err := json.Marshal(snapshot)
 	if err != nil {
 		t.Fatal(err)
@@ -596,16 +596,16 @@ func TestStartupReconciliationClosesRequestSupersededByLaterTurn(t *testing.T) {
 	}
 }
 
-func TestDispatchExternalLaunchRequestCreatesAFCThreadTurnAndTopic(t *testing.T) {
+func TestDispatchExternalLaunchRequestCreatesSyncThreadTurnAndTopic(t *testing.T) {
 	t.Parallel()
-	service := activeAFCService(t)
+	service := activeSyncService(t)
 	service.cfg.ExternalApprovalPolicy = "never"
 	service.cfg.ExternalApprovalsReviewer = "auto_review"
 	service.cfg.ExternalSandboxMode = "danger-full-access"
 	writer := &stubSession{threadStartResult: map[string]any{"thread": map[string]any{"id": "external-thread", "cwd": "/project"}}}
 	service.liveFactory = func() Session { return writer }
-	forum := &fakeAFCForum{nextTopicID: 20}
-	service.SetAFCForum(forum)
+	forum := &fakeSyncForum{nextTopicID: 20}
+	service.SetSyncForum(forum)
 	request := daemonExternalRequest("test:dispatch:1", "run requested task")
 	request.Prompt = "Source: test\nUntrusted context for Codex only\n\nUser request:\n" + request.SafePreview
 	request.Model = "gpt-5.6-luna"
@@ -631,17 +631,17 @@ func TestDispatchExternalLaunchRequestCreatesAFCThreadTurnAndTopic(t *testing.T)
 	}
 	userMessages := 0
 	for _, sent := range forum.sends {
-		if sent.topicID == 21 && sent.text == afcUserHeader+"\n"+request.SafePreview {
+		if sent.topicID == 21 && sent.text == syncUserHeader+"\n"+request.SafePreview {
 			userMessages++
 		}
 	}
 	if userMessages != 1 {
-		t.Fatalf("initial AFC user messages=%d sends=%#v, want exactly one", userMessages, forum.sends)
+		t.Fatalf("initial Sync user messages=%d sends=%#v, want exactly one", userMessages, forum.sends)
 	}
 	if len(forum.renames) != 1 || forum.renames[0].title != request.SafePreview {
-		t.Fatalf("AFC topic renames=%#v, want safe preview title", forum.renames)
+		t.Fatalf("Sync topic renames=%#v, want safe preview title", forum.renames)
 	}
-	topics, err := service.store.ListAFCTopics(context.Background(), "s")
+	topics, err := service.store.ListSyncTopics(context.Background(), "s")
 	if err != nil || len(topics) != 3 || topics[2].ThreadID != "external-thread" || topics[2].TopicID != 21 {
 		t.Fatalf("topics=%#v err=%v", topics, err)
 	}
@@ -652,7 +652,7 @@ func TestDispatchExternalLaunchRequestCreatesAFCThreadTurnAndTopic(t *testing.T)
 	}
 	userMessages = 0
 	for _, sent := range forum.sends {
-		if sent.topicID == 21 && sent.text == afcUserHeader+"\n"+request.SafePreview {
+		if sent.topicID == 21 && sent.text == syncUserHeader+"\n"+request.SafePreview {
 			userMessages++
 		}
 	}
@@ -661,19 +661,19 @@ func TestDispatchExternalLaunchRequestCreatesAFCThreadTurnAndTopic(t *testing.T)
 	}
 }
 
-func TestDispatchExternalLaunchRequestLeavesPendingWhileAFCInactive(t *testing.T) {
+func TestDispatchExternalLaunchRequestLeavesPendingWhileSyncInactive(t *testing.T) {
 	t.Parallel()
 	service := newTestService(t)
-	service.cfg.AFCGroupID = -1001
+	service.cfg.SyncGroupID = -1001
 	writer := &stubSession{threadStartResult: map[string]any{"thread": map[string]any{"id": "must-not-start"}}}
 	service.liveFactory = func() Session { return writer }
-	forum := &fakeAFCForum{}
-	service.SetAFCForum(forum)
-	request := prepareStartingExternalRequest(t, service, "test:dispatch:2", "wait for AFC")
+	forum := &fakeSyncForum{}
+	service.SetSyncForum(forum)
+	request := prepareStartingExternalRequest(t, service, "test:dispatch:2", "wait for Sync")
 
 	service.dispatchExternalLaunchRequest(context.Background(), request.ID)
 	stored, _ := service.store.GetExternalLaunchRequest(context.Background(), request.ID)
-	if stored.Status != model.ExternalLaunchPendingApproval || !strings.Contains(stored.ErrorSummary, "AFC") {
+	if stored.Status != model.ExternalLaunchPendingApproval || !strings.Contains(stored.ErrorSummary, "Sync") {
 		t.Fatalf("inactive request=%#v", stored)
 	}
 	if len(writer.threadStartCalls) != 0 || len(forum.creates) != 0 {
@@ -683,10 +683,10 @@ func TestDispatchExternalLaunchRequestLeavesPendingWhileAFCInactive(t *testing.T
 
 func TestDispatchExternalLaunchRequestDoesNotReplayAmbiguousThreadStart(t *testing.T) {
 	t.Parallel()
-	service := activeAFCService(t)
+	service := activeSyncService(t)
 	writer := &stubSession{threadStartErr: io.EOF}
 	service.liveFactory = func() Session { return writer }
-	service.SetAFCForum(&fakeAFCForum{nextTopicID: 20})
+	service.SetSyncForum(&fakeSyncForum{nextTopicID: 20})
 	request := prepareStartingExternalRequest(t, service, "test:dispatch:3", "ambiguous task")
 
 	service.dispatchExternalLaunchRequest(context.Background(), request.ID)
@@ -702,10 +702,10 @@ func TestDispatchExternalLaunchRequestDoesNotReplayAmbiguousThreadStart(t *testi
 
 func TestDispatchExternalLaunchRequestTopicFailureCreatesNoCodexState(t *testing.T) {
 	t.Parallel()
-	service := activeAFCService(t)
+	service := activeSyncService(t)
 	writer := &stubSession{threadStartResult: map[string]any{"thread": map[string]any{"id": "must-not-start"}}}
 	service.liveFactory = func() Session { return writer }
-	service.SetAFCForum(&fakeAFCForum{createErrAt: 1})
+	service.SetSyncForum(&fakeSyncForum{createErrAt: 1})
 	request := prepareStartingExternalRequest(t, service, "test:dispatch:4", "topic failure")
 
 	service.dispatchExternalLaunchRequest(context.Background(), request.ID)
@@ -717,11 +717,11 @@ func TestDispatchExternalLaunchRequestTopicFailureCreatesNoCodexState(t *testing
 
 func TestDispatchExternalLaunchRequestPromptSendFailureCreatesNoCodexState(t *testing.T) {
 	t.Parallel()
-	service := activeAFCService(t)
+	service := activeSyncService(t)
 	writer := &stubSession{threadStartResult: map[string]any{"thread": map[string]any{"id": "must-not-start"}}}
 	service.liveFactory = func() Session { return writer }
-	forum := &fakeAFCForum{nextTopicID: 20, sendErrAt: 1}
-	service.SetAFCForum(forum)
+	forum := &fakeSyncForum{nextTopicID: 20, sendErrAt: 1}
+	service.SetSyncForum(forum)
 	request := prepareStartingExternalRequest(t, service, "test:dispatch:5", "prompt send failure")
 
 	service.dispatchExternalLaunchRequest(context.Background(), request.ID)
@@ -732,7 +732,7 @@ func TestDispatchExternalLaunchRequestPromptSendFailureCreatesNoCodexState(t *te
 	if len(forum.deletes) != 1 || forum.deletes[0] != 21 {
 		t.Fatalf("deleted topics=%#v, want [21]", forum.deletes)
 	}
-	drafts, err := service.store.ListAFCTopicDrafts(context.Background(), "s")
+	drafts, err := service.store.ListSyncTopicDrafts(context.Background(), "s")
 	if err != nil || len(drafts) != 0 {
 		t.Fatalf("drafts=%#v err=%v, want cleanup", drafts, err)
 	}

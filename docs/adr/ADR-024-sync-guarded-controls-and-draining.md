@@ -1,31 +1,31 @@
-# ADR-024: AFC Guarded Controls And Draining
+# ADR-024: Sync Guarded Controls And Draining
 
 - Status: accepted; Stop origin restriction amended by ADR-026
 - Related: ADR-020, ADR-023
 
 ## Context
 
-Approvals, user-input responses, Stop, and forced shutdown mutate the AFC-owned
+Approvals, user-input responses, Stop, and forced shutdown mutate the Sync-owned
 App Server process. Telegram callbacks can arrive late or from the wrong topic,
 and force-off must not trade cleanup convenience for lost turn ownership.
 
 ## Decision
 
-- AFC approval and structured input callbacks persist the current session,
+- Sync approval and structured input callbacks persist the current session,
   topic, thread, turn, request, writer generation, and Telegram message id.
   Every callback re-reads current state and fails closed on any mismatch.
-- Only server requests from a current Telegram-origin AFC lease become
+- Only server requests from a current Telegram-origin Sync lease become
   actionable. Passive/Desktop-origin waiting state remains display-only.
-- Resolving a request or observing its turn terminal expires every matching AFC
+- Resolving a request or observing its turn terminal expires every matching Sync
   callback. Telegram send failure does not retain writer ownership.
 - In spawned compatibility mode, `/stop` in a managed topic interrupts only its
-  current AFC lease. In shared-daemon mode, ADR-026 allows `/stop` to re-read
+  current Sync lease. In shared-daemon mode, ADR-026 allows `/stop` to re-read
   the topic's exact durable thread and interrupt its authoritative active turn
   regardless of Desktop or Telegram origin. It never guesses a turn id.
 - Safe `/sync off` refuses while starting, active, or unknown leases exist and
   lists their stable topic titles.
 - `/sync off --force` first changes the writer/session to `draining`, rejects new
-  starts, interrupts each known active AFC turn, and waits for guarded terminal
+  starts, interrupts each known active Sync turn, and waits for guarded terminal
   evidence. Full confirmation closes the shared writer, then commits logical
   off and starts best-effort topic cleanup.
 - A force timeout leaves the session `draining`, keeps topics routable only to

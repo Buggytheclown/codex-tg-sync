@@ -6,7 +6,7 @@
 
 - Codex App Server runs locally over stdio.
 - Telegram access is restricted to exactly one allowed user in one configured
-  private AFC forum group.
+  private Sync forum group.
 - SQLite state stays on the operator machine.
 - `ctr-go init` stores local configuration in `~/.codex-tg/config.env` by default.
 - `ctr-go service install` creates a user LaunchAgent whose environment contains

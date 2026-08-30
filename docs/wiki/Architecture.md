@@ -1,9 +1,9 @@
 # Architecture
 
-`codex-tg` is a local Codex Control Plane with an AFC forum adapter.
+`codex-tg` is a local Codex Control Plane with an Sync forum adapter.
 
 ```text
-Telegram AFC forum     cron / YMessenger / Arcanum
+Telegram Sync forum     cron / YMessenger / Arcanum
         |                         |
         +-----------+-------------+
                     v
@@ -28,13 +28,13 @@ One poll session discovers and reads threads. Generation-aware writer leases ser
 
 ## Telegram adapter
 
-The adapter accepts one user in one exact private forum group. AFC topic state maps Telegram topic ids to durable Codex thread ids. Callback routes contain the coordinates required to fail closed on stale actions.
+The adapter accepts one user in one exact private forum group. Sync topic state maps Telegram topic ids to durable Codex thread ids. Callback routes contain the coordinates required to fail closed on stale actions.
 
 The Telegram adapter does not contain a second direct-message router.
 
 ## State
 
-SQLite stores current AFC state and topics, topic drafts, callback routes, receipts, external launch requests, delivery metadata, thread snapshots, and daemon state.
+SQLite stores current Sync state and topics, topic drafts, callback routes, receipts, external launch requests, delivery metadata, thread snapshots, and daemon state.
 
 Fresh databases do not create retired DM binding, observer, panel, or approval tables. Old databases are opened non-destructively and any such tables remain inert.
 

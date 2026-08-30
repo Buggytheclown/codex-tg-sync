@@ -47,41 +47,41 @@ func NewBot(cfg config.Config, service *daemon.Service, logger *log.Logger) (*Bo
 		service: service,
 		logger:  logger,
 	}
-	service.SetAFCForum(bot)
+	service.SetSyncForum(bot)
 	return bot, nil
 }
 
-func (b *Bot) ValidateAFCGroup(ctx context.Context, allowedUserID int64) error {
-	if b.cfg.AFCGroupID == 0 {
-		return errors.New("CTR_GO_AFC_GROUP_ID is not configured")
+func (b *Bot) ValidateSyncGroup(ctx context.Context, allowedUserID int64) error {
+	if b.cfg.SyncGroupID == 0 {
+		return errors.New("CTR_GO_SYNC_GROUP_ID is not configured")
 	}
 	if b.me == nil || b.me.ID == 0 {
 		return errors.New("telegram bot identity is unavailable")
 	}
-	probe, err := b.client.ProbeForumGroup(ctx, b.cfg.AFCGroupID, b.me.ID, allowedUserID)
+	probe, err := b.client.ProbeForumGroup(ctx, b.cfg.SyncGroupID, b.me.ID, allowedUserID)
 	if err != nil {
 		return err
 	}
-	return probe.Validate(b.cfg.AFCGroupID, b.me.ID, allowedUserID)
+	return probe.Validate(b.cfg.SyncGroupID, b.me.ID, allowedUserID)
 }
 
-func (b *Bot) PrepareAFCControl(ctx context.Context) error {
-	err := b.client.EditGeneralForumTopic(ctx, b.cfg.AFCGroupID, "Control")
+func (b *Bot) PrepareSyncControl(ctx context.Context) error {
+	err := b.client.EditGeneralForumTopic(ctx, b.cfg.SyncGroupID, "Control")
 	if err == nil || IsTopicNotModified(err) {
 		return nil
 	}
 	return errors.New(sanitizeTelegramLogError(err))
 }
 
-func (b *Bot) CreateAFCTopic(ctx context.Context, title string) (int64, error) {
-	topic, err := b.client.CreateForumTopic(ctx, b.cfg.AFCGroupID, title)
+func (b *Bot) CreateSyncTopic(ctx context.Context, title string) (int64, error) {
+	topic, err := b.client.CreateForumTopic(ctx, b.cfg.SyncGroupID, title)
 	if err != nil {
 		safeErr := errors.New(sanitizeTelegramLogError(err))
 		var apiErr *APIError
 		if errors.As(err, &apiErr) {
-			return 0, daemon.NewAFCForumFailure(daemon.AFCForumFailureDefinitive, safeErr)
+			return 0, daemon.NewSyncForumFailure(daemon.SyncForumFailureDefinitive, safeErr)
 		}
-		return 0, daemon.NewAFCForumFailure(daemon.AFCForumFailureUnknown, safeErr)
+		return 0, daemon.NewSyncForumFailure(daemon.SyncForumFailureUnknown, safeErr)
 	}
 	if topic == nil {
 		return 0, errors.New("telegram createForumTopic returned no topic")
@@ -89,28 +89,28 @@ func (b *Bot) CreateAFCTopic(ctx context.Context, title string) (int64, error) {
 	return topic.MessageThreadID, nil
 }
 
-func (b *Bot) RenameAFCTopic(ctx context.Context, topicID int64, title string) error {
-	err := b.client.EditForumTopic(ctx, b.cfg.AFCGroupID, topicID, title)
+func (b *Bot) RenameSyncTopic(ctx context.Context, topicID int64, title string) error {
+	err := b.client.EditForumTopic(ctx, b.cfg.SyncGroupID, topicID, title)
 	if err == nil || IsTopicNotModified(err) {
 		return nil
 	}
 	return errors.New(sanitizeTelegramLogError(err))
 }
 
-func (b *Bot) DeleteAFCTopic(ctx context.Context, topicID int64) error {
-	err := b.client.DeleteForumTopic(ctx, b.cfg.AFCGroupID, topicID)
+func (b *Bot) DeleteSyncTopic(ctx context.Context, topicID int64) error {
+	err := b.client.DeleteForumTopic(ctx, b.cfg.SyncGroupID, topicID)
 	if IsTopicNotFound(err) {
 		return nil
 	}
 	return err
 }
 
-func (b *Bot) DeleteAFCMessage(ctx context.Context, topicID, messageID int64) error {
-	return b.DeleteMessage(ctx, b.cfg.AFCGroupID, topicID, messageID)
+func (b *Bot) DeleteSyncMessage(ctx context.Context, topicID, messageID int64) error {
+	return b.DeleteMessage(ctx, b.cfg.SyncGroupID, topicID, messageID)
 }
 
-func (b *Bot) SendAFCMessage(ctx context.Context, topicID int64, rendered model.RenderedMessage, silent bool) (int64, error) {
-	message, err := b.client.SendRenderedMessage(ctx, b.cfg.AFCGroupID, topicID, rendered, nil, model.SendOptions{Silent: silent})
+func (b *Bot) SendSyncMessage(ctx context.Context, topicID int64, rendered model.RenderedMessage, silent bool) (int64, error) {
+	message, err := b.client.SendRenderedMessage(ctx, b.cfg.SyncGroupID, topicID, rendered, nil, model.SendOptions{Silent: silent})
 	if err != nil {
 		return 0, err
 	}
@@ -120,8 +120,8 @@ func (b *Bot) SendAFCMessage(ctx context.Context, topicID int64, rendered model.
 	return message.MessageID, nil
 }
 
-func (b *Bot) SendAFCActionMessage(ctx context.Context, topicID int64, text string, buttons [][]model.ButtonSpec) (int64, error) {
-	message, err := b.client.SendMessage(ctx, b.cfg.AFCGroupID, topicID, text, toInlineKeyboard(buttons), model.SendOptions{})
+func (b *Bot) SendSyncActionMessage(ctx context.Context, topicID int64, text string, buttons [][]model.ButtonSpec) (int64, error) {
+	message, err := b.client.SendMessage(ctx, b.cfg.SyncGroupID, topicID, text, toInlineKeyboard(buttons), model.SendOptions{})
 	if err != nil {
 		return 0, err
 	}
@@ -131,8 +131,8 @@ func (b *Bot) SendAFCActionMessage(ctx context.Context, topicID int64, text stri
 	return message.MessageID, nil
 }
 
-func (b *Bot) EditAFCMessage(ctx context.Context, topicID, messageID int64, rendered model.RenderedMessage) error {
-	_, err := b.client.EditRenderedMessageText(ctx, b.cfg.AFCGroupID, messageID, rendered, nil)
+func (b *Bot) EditSyncMessage(ctx context.Context, topicID, messageID int64, rendered model.RenderedMessage) error {
+	_, err := b.client.EditRenderedMessageText(ctx, b.cfg.SyncGroupID, messageID, rendered, nil)
 	return err
 }
 
@@ -147,8 +147,8 @@ func (b *Bot) Start(ctx context.Context) error {
 	if err := b.client.DeleteMyCommands(startCtx); err != nil {
 		return fmt.Errorf("clear default Telegram commands: %w", err)
 	}
-	if err := b.client.SetMyCommandsForChat(startCtx, b.cfg.AFCGroupID, defaultCommands()); err != nil {
-		return fmt.Errorf("set AFC Telegram commands: %w", err)
+	if err := b.client.SetMyCommandsForChat(startCtx, b.cfg.SyncGroupID, defaultCommands()); err != nil {
+		return fmt.Errorf("set Sync Telegram commands: %w", err)
 	}
 	b.logger.Printf("telegram bot ready: @%s", me.Username)
 	return nil

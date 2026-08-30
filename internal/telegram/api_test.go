@@ -78,7 +78,7 @@ func TestClientForumTopicOperations(t *testing.T) {
 	}
 }
 
-func TestClientScopesCommandsToExactAFCChat(t *testing.T) {
+func TestClientScopesCommandsToExactSyncChat(t *testing.T) {
 	t.Parallel()
 
 	type requestRecord struct {
@@ -113,7 +113,7 @@ func TestClientScopesCommandsToExactAFCChat(t *testing.T) {
 	}
 	scope, ok := requests[1].body["scope"].(map[string]any)
 	if requests[1].path != "/setMyCommands" || !ok || scope["type"] != "chat" || scope["chat_id"] != float64(-10042) {
-		t.Fatalf("AFC command scope = %#v", requests[1])
+		t.Fatalf("Sync command scope = %#v", requests[1])
 	}
 }
 
@@ -127,7 +127,7 @@ func TestClientProbeForumGroupAndValidateSecurity(t *testing.T) {
 		}
 		switch r.URL.Path {
 		case "/getChat":
-			_, _ = w.Write([]byte(`{"ok":true,"result":{"id":-10042,"type":"supergroup","title":"AFC","is_forum":true}}`))
+			_, _ = w.Write([]byte(`{"ok":true,"result":{"id":-10042,"type":"supergroup","title":"Sync","is_forum":true}}`))
 		case "/getChatMember":
 			if body["user_id"] == float64(100) {
 				_, _ = w.Write([]byte(`{"ok":true,"result":{"status":"administrator","user":{"id":100,"is_bot":true},"can_manage_topics":true,"can_delete_messages":true}}`))
@@ -162,7 +162,7 @@ func TestClientProbeForumGroupAndValidateSecurity(t *testing.T) {
 		t.Fatalf("missing-right validation error = %v, want ErrForumCapability", err)
 	}
 	probe.BotMember.CanManageTopics = true
-	probe.Chat.Username = "public_afc"
+	probe.Chat.Username = "public_sync"
 	if err := probe.Validate(-10042, 100, 200); !errors.Is(err, ErrForumSecurity) {
 		t.Fatalf("public-group validation error = %v, want ErrForumSecurity", err)
 	}

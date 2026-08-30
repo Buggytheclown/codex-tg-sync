@@ -81,7 +81,7 @@ func TestRunInitWritesPrivateConfigAndRefusesOverwrite(t *testing.T) {
 	for _, want := range []string{
 		`CTR_GO_TELEGRAM_BOT_TOKEN="` + token + `"`,
 		`CTR_GO_ALLOWED_USER_IDS="42"`,
-		`CTR_GO_AFC_GROUP_ID="-1001"`,
+		`CTR_GO_SYNC_GROUP_ID="-1001"`,
 		`CTR_GO_CODEX_BIN="codex"`,
 	} {
 		if !strings.Contains(text, want) {

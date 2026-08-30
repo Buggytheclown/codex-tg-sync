@@ -12,7 +12,7 @@ tries to use its stdio streams.
 
 Allow `codex-tg` to connect directly to an already running loopback App Server,
 for example `ws://127.0.0.1:4500`, without spawning or owning that process. The
-connection must retain the shared-runtime heartbeat, recovery, and AFC safety
+connection must retain the shared-runtime heartbeat, recovery, and Sync safety
 rules used by managed-daemon mode.
 
 ## Non-goals
@@ -54,6 +54,6 @@ unchanged.
 ## Acceptance Criteria
 
 - [x] WebSocket mode connects to a loopback App Server without spawning Codex.
-- [x] WebSocket mode uses shared-runtime heartbeat and AFC recovery rules.
+- [x] WebSocket mode uses shared-runtime heartbeat and Sync recovery rules.
 - [x] Spawned stdio and managed daemon Unix-socket modes remain supported.
 - [x] Public configuration and architecture docs describe the new mode.

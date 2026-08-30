@@ -1,11 +1,11 @@
-# ADR-021: AFC Forum Group Surface
+# ADR-021: Sync Forum Group Surface
 
 - Status: accepted
 - Related: ADR-015, ADR-019, ADR-020
 
 ## Context
 
-AFC needs a Telegram surface that shows several Codex threads as independently
+Sync needs a Telegram surface that shows several Codex threads as independently
 unread conversations while the existing bot DM remains the legacy product.
 Telegram forum topics in one private supergroup provide that UX and preserve the
 same Bot API `chat_id + message_thread_id` routing model already used by the
@@ -17,7 +17,7 @@ a deleted or stale topic is different from a retryable Telegram outage.
 
 ## Decision
 
-- AFC targets exactly one configured private forum supergroup.
+- Sync targets exactly one configured private forum supergroup.
 - The activation probe must confirm:
   - the returned chat id equals the configured id;
   - `type=supergroup`, `is_forum=true`, and no public username;
@@ -36,11 +36,11 @@ a deleted or stale topic is different from a retryable Telegram outage.
   the built-in General topic to permanent `Control` with
   `editGeneralForumTopic`. A Telegram `not modified` response is success; any
   other preparation failure aborts activation before session or task-topic
-  creation. AFC never hides or deletes Control.
+  creation. Sync never hides or deletes Control.
 
 ## Consequences
 
-- Security/capability validation can run before AFC creates external state.
+- Security/capability validation can run before Sync creates external state.
 - Topic cleanup may treat an already deleted topic as converged while retaining
   retry behavior for transient errors.
 - Exact configured group updates can be routed before legacy handlers without
@@ -48,7 +48,7 @@ a deleted or stale topic is different from a retryable Telegram outage.
 
 ## Non-goals
 
-- Public groups, multiple AFC groups, or multiple human members.
+- Public groups, multiple Sync groups, or multiple human members.
 - Listing or adopting arbitrary existing forum topics.
 - Creating a separate dynamic Control topic or hiding the built-in topic.
 - Treating a successful Bot API send as full Telegram live validation.

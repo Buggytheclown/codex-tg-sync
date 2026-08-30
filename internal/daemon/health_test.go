@@ -11,7 +11,7 @@ import (
 )
 
 func TestHealthEpisodeQueuesOneWarningAndOneRecovery(t *testing.T) {
-	service := activeAFCService(t)
+	service := activeSyncService(t)
 	ctx := context.Background()
 	service.reportHealthFailure(ctx, "ymessenger.poll", "YMessenger polling failed", "token expired", "Check token.")
 	service.reportHealthFailure(ctx, "ymessenger.poll", "YMessenger polling failed", "token still expired", "Check token.")
@@ -35,7 +35,7 @@ func TestHealthEpisodeQueuesOneWarningAndOneRecovery(t *testing.T) {
 }
 
 func TestExternalPollHealthIgnoresResumeFlappingUntilContinuouslyAwake(t *testing.T) {
-	service := activeAFCService(t)
+	service := activeSyncService(t)
 	service.cfg.ExternalRequestsTopicID = 77
 	ctx := context.Background()
 	base := time.Date(2026, 8, 26, 7, 0, 0, 0, time.UTC)
@@ -84,7 +84,7 @@ func TestExternalPollHealthIgnoresResumeFlappingUntilContinuouslyAwake(t *testin
 }
 
 func TestExternalPollHealthReportsSlowTimeoutCyclesToRequests(t *testing.T) {
-	service := activeAFCService(t)
+	service := activeSyncService(t)
 	service.cfg.ExternalRequestsTopicID = 77
 	ctx := context.Background()
 	base := time.Date(2026, 8, 29, 7, 0, 0, 0, time.UTC)
@@ -105,7 +105,7 @@ func TestExternalPollHealthReportsSlowTimeoutCyclesToRequests(t *testing.T) {
 }
 
 func TestHealthRecoveryDoesNotOvertakeUndeliveredWarning(t *testing.T) {
-	service := activeAFCService(t)
+	service := activeSyncService(t)
 	ctx := context.Background()
 	sender := &recordingSender{}
 	service.SetSender(sender)
@@ -124,7 +124,7 @@ func TestHealthRecoveryDoesNotOvertakeUndeliveredWarning(t *testing.T) {
 }
 
 func TestOlderHealthRecoveryIsSupersededByNewEpisode(t *testing.T) {
-	service := activeAFCService(t)
+	service := activeSyncService(t)
 	ctx := context.Background()
 	sender := &recordingSender{}
 	service.SetSender(sender)
@@ -175,7 +175,7 @@ func TestHealthDeliveryFallsBackToGeneralForInvalidTopic(t *testing.T) {
 }
 
 func TestStatusShowsHeartbeatDeadLettersAndOpenHealthIncidents(t *testing.T) {
-	service := activeAFCService(t)
+	service := activeSyncService(t)
 	ctx := context.Background()
 	if err := service.store.SetState(ctx, "appserver.poll.last_heartbeat_at", time.Now().UTC().Add(-5*time.Second).Format(time.RFC3339Nano)); err != nil {
 		t.Fatalf("SetState(last heartbeat) failed: %v", err)
@@ -241,8 +241,8 @@ func TestPollersCommandShowsDurableHealthyFailingStaleAndDisabledState(t *testin
 	}
 }
 
-func TestSharedAppServerHeartbeatFailureTruthfullyResetsAFCWithoutReplay(t *testing.T) {
-	service := activeAFCService(t)
+func TestSharedAppServerHeartbeatFailureTruthfullyResetsSyncWithoutReplay(t *testing.T) {
+	service := activeSyncService(t)
 	service.cfg.AppServerMode = "websocket"
 	service.lastPollHeartbeat = time.Time{}
 	poll := &stubSession{threadListErr: errors.New("websocket is half-open")}
@@ -252,9 +252,9 @@ func TestSharedAppServerHeartbeatFailureTruthfullyResetsAFCWithoutReplay(t *test
 	service.mu.Unlock()
 
 	service.heartbeatPollSession(context.Background())
-	state, err := service.store.GetAFCState(context.Background())
-	if err != nil || state.State != model.AFCStateOff {
-		t.Fatalf("AFC state=%#v err=%v, want off", state, err)
+	state, err := service.store.GetSyncState(context.Background())
+	if err != nil || state.State != model.SyncStateOff {
+		t.Fatalf("Sync state=%#v err=%v, want off", state, err)
 	}
 	service.mu.RLock()
 	connected := service.pollConnected
@@ -263,7 +263,7 @@ func TestSharedAppServerHeartbeatFailureTruthfullyResetsAFCWithoutReplay(t *test
 		t.Fatal("poll session still reported connected after failed heartbeat")
 	}
 	for _, topic := range []int64{11, 12} {
-		stored, getErr := service.store.GetActiveAFCTopic(context.Background(), -1001, topic)
+		stored, getErr := service.store.GetActiveSyncTopic(context.Background(), -1001, topic)
 		if getErr != nil {
 			t.Fatal(getErr)
 		}
@@ -272,7 +272,7 @@ func TestSharedAppServerHeartbeatFailureTruthfullyResetsAFCWithoutReplay(t *test
 		}
 	}
 	items, err := service.store.ClaimDeliveryBatch(context.Background(), 10)
-	if err != nil || len(items) != 1 || !strings.Contains(items[0].PayloadJSON, "AFC was reset to off") {
+	if err != nil || len(items) != 1 || !strings.Contains(items[0].PayloadJSON, "Sync was reset to off") {
 		t.Fatalf("health warning=%#v err=%v", items, err)
 	}
 }

@@ -2,7 +2,7 @@
 
 Purpose: help AI agents work on `codex-tg` without increasing complexity or weakening the operator-facing Telegram control loop.
 
-Good changes are small, evidence-backed, easy to understand, and validated through the same AFC forum surface the operator uses.
+Good changes are small, evidence-backed, easy to understand, and validated through the same Sync forum surface the operator uses.
 
 ## Repository Purpose
 
@@ -32,13 +32,13 @@ The repository is public. Never commit private paths, tokens, Telegram ids, loca
 
 - Codex App Server is authoritative for interactive threads, turns, approvals, live events, history, and snapshots.
 - `threadId` is durable identity. Telegram topic ids are adapter routing state.
-- Telegram ingress is accepted only from exactly one configured user in the configured AFC forum group.
+- Telegram ingress is accepted only from exactly one configured user in the configured Sync forum group.
 - Reject out-of-scope messages and callbacks before SQLite lookup or App Server work.
-- Telegram commands are removed from the default Bot API scope and registered only for the AFC group.
-- AFC synchronization uses one polling App Server session and generation-aware writer ownership for mutations.
+- Telegram commands are removed from the default Bot API scope and registered only for the Sync group.
+- Sync uses one polling App Server session and generation-aware writer ownership for mutations.
 - Shared daemon and loopback WebSocket transports fail closed; they never silently spawn a private server.
 - Startup is non-blocking. Full thread synchronization must not run synchronously in startup.
-- SQLite stores AFC topics and drafts, callback routes, launch requests, delivery metadata, snapshots, and daemon state.
+- SQLite stores Sync topics and drafts, callback routes, launch requests, delivery metadata, snapshots, and daemon state.
 - Fresh databases must not create retired DM binding, observer, panel, or approval tables. Existing tables remain inert and are not dropped.
 - Do not add a compatibility router for retired direct-message behavior.
 
@@ -49,12 +49,12 @@ The repository is public. Never commit private paths, tokens, Telegram ids, loca
 - Inject IO, time, config, and external dependencies where tests need control.
 - Make ownership and generation checks explicit around threads, turns, callbacks, and writers.
 - Preserve App Server wire-event compatibility even when a former Telegram presentation is removed.
-- Use current terms consistently: AFC group, Control, topic, thread, turn, receipt, launch request, poller, delivery.
+- Use current terms consistently: Sync group, Control, topic, thread, turn, receipt, launch request, poller, delivery.
 - Remove dead code introduced or exposed by the change.
 
 ## Telegram Product Contract
 
-- The exact private AFC forum group is the only supported Telegram surface.
+- The exact private Sync forum group is the only supported Telegram surface.
 - Control is the General topic and is a permanent prerequisite.
 - `/sync on` materializes recent Codex chats and continuously discovers new ones; `/sync off` cleans managed topics without interrupting Codex work.
 - Topic text starts or steers the authoritative turn; `/stop` interrupts it.
@@ -66,25 +66,25 @@ The repository is public. Never commit private paths, tokens, Telegram ids, loca
 - External launch requests may carry their own explicit execution settings.
 - `/projects` and `/newchat` create topic drafts from known local workspaces; Telegram never accepts arbitrary filesystem paths.
 - `/pollers` reports source poller activity and health. `/requests` lists active launch requests.
-- Health and external terminal deliveries stay inside the AFC group.
+- Health and external terminal deliveries stay inside the Sync group.
 - Sync resets to off after a daemon restart; the operator enables it again after reconnect.
 
 ## Routing And Ownership
 
 1. Verify exact group and exact user.
-2. Resolve Control, existing AFC topic, or topic draft.
+2. Resolve Control, existing Sync topic, or topic draft.
 3. For callbacks, load a current callback route and verify all ownership coordinates.
 4. Claim the writer generation before mutation.
 5. Re-read App Server authority before stale-active recovery or replacement turn start.
 
-Never infer a thread from a visual label or emoji. Persisted AFC topic state and callback tokens are routing authority.
+Never infer a thread from a visual label or emoji. Persisted Sync topic state and callback tokens are routing authority.
 
 ## Testing Discipline
 
 - Test public behavior through stable interfaces; mock only external or non-deterministic boundaries.
 - Keep tests deterministic and isolated.
 - Boundary tests must prove rejected Telegram updates cannot reach storage or App Server.
-- Preserve coverage for AFC activation/reconciliation, prompt/steer/stop, writer ownership, approvals/input, long finals, health, launch requests, poller status, delivery retry, and startup cleanup.
+- Preserve coverage for Sync activation/reconciliation, prompt/steer/stop, writer ownership, approvals/input, long finals, health, launch requests, poller status, delivery retry, and startup cleanup.
 - Schema tests must cover both fresh databases and non-destructive opening of an old database.
 - If a check cannot run, report the exact blocker and required manual check.
 
@@ -108,7 +108,7 @@ Bot API success alone is not live E2E evidence. If live QA is unavailable, say e
 - `internal/appserver/`: App Server transport, snapshots, writer ownership.
 - `internal/config/`: config file and environment parsing.
 - `internal/control/`, `internal/controlapi/`: reusable local control surfaces.
-- `internal/daemon/`: AFC orchestration, launch requests, pollers, health, delivery.
+- `internal/daemon/`: Sync orchestration, launch requests, pollers, health, delivery.
 - `internal/storage/`: SQLite schema and repositories.
 - `internal/telegram/`: Telegram Bot API transport.
 - `internal/tgformat/`: Telegram entity rendering.

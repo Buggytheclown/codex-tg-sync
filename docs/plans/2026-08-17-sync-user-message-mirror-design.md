@@ -1,4 +1,4 @@
-# AFC User Message Mirror
+# Sync User Message Mirror
 
 ## Product Contract
 
@@ -25,7 +25,7 @@ are outside this contract.
 
 ## Persisted State
 
-`afc_topics` owns three additional delivery fields:
+`sync_topics` owns three additional delivery fields:
 
 - `last_user_fp`: the latest Codex user item already presented or intentionally
   suppressed because its Telegram original is visible;
@@ -33,7 +33,7 @@ are outside this contract.
   Telegram prompt that has not yet appeared in `thread/read`;
 - `pending_telegram_turn_id`: the exact turn for that pending fingerprint.
 
-The pending state is written while the AFC presentation lock is still held,
+The pending state is written while the Sync presentation lock is still held,
 before dispatch returns its ACK. Therefore a passive poll cannot mirror the
 same Telegram prompt in the dispatch-to-ACK window.
 
@@ -71,7 +71,7 @@ remains best-effort and follows the existing tail-status contract.
   Desktop-origin turns.
 - Matching only the latest text without persisted pending state races with the
   dispatch/ACK window and cannot survive restart.
-- Reusing legacy `thread_panels` couples AFC to a lifecycle that AFC deliberately
+- Reusing legacy `thread_panels` couples Sync to a lifecycle that Sync deliberately
   does not create.
 
 ## Verification

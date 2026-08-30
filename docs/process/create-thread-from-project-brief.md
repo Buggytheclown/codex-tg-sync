@@ -1,4 +1,4 @@
-# Create AFC Topic From Project Brief
+# Create Sync Topic From Project Brief
 
 ## Problem
 
@@ -6,7 +6,7 @@ An operator needs to start a new Codex task from Telegram without supplying an a
 
 ## Goal
 
-`/projects` and `/newchat` create durable AFC topic drafts. The first plain-text message in the draft atomically claims it, creates the Codex thread in the selected known cwd, starts the first turn, and binds the topic to the returned `threadId`.
+`/projects` and `/newchat` create durable Sync topic drafts. The first plain-text message in the draft atomically claims it, creates the Codex thread in the selected known cwd, starts the first turn, and binds the topic to the returned `threadId`.
 
 ## Non-goals
 
@@ -28,7 +28,7 @@ A second message while creation is in progress is rejected rather than starting 
 
 ## Domain model
 
-Project workspaces are derived from cached `threads.cwd` metadata. A topic draft stores AFC session id, exact group/topic ids, rank, title, selected cwd, state, and the first Telegram message id. Current callback routes support project navigation; no generic chat binding or panel state is created.
+Project workspaces are derived from cached `threads.cwd` metadata. A topic draft stores Sync session id, exact group/topic ids, rank, title, selected cwd, state, and the first Telegram message id. Current callback routes support project navigation; no generic chat binding or panel state is created.
 
 ## Architecture
 
@@ -36,7 +36,7 @@ Project workspaces are derived from cached `threads.cwd` metadata. A topic draft
 - SQLite durably records and claims the draft.
 - App Server `thread/start` owns thread identity.
 - App Server `turn/start` starts the first prompt with the current Telegram permissions.
-- The daemon promotes the draft to an AFC topic only after it has the returned thread id.
+- The daemon promotes the draft to an Sync topic only after it has the returned thread id.
 - Ambiguous `thread/start` outcomes are not replayed automatically.
 
 ## Testing

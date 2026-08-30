@@ -1,6 +1,6 @@
 # codex-tg Wiki
 
-`codex-tg` is a local Codex Control Plane whose supported Telegram product is one private AFC forum group.
+`codex-tg` is a local Codex Control Plane whose supported Telegram product is one private Sync forum group.
 
 ## Start here
 

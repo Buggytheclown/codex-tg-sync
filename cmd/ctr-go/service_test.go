@@ -27,7 +27,7 @@ func TestServiceInstallNonInteractiveWritesConfigAndLaunchAgent(t *testing.T) {
 		"--config", configPath,
 		"--telegram-bot-token", token,
 		"--allowed-user-ids", "42",
-		"--afc-group-id", "-1001",
+		"--sync-group-id", "-1001",
 		"--default-cwd", dir,
 		"--codex-chats-root", filepath.Join(dir, "Codex"),
 		"--codex-bin", binary,
@@ -47,7 +47,7 @@ func TestServiceInstallNonInteractiveWritesConfigAndLaunchAgent(t *testing.T) {
 	for _, want := range []string{
 		`CTR_GO_TELEGRAM_BOT_TOKEN="` + token + `"`,
 		`CTR_GO_ALLOWED_USER_IDS="42"`,
-		`CTR_GO_AFC_GROUP_ID="-1001"`,
+		`CTR_GO_SYNC_GROUP_ID="-1001"`,
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("config missing %q:\n%s", want, text)
@@ -104,7 +104,7 @@ func TestServiceInstallForcePreservesExistingUnknownConfigKeys(t *testing.T) {
 		"--config", configPath,
 		"--telegram-bot-token", token,
 		"--allowed-user-ids", "42",
-		"--afc-group-id", "-1001",
+		"--sync-group-id", "-1001",
 		"--default-cwd", dir,
 		"--codex-chats-root", filepath.Join(dir, "Codex"),
 		"--codex-bin", binary,
@@ -145,7 +145,7 @@ func TestServiceInstallCapturesRuntimeProxyEnvInConfig(t *testing.T) {
 		"--config", configPath,
 		"--telegram-bot-token", "123456:abcdefghijklmnopqrstuvwxyz",
 		"--allowed-user-ids", "42",
-		"--afc-group-id", "-1001",
+		"--sync-group-id", "-1001",
 		"--default-cwd", dir,
 		"--codex-chats-root", filepath.Join(dir, "Codex"),
 		"--codex-bin", binary,
@@ -225,7 +225,7 @@ func TestServiceInstallNonInteractiveReportsMissingFlags(t *testing.T) {
 	if err == nil {
 		t.Fatal("service install succeeded, want missing values error")
 	}
-	for _, want := range []string{"--telegram-bot-token", "--allowed-user-ids", "--afc-group-id"} {
+	for _, want := range []string{"--telegram-bot-token", "--allowed-user-ids", "--sync-group-id"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Fatalf("error missing %q: %v", want, err)
 		}
@@ -242,11 +242,11 @@ func TestTelegramIDValidatorsRejectWrongShapeAndSign(t *testing.T) {
 		{name: "user", value: "42", check: validateTelegramUserID, ok: true},
 		{name: "zero_user", value: "0", check: validateTelegramUserID},
 		{name: "negative_user", value: "-42", check: validateTelegramUserID},
-		{name: "group", value: "-1001", check: validateAFCGroupID, ok: true},
-		{name: "zero_group", value: "0", check: validateAFCGroupID},
-		{name: "positive_group", value: "1001", check: validateAFCGroupID},
+		{name: "group", value: "-1001", check: validateSyncGroupID, ok: true},
+		{name: "zero_group", value: "0", check: validateSyncGroupID},
+		{name: "positive_group", value: "1001", check: validateSyncGroupID},
 		{name: "multiple_users", value: "42,43", check: validateTelegramUserID},
-		{name: "not_integer", value: "chat", check: validateAFCGroupID},
+		{name: "not_integer", value: "chat", check: validateSyncGroupID},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

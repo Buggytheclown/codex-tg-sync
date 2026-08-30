@@ -22,7 +22,7 @@ func newTestService(t *testing.T) *Service {
 			DBPath: filepath.Join(root, "data", "state.sqlite"),
 		},
 		AllowedUserIDs: []int64{123456789},
-		AFCGroupID:     -1001,
+		SyncGroupID:    -1001,
 		DefaultCWD:     `C:\Users\you\Projects\Codex`,
 	})
 	if err != nil {

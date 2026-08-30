@@ -1,8 +1,8 @@
-# ADR-026: Shared Daemon AFC Sync
+# ADR-026: Shared Daemon Sync
 
 - Status: accepted; bridge-restart recovery amended by ADR-027
 - Amends: ADR-019, ADR-020, ADR-022, ADR-023, ADR-024
-- Related: ADR-025, ADR-027, `docs/plans/2026-08-16-afc-desktop-sync-mvp-design.md`
+- Related: ADR-025, ADR-027, `docs/plans/2026-08-16-sync-desktop-sync-mvp-design.md`
 
 ## Context
 
@@ -12,7 +12,7 @@ but cannot coordinate Desktop and produce `already has an active writer` or
 stale rollout behavior. Passive `thread/read` polling also cannot provide the
 same live lifecycle as a client subscribed to the runtime that owns the turn.
 
-AFC is now the primary Telegram product surface. It must mirror user-visible
+Sync is now the primary Telegram product surface. It must mirror user-visible
 Desktop chats, accept follow-ups in the same thread, and create chats that
 Desktop sees without maintaining a second App Server runtime.
 
@@ -36,15 +36,15 @@ Desktop sees without maintaining a second App Server runtime.
   only `threadId`. CWD and history options are not added to resume.
 - Live events are preferred for presentation and `thread/read` remains the
   durable reconciliation source.
-- AFC Finals that exceed Telegram's message limit are split into ordered
+- Sync Finals that exceed Telegram's message limit are split into ordered
   UTF-16-safe chunks. Every chunk repeats the Final header so the topic preview
   still exposes terminal state when a continuation is the latest message. The
   Final delivery fingerprint advances only after every chunk is accepted;
   reconciliation retries an incomplete delivery.
-- AFC reconciliation continuously materializes newly created eligible
+- Sync reconciliation continuously materializes newly created eligible
   top-level Desktop threads, using App Server `createdAt` rather than treating
   activity in an old thread as a new chat. Activation creates only a bounded recent snapshot;
-  `CTR_GO_AFC_INITIAL_TOPIC_LIMIT` defaults to five.
+  `CTR_GO_SYNC_INITIAL_TOPIC_LIMIT` defaults to five.
 - Durable `threadId` mapping makes topic creation idempotent. New Telegram chats
   retain the draft-first `thread/start + turn/start` contract from ADR-025.
 - Local writer leases continue to guard Telegram dispatch, receipts, callbacks,
@@ -58,9 +58,9 @@ Desktop sees without maintaining a second App Server runtime.
   authoritative shared-daemon `thread/read`. The old receipt stays unchanged;
   the new message steers the confirmed active turn or starts only after
   confirmed idle. Spawned mode stays fail-closed. ADR-027 supersedes this
-  bridge-restart continuation behavior for the MVP by resetting AFC to `off`;
+  bridge-restart continuation behavior for the MVP by resetting Sync to `off`;
   the reconciliation rule still applies to in-process connection repair.
-- AFC active and legacy DM mutation are mutually exclusive. Legacy code remains
+- Sync active and legacy DM mutation are mutually exclusive. Legacy code remains
   lazy and compatible; `/sync off` does not restore it automatically.
 
 ## Consequences
@@ -77,12 +77,12 @@ Desktop sees without maintaining a second App Server runtime.
   runtimes. In shared-daemon mode, exact-id resume is the subscription mechanism
   and must not override CWD or history.
 - ADR-024's Telegram-origin restriction on Stop is superseded in shared-daemon
-  AFC mode; guarded coordinates and terminal confirmation still apply.
+  Sync mode; guarded coordinates and terminal confirmation still apply.
 
 ## Non-goals
 
 - Public or remote App Server exposure.
 - Public or cross-host WebSocket transport.
-- Simultaneous AFC and legacy Telegram mutation.
+- Simultaneous Sync and legacy Telegram mutation.
 - Automatic archive/delete or manual-topic repair synchronization.
 - Automatic replay after ambiguous dispatch.

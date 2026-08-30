@@ -23,14 +23,14 @@ ctr-go doctor
 ctr-go daemon run
 ```
 
-The wizard writes `~/.codex-tg/config.env`. It requires a bot token, exactly one allowed user id, and the AFC group id. `CTR_GO_CONFIG` selects another config path; explicit environment variables override file values.
+The wizard writes `~/.codex-tg/config.env`. It requires a bot token, exactly one allowed user id, and the Sync group id. `CTR_GO_CONFIG` selects another config path; explicit environment variables override file values.
 
 Environment-only example:
 
 ```powershell
 $env:CTR_GO_TELEGRAM_BOT_TOKEN = "<telegram-bot-token>"
 $env:CTR_GO_ALLOWED_USER_IDS = "<one-telegram-user-id>"
-$env:CTR_GO_AFC_GROUP_ID = "<private-forum-supergroup-id>"
+$env:CTR_GO_SYNC_GROUP_ID = "<private-forum-supergroup-id>"
 $env:CTR_GO_DEFAULT_CWD = "C:\Users\you\Projects\Codex"
 $env:CTR_GO_CODEX_CHATS_ROOT = "C:\Users\you\Documents\Codex"
 ```

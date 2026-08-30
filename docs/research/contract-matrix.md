@@ -6,12 +6,12 @@ ADR-032 defines the active Telegram product contract. Historical direct-message 
 
 | Input | Required chat | Required user | Behavior outside boundary |
 | --- | --- | --- | --- |
-| Message | exact `CTR_GO_AFC_GROUP_ID` | the single `CTR_GO_ALLOWED_USER_IDS` value | silently ignore before SQLite/App Server |
-| Callback | exact AFC group | the single allowed user | silently ignore before route lookup |
-| Delivery | exact AFC group | n/a | supersede unless kind is `health` or `external_terminal` |
-| Bot command menu | exact AFC group scope | Telegram handles visibility | default scope is deleted |
+| Message | exact `CTR_GO_SYNC_GROUP_ID` | the single `CTR_GO_ALLOWED_USER_IDS` value | silently ignore before SQLite/App Server |
+| Callback | exact Sync group | the single allowed user | silently ignore before route lookup |
+| Delivery | exact Sync group | n/a | supersede unless kind is `health` or `external_terminal` |
+| Bot command menu | exact Sync group scope | Telegram handles visibility | default scope is deleted |
 
-Startup fails when the AFC group is missing or the allowed-user list does not contain exactly one id.
+Startup fails when the Sync group is missing or the allowed-user list does not contain exactly one id.
 
 ## Command surface
 
@@ -20,7 +20,7 @@ The Bot API chat-scoped menu contains exactly:
 | Command | Scope | Contract |
 | --- | --- | --- |
 | `/sync on|off` | Control | enable synchronization or clean managed topics |
-| `/status` | Control | AFC, App Server, delivery, request, and health summary |
+| `/status` | Control | Sync, App Server, delivery, request, and health summary |
 | `/pollers` | Control | configured pollers, current activity, last attempt/success, failures |
 | `/requests` | Control | active non-closed launch requests |
 | `/refresh` | Control | refresh project/thread discovery |
@@ -28,14 +28,14 @@ The Bot API chat-scoped menu contains exactly:
 | `/newchat` | Control | create a dated Codex Chat topic draft |
 | `/stop` | task topic | interrupt the authoritative active turn |
 
-`/repair` is accepted in Control but omitted from the menu. Unknown commands and task-topic misuse return a scoped error in the AFC group. There is no command fallback outside the group.
+`/repair` is accepted in Control but omitted from the menu. Unknown commands and task-topic misuse return a scoped error in the Sync group. There is no command fallback outside the group.
 
 ## Topic lifecycle
 
 - Control is the General topic and is never deleted.
 - `/sync on` creates topics for the configured number of recent eligible Codex chats.
 - Active synchronization discovers later chats without replaying earlier prompts.
-- One durable Codex `threadId` maps to one managed topic per AFC session.
+- One durable Codex `threadId` maps to one managed topic per Sync session.
 - A restart resets Sync to off, cleans old managed topics, and preserves Codex work.
 - Project/Chat creation first creates a durable topic draft. The first text message claims the draft, creates the thread, and starts one turn.
 - Duplicate Telegram message ids are idempotent.
@@ -102,4 +102,4 @@ Fresh databases do not create:
 - `thread_panels`
 - `chat_steer_state`
 
-Opening an existing database does not drop those tables. Current AFC topics/drafts, callback routes, receipts, external requests, deliveries, threads, snapshots, and daemon state remain supported.
+Opening an existing database does not drop those tables. Current Sync topics/drafts, callback routes, receipts, external requests, deliveries, threads, snapshots, and daemon state remain supported.

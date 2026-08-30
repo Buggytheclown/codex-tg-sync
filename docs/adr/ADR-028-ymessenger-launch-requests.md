@@ -6,7 +6,7 @@
 ## Context
 
 The operator wants a Yandex Messenger robot mention to become an explicitly
-approved Codex task in the existing AFC Telegram group. Running an external
+approved Codex task in the existing Sync Telegram group. Running an external
 scheduler would add another process and local API. Letting that process consume
 the existing Telegram bot would also create two competing `getUpdates`
 consumers. Direct shared-database integration would couple source code to
@@ -32,10 +32,10 @@ from Telegram and App Server orchestration.
   flag may auto-start allowed explicit mentions; the durable conditional claim
   is still stored before any external effect.
 - Approval messages use the existing Telegram bot and one manually created,
-  configured forum topic. That topic is not stored as an AFC topic or draft and
-  is never renamed or deleted by AFC lifecycle cleanup.
+  configured forum topic. That topic is not stored as an Sync topic or draft and
+  is never renamed or deleted by Sync lifecycle cleanup.
 - Approved work uses the existing App Server writer-ownership rules to create a
-  thread and first turn. Existing AFC materialization owns the resulting normal
+  thread and first turn. Existing Sync materialization owns the resulting normal
   session topic and subsequent live UI.
 - App Server remains authoritative for thread and turn state. A dispatch with
   an ambiguous outcome is recorded as `outcome_unknown` and is never replayed
@@ -56,7 +56,7 @@ from Telegram and App Server orchestration.
 - The legacy durable cache of all observed top-level Messenger messages is
   removed during database migration. Only accepted launch requests and their
   normalized prompts remain durable.
-- The existing AFC App Server subscription and authoritative `thread/read`
+- The existing Sync App Server subscription and authoritative `thread/read`
   snapshot queue one Messenger reply for the exact external `(thread_id,
   turn_id)`. A durable retry worker sends the final answer as a reply to the
   invoking source message. Codex never receives the OAuthTeam token and does

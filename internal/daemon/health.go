@@ -58,7 +58,7 @@ func (s *Service) reportHealthFailure(ctx context.Context, key, title, summary, 
 }
 
 func (s *Service) reportHealthFailureLocked(ctx context.Context, key, title, summary, action string) {
-	s.reportHealthFailureLockedToTopic(ctx, key, title, summary, action, afcGeneralSendTopicID)
+	s.reportHealthFailureLockedToTopic(ctx, key, title, summary, action, syncGeneralSendTopicID)
 }
 
 func (s *Service) reportHealthFailureLockedToTopic(ctx context.Context, key, title, summary, action string, topicID int64) {
@@ -95,7 +95,7 @@ func (s *Service) reportHealthRecovered(ctx context.Context, key, title string) 
 }
 
 func (s *Service) reportHealthRecoveredLocked(ctx context.Context, key, title, note string) {
-	s.reportHealthRecoveredLockedToTopic(ctx, key, title, note, afcGeneralSendTopicID)
+	s.reportHealthRecoveredLockedToTopic(ctx, key, title, note, syncGeneralSendTopicID)
 }
 
 func (s *Service) reportHealthRecoveredLockedToTopic(ctx context.Context, key, title, note string, topicID int64) {
@@ -116,11 +116,11 @@ func (s *Service) reportHealthRecoveredLockedToTopic(ctx context.Context, key, t
 }
 
 func (s *Service) enqueueControlNotice(ctx context.Context, eventID, text, healthKey, episodeID, healthState string) {
-	s.enqueueControlNoticeToTopic(ctx, eventID, text, healthKey, episodeID, healthState, afcGeneralSendTopicID)
+	s.enqueueControlNoticeToTopic(ctx, eventID, text, healthKey, episodeID, healthState, syncGeneralSendTopicID)
 }
 
 func (s *Service) enqueueControlNoticeToTopic(ctx context.Context, eventID, text, healthKey, episodeID, healthState string, topicID int64) {
-	if s.cfg.AFCGroupID == 0 || strings.TrimSpace(eventID) == "" || strings.TrimSpace(text) == "" {
+	if s.cfg.SyncGroupID == 0 || strings.TrimSpace(eventID) == "" || strings.TrimSpace(text) == "" {
 		return
 	}
 	payload := model.DeliveryPayload{
@@ -128,7 +128,7 @@ func (s *Service) enqueueControlNoticeToTopic(ctx context.Context, eventID, text
 		HealthKey: healthKey, HealthEpisodeID: episodeID, HealthState: healthState,
 	}
 	_ = s.store.EnqueueDelivery(ctx, model.DeliveryQueueItem{
-		EventID: eventID, ChatKey: model.ChatKey(s.cfg.AFCGroupID, topicID), ChatID: s.cfg.AFCGroupID,
+		EventID: eventID, ChatKey: model.ChatKey(s.cfg.SyncGroupID, topicID), ChatID: s.cfg.SyncGroupID,
 		TopicID: topicID, Kind: "health", Status: model.DeliveryStatusPending,
 		AvailableAt: model.NowString(), PayloadJSON: storage.MustJSON(payload), CreatedAt: model.NowString(), UpdatedAt: model.NowString(),
 	})

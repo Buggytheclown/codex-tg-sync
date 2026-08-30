@@ -12,35 +12,35 @@ import (
 	"github.com/mideco-tech/codex-tg/internal/storage"
 )
 
-func (s *Service) stopAFCTurn(ctx context.Context, topicID int64) (*DirectResponse, error) {
-	s.afcMu.Lock()
-	defer s.afcMu.Unlock()
-	state, err := s.store.GetAFCState(ctx)
+func (s *Service) stopSyncTurn(ctx context.Context, topicID int64) (*DirectResponse, error) {
+	s.syncMu.Lock()
+	defer s.syncMu.Unlock()
+	state, err := s.store.GetSyncState(ctx)
 	if err != nil {
 		return nil, err
 	}
-	if state.State != model.AFCStateActive {
-		return &DirectResponse{Text: "AFC is not accepting topic controls."}, nil
+	if state.State != model.SyncStateActive {
+		return &DirectResponse{Text: "Sync is not accepting topic controls."}, nil
 	}
-	topic, err := s.store.GetActiveAFCTopic(ctx, state.ChatID, topicID)
+	topic, err := s.store.GetActiveSyncTopic(ctx, state.ChatID, topicID)
 	if err != nil {
 		return nil, err
 	}
 	if topic == nil {
-		return &DirectResponse{Text: "This AFC topic is stale or unknown."}, nil
+		return &DirectResponse{Text: "This Sync topic is stale or unknown."}, nil
 	}
-	if topic.ActiveTurnState == model.AFCTurnActive && topic.ActiveTurnID != "" {
-		lease, ok := s.afcLeases[topic.ThreadID]
+	if topic.ActiveTurnState == model.SyncTurnActive && topic.ActiveTurnID != "" {
+		lease, ok := s.syncLeases[topic.ThreadID]
 		if ok && lease.Generation == topic.WriterGeneration {
 			if err := lease.Process.TurnInterrupt(ctx, topic.ThreadID, topic.ActiveTurnID); err != nil {
 				return &DirectResponse{Text: fmt.Sprintf("Stop request failed: %v", err)}, nil
 			}
 			_ = s.markTelegramOriginExplicitInterrupt(ctx, topic.ThreadID, topic.ActiveTurnID)
-			return &DirectResponse{Text: "Stop requested. AFC remains active until terminal confirmation."}, nil
+			return &DirectResponse{Text: "Stop requested. Sync remains active until terminal confirmation."}, nil
 		}
 	}
 	if !s.usesSharedAppServer() {
-		return &DirectResponse{Text: "This topic has no stoppable AFC-owned turn."}, nil
+		return &DirectResponse{Text: "This topic has no stoppable Sync-owned turn."}, nil
 	}
 	s.mu.RLock()
 	poll, connected := s.poll, s.pollConnected
@@ -48,11 +48,11 @@ func (s *Service) stopAFCTurn(ctx context.Context, topicID int64) (*DirectRespon
 	if !connected || poll == nil {
 		return &DirectResponse{Text: "Shared App Server session is unavailable; Stop was not sent."}, nil
 	}
-	current, readErr := readAuthoritativeAFCSnapshot(ctx, poll, topic.ThreadID)
+	current, readErr := readAuthoritativeSyncSnapshot(ctx, poll, topic.ThreadID)
 	if readErr != nil {
 		return &DirectResponse{Text: fmt.Sprintf("Stop could not verify the current turn: %v", readErr)}, nil
 	}
-	turnID := activeTurnIDFromAFCSnapshot(current)
+	turnID := activeTurnIDFromSyncSnapshot(current)
 	if turnID == "" {
 		return &DirectResponse{Text: "This topic has no active turn to stop."}, nil
 	}
@@ -62,32 +62,32 @@ func (s *Service) stopAFCTurn(ctx context.Context, topicID int64) (*DirectRespon
 	return &DirectResponse{Text: "Stop requested for the current shared App Server turn."}, nil
 }
 
-func (s *Service) forceDeactivateAFC(ctx context.Context) (*DirectResponse, error) {
-	s.afcMu.Lock()
-	state, err := s.store.GetAFCState(ctx)
+func (s *Service) forceDeactivateSync(ctx context.Context) (*DirectResponse, error) {
+	s.syncMu.Lock()
+	state, err := s.store.GetSyncState(ctx)
 	if err != nil {
-		s.afcMu.Unlock()
+		s.syncMu.Unlock()
 		return nil, err
 	}
-	if state.State == model.AFCStateOff || state.SessionID == "" {
-		s.afcMu.Unlock()
-		return &DirectResponse{Text: "AFC is already off."}, nil
+	if state.State == model.SyncStateOff || state.SessionID == "" {
+		s.syncMu.Unlock()
+		return &DirectResponse{Text: "Sync is already off."}, nil
 	}
-	_ = s.afcWriter.BeginDrain()
-	if err := s.store.MarkAFCDraining(ctx, state.SessionID); err != nil {
-		s.afcMu.Unlock()
+	_ = s.syncWriter.BeginDrain()
+	if err := s.store.MarkSyncDraining(ctx, state.SessionID); err != nil {
+		s.syncMu.Unlock()
 		return nil, err
 	}
-	topics, err := s.store.ListAFCTopics(ctx, state.SessionID)
+	topics, err := s.store.ListSyncTopics(ctx, state.SessionID)
 	if err != nil {
-		s.afcMu.Unlock()
+		s.syncMu.Unlock()
 		return nil, err
 	}
 	for _, topic := range topics {
-		if topic.ActiveTurnState != model.AFCTurnActive || topic.ActiveTurnID == "" {
+		if topic.ActiveTurnState != model.SyncTurnActive || topic.ActiveTurnID == "" {
 			continue
 		}
-		lease, ok := s.afcLeases[topic.ThreadID]
+		lease, ok := s.syncLeases[topic.ThreadID]
 		if !ok || lease.Generation != topic.WriterGeneration {
 			continue
 		}
@@ -95,7 +95,7 @@ func (s *Service) forceDeactivateAFC(ctx context.Context) (*DirectResponse, erro
 			_ = s.markTelegramOriginExplicitInterrupt(ctx, topic.ThreadID, topic.ActiveTurnID)
 		}
 	}
-	s.afcMu.Unlock()
+	s.syncMu.Unlock()
 
 	timeout := s.cfg.RequestTimeout
 	if timeout <= 0 {
@@ -106,19 +106,19 @@ func (s *Service) forceDeactivateAFC(ctx context.Context) (*DirectResponse, erro
 	}
 	deadline := time.Now().Add(timeout)
 	for {
-		s.syncAFC(ctx)
-		writer := s.afcWriter.Snapshot()
-		current, _ := s.store.ListAFCTopics(ctx, state.SessionID)
-		drafts, draftErr := s.store.ListAFCTopicDrafts(ctx, state.SessionID)
+		s.reconcileSync(ctx)
+		writer := s.syncWriter.Snapshot()
+		current, _ := s.store.ListSyncTopics(ctx, state.SessionID)
+		drafts, draftErr := s.store.ListSyncTopicDrafts(ctx, state.SessionID)
 		if draftErr != nil {
 			return nil, draftErr
 		}
-		if writer.Starting+writer.Active+writer.Unknown == 0 && !hasUnfinishedAFCTopics(current) && !hasUnfinishedAFCDrafts(drafts) {
-			return s.deactivateAFC(ctx)
+		if writer.Starting+writer.Active+writer.Unknown == 0 && !hasUnfinishedSyncTopics(current) && !hasUnfinishedSyncDrafts(drafts) {
+			return s.deactivateSync(ctx)
 		}
 		if time.Now().After(deadline) {
-			titles := unfinishedAFCWorkTitles(current, drafts)
-			return &DirectResponse{Text: "AFC remains draining; terminal confirmation timed out for: " + strings.Join(titles, ", ")}, nil
+			titles := unfinishedSyncWorkTitles(current, drafts)
+			return &DirectResponse{Text: "Sync remains draining; terminal confirmation timed out for: " + strings.Join(titles, ", ")}, nil
 		}
 		select {
 		case <-ctx.Done():
@@ -128,19 +128,19 @@ func (s *Service) forceDeactivateAFC(ctx context.Context) (*DirectResponse, erro
 	}
 }
 
-func hasUnfinishedAFCDrafts(drafts []model.AFCTopicDraft) bool {
+func hasUnfinishedSyncDrafts(drafts []model.SyncTopicDraft) bool {
 	for _, draft := range drafts {
-		if draft.State == model.AFCDraftStarting || draft.State == model.AFCDraftUnknown {
+		if draft.State == model.SyncDraftStarting || draft.State == model.SyncDraftUnknown {
 			return true
 		}
 	}
 	return false
 }
 
-func unfinishedAFCDraftTitles(drafts []model.AFCTopicDraft) []string {
+func unfinishedSyncDraftTitles(drafts []model.SyncTopicDraft) []string {
 	var titles []string
 	for _, draft := range drafts {
-		if draft.State != model.AFCDraftStarting && draft.State != model.AFCDraftUnknown {
+		if draft.State != model.SyncDraftStarting && draft.State != model.SyncDraftUnknown {
 			continue
 		}
 		title := strings.TrimSpace(draft.Title)
@@ -152,27 +152,27 @@ func unfinishedAFCDraftTitles(drafts []model.AFCTopicDraft) []string {
 	return titles
 }
 
-func unfinishedAFCWorkTitles(topics []model.AFCTopic, drafts []model.AFCTopicDraft) []string {
-	titles := append(unfinishedAFCTopicTitles(topics), unfinishedAFCDraftTitles(drafts)...)
+func unfinishedSyncWorkTitles(topics []model.SyncTopic, drafts []model.SyncTopicDraft) []string {
+	titles := append(unfinishedSyncTopicTitles(topics), unfinishedSyncDraftTitles(drafts)...)
 	if len(titles) == 0 {
 		return []string{"ownership unknown"}
 	}
 	return titles
 }
 
-func hasUnfinishedAFCTopics(topics []model.AFCTopic) bool {
+func hasUnfinishedSyncTopics(topics []model.SyncTopic) bool {
 	for _, topic := range topics {
-		if topic.ActiveTurnState == model.AFCTurnStarting || topic.ActiveTurnState == model.AFCTurnActive || topic.ActiveTurnState == model.AFCTurnUnknown {
+		if topic.ActiveTurnState == model.SyncTurnStarting || topic.ActiveTurnState == model.SyncTurnActive || topic.ActiveTurnState == model.SyncTurnUnknown {
 			return true
 		}
 	}
 	return false
 }
 
-func unfinishedAFCTopicTitles(topics []model.AFCTopic) []string {
+func unfinishedSyncTopicTitles(topics []model.SyncTopic) []string {
 	var titles []string
 	for _, topic := range topics {
-		if topic.ActiveTurnState == model.AFCTurnStarting || topic.ActiveTurnState == model.AFCTurnActive || topic.ActiveTurnState == model.AFCTurnUnknown {
+		if topic.ActiveTurnState == model.SyncTurnStarting || topic.ActiveTurnState == model.SyncTurnActive || topic.ActiveTurnState == model.SyncTurnUnknown {
 			title := strings.TrimSpace(topic.Title)
 			if title == "" {
 				title = topic.ThreadID
@@ -183,35 +183,35 @@ func unfinishedAFCTopicTitles(topics []model.AFCTopic) []string {
 	return titles
 }
 
-func (s *Service) handleAFCPendingRequestLocked(ctx context.Context, topic model.AFCTopic, approval model.PendingApproval) {
+func (s *Service) handleSyncPendingRequestLocked(ctx context.Context, topic model.SyncTopic, approval model.PendingApproval) {
 	if approval.ThreadID != topic.ThreadID || approval.TurnID == "" || approval.TurnID != topic.ActiveTurnID {
 		return
 	}
-	forum := s.getAFCForum()
+	forum := s.getSyncForum()
 	if forum == nil {
 		return
 	}
-	text := afcApprovalHeader + "\n" + strings.TrimSpace(approval.Question)
+	text := syncApprovalHeader + "\n" + strings.TrimSpace(approval.Question)
 	var routes []model.CallbackRoute
 	var buttons [][]model.ButtonSpec
 	if approval.PromptKind == "approval" {
 		row := []model.ButtonSpec{}
 		for _, choice := range []struct{ label, decision string }{{"Approve", "accept"}, {"Allow command prefix", "acceptForSession"}, {"Deny", "decline"}, {"Cancel", "cancel"}} {
-			route, button := s.newAFCCallbackRoute(ctx, topic, approval, "afc_approval", map[string]any{"decision": choice.decision})
+			route, button := s.newSyncCallbackRoute(ctx, topic, approval, "sync_approval", map[string]any{"decision": choice.decision})
 			routes, row = append(routes, route), append(row, button)
 		}
 		buttons = append(buttons, row[:2], row[2:])
 	} else {
-		text = afcInputHeader + "\n" + strings.TrimSpace(approval.Question)
-		for _, choice := range afcUserInputChoices(approval.PayloadJSON) {
-			route, button := s.newAFCCallbackRoute(ctx, topic, approval, "afc_user_input", map[string]any{"response": choice.Response})
+		text = syncInputHeader + "\n" + strings.TrimSpace(approval.Question)
+		for _, choice := range syncUserInputChoices(approval.PayloadJSON) {
+			route, button := s.newSyncCallbackRoute(ctx, topic, approval, "sync_user_input", map[string]any{"response": choice.Response})
 			routes, buttons = append(routes, route), append(buttons, []model.ButtonSpec{button})
 		}
 		if len(buttons) == 0 {
 			text += "\nNo structured choices were provided; answer in Codex Desktop."
 		}
 	}
-	messageID, err := forum.SendAFCActionMessage(ctx, topic.TopicID, text, buttons)
+	messageID, err := forum.SendSyncActionMessage(ctx, topic.TopicID, text, buttons)
 	if err != nil {
 		for _, route := range routes {
 			_ = s.store.ExpireCallbackRoute(ctx, route.Token)
@@ -224,7 +224,7 @@ func (s *Service) handleAFCPendingRequestLocked(ctx context.Context, topic model
 	}
 }
 
-func (s *Service) newAFCCallbackRoute(ctx context.Context, topic model.AFCTopic, approval model.PendingApproval, action string, extra map[string]any) (model.CallbackRoute, model.ButtonSpec) {
+func (s *Service) newSyncCallbackRoute(ctx context.Context, topic model.SyncTopic, approval model.PendingApproval, action string, extra map[string]any) (model.CallbackRoute, model.ButtonSpec) {
 	payload := map[string]any{"session_id": topic.SessionID, "topic_id": topic.TopicID, "thread_id": topic.ThreadID, "turn_id": topic.ActiveTurnID, "generation": topic.WriterGeneration, "question": approval.Question}
 	for key, value := range extra {
 		payload[key] = value
@@ -244,75 +244,75 @@ func (s *Service) newAFCCallbackRoute(ctx context.Context, topic model.AFCTopic,
 	return route, model.ButtonSpec{Text: label, CallbackData: route.Token}
 }
 
-func (s *Service) handleAFCCallback(ctx context.Context, topicID, messageID int64, token string) (*DirectResponse, error) {
-	s.afcMu.Lock()
-	defer s.afcMu.Unlock()
+func (s *Service) handleSyncCallback(ctx context.Context, topicID, messageID int64, token string) (*DirectResponse, error) {
+	s.syncMu.Lock()
+	defer s.syncMu.Unlock()
 	route, err := s.store.GetCallbackRoute(ctx, token)
 	if err != nil {
 		return nil, err
 	}
-	if route == nil || route.Status != model.CallbackStatusActive || !strings.HasPrefix(route.Action, "afc_") {
-		return &DirectResponse{CallbackText: "AFC button is stale."}, nil
+	if route == nil || route.Status != model.CallbackStatusActive || !strings.HasPrefix(route.Action, "sync_") {
+		return &DirectResponse{CallbackText: "Sync button is stale."}, nil
 	}
 	var payload map[string]any
 	_ = json.Unmarshal([]byte(route.PayloadJSON), &payload)
-	state, err := s.store.GetAFCState(ctx)
+	state, err := s.store.GetSyncState(ctx)
 	if err != nil {
 		return nil, err
 	}
-	generation := uint64(afcPayloadInt64(payload, "generation"))
-	if route.Action == "afc_new_project" {
-		if state.State != model.AFCStateActive || afcPayloadString(payload, "session_id") != state.SessionID || afcPayloadInt64(payload, "control_topic_id") != topicID {
-			return &DirectResponse{CallbackText: "AFC project button is stale."}, nil
+	generation := uint64(syncPayloadInt64(payload, "generation"))
+	if route.Action == "sync_new_project" {
+		if state.State != model.SyncStateActive || syncPayloadString(payload, "session_id") != state.SessionID || syncPayloadInt64(payload, "control_topic_id") != topicID {
+			return &DirectResponse{CallbackText: "Sync project button is stale."}, nil
 		}
 		_ = s.store.ExpireCallbackRoute(ctx, route.Token)
-		return s.createAFCNewTaskLocked(ctx, state, payload)
+		return s.createSyncNewTaskLocked(ctx, state, payload)
 	}
-	if state.State != model.AFCStateActive || afcPayloadString(payload, "session_id") != state.SessionID || afcPayloadInt64(payload, "topic_id") != topicID || route.TelegramMessageID != 0 && route.TelegramMessageID != messageID {
-		return &DirectResponse{CallbackText: "AFC button is stale."}, nil
+	if state.State != model.SyncStateActive || syncPayloadString(payload, "session_id") != state.SessionID || syncPayloadInt64(payload, "topic_id") != topicID || route.TelegramMessageID != 0 && route.TelegramMessageID != messageID {
+		return &DirectResponse{CallbackText: "Sync button is stale."}, nil
 	}
-	topic, err := s.store.GetActiveAFCTopic(ctx, state.ChatID, topicID)
+	topic, err := s.store.GetActiveSyncTopic(ctx, state.ChatID, topicID)
 	if err != nil {
 		return nil, err
 	}
-	lease, ok := s.afcLeases[route.ThreadID]
+	lease, ok := s.syncLeases[route.ThreadID]
 	if topic == nil || route.ThreadID != topic.ThreadID || route.TurnID != topic.ActiveTurnID || generation != topic.WriterGeneration || !ok || lease.Generation != generation {
-		return &DirectResponse{CallbackText: "AFC button no longer owns this turn."}, nil
+		return &DirectResponse{CallbackText: "Sync button no longer owns this turn."}, nil
 	}
 	var result map[string]any
 	switch route.Action {
-	case "afc_approval":
-		result = map[string]any{"decision": afcPayloadString(payload, "decision")}
-	case "afc_user_input":
+	case "sync_approval":
+		result = map[string]any{"decision": syncPayloadString(payload, "decision")}
+	case "sync_user_input":
 		response, _ := payload["response"].(map[string]any)
 		answers, _ := response["answers"].(map[string]any)
 		result = map[string]any{"answers": answers}
 	default:
-		return &DirectResponse{CallbackText: "AFC button is unsupported."}, nil
+		return &DirectResponse{CallbackText: "Sync button is unsupported."}, nil
 	}
 	if err := lease.Process.RespondServerRequest(ctx, route.RequestID, result); err != nil {
-		return &DirectResponse{CallbackText: "AFC response failed; button remains active."}, nil
+		return &DirectResponse{CallbackText: "Sync response failed; button remains active."}, nil
 	}
-	_ = s.store.ExpireAFCCallbackRoutesByRequest(ctx, route.RequestID)
-	if route.Action == "afc_approval" {
-		lines := []string{afcApprovalHeader}
-		if question := strings.TrimSpace(afcPayloadString(payload, "question")); question != "" {
+	_ = s.store.ExpireSyncCallbackRoutesByRequest(ctx, route.RequestID)
+	if route.Action == "sync_approval" {
+		lines := []string{syncApprovalHeader}
+		if question := strings.TrimSpace(syncPayloadString(payload, "question")); question != "" {
 			lines = append(lines, question)
 		}
-		lines = append(lines, "", afcApprovalResolution(afcPayloadString(payload, "decision")))
-		forum := s.getAFCForum()
+		lines = append(lines, "", syncApprovalResolution(syncPayloadString(payload, "decision")))
+		forum := s.getSyncForum()
 		if forum == nil {
-			return &DirectResponse{CallbackText: "AFC response sent; card update failed."}, nil
+			return &DirectResponse{CallbackText: "Sync response sent; card update failed."}, nil
 		}
-		if err := forum.EditAFCMessage(ctx, topicID, messageID, model.RenderedMessage{Text: strings.Join(lines, "\n")}); err != nil {
-			s.setError(ctx, fmt.Errorf("edit AFC approval card: %w", err))
-			return &DirectResponse{CallbackText: "AFC response sent; card update failed."}, nil
+		if err := forum.EditSyncMessage(ctx, topicID, messageID, model.RenderedMessage{Text: strings.Join(lines, "\n")}); err != nil {
+			s.setError(ctx, fmt.Errorf("edit Sync approval card: %w", err))
+			return &DirectResponse{CallbackText: "Sync response sent; card update failed."}, nil
 		}
 	}
-	return &DirectResponse{CallbackText: "AFC response sent."}, nil
+	return &DirectResponse{CallbackText: "Sync response sent."}, nil
 }
 
-func afcApprovalResolution(decision string) string {
+func syncApprovalResolution(decision string) string {
 	switch decision {
 	case "accept", "acceptForSession":
 		return "Approved"
@@ -325,30 +325,30 @@ func afcApprovalResolution(decision string) string {
 	}
 }
 
-type afcInputChoice struct {
+type syncInputChoice struct {
 	Label    string
 	Response map[string]any
 }
 
-func afcUserInputChoices(payloadJSON string) []afcInputChoice {
+func syncUserInputChoices(payloadJSON string) []syncInputChoice {
 	var payload map[string]any
 	if json.Unmarshal([]byte(payloadJSON), &payload) != nil {
 		return nil
 	}
 	questions, _ := payload["questions"].([]any)
-	choices := []afcInputChoice{{Label: "", Response: map[string]any{"label": "", "answers": map[string]any{}}}}
+	choices := []syncInputChoice{{Label: "", Response: map[string]any{"label": "", "answers": map[string]any{}}}}
 	for _, raw := range questions {
 		question, _ := raw.(map[string]any)
-		id := afcPayloadString(question, "id")
+		id := syncPayloadString(question, "id")
 		options, _ := question["options"].([]any)
 		if id == "" || len(options) == 0 {
 			return nil
 		}
-		var next []afcInputChoice
+		var next []syncInputChoice
 		for _, current := range choices {
 			for _, rawOption := range options {
 				option, _ := rawOption.(map[string]any)
-				label := afcPayloadString(option, "label")
+				label := syncPayloadString(option, "label")
 				if label == "" {
 					continue
 				}
@@ -358,7 +358,7 @@ func afcUserInputChoices(payloadJSON string) []afcInputChoice {
 				}
 				answers[id] = map[string]any{"answers": []string{label}}
 				combined := strings.Trim(strings.Join([]string{current.Label, label}, " / "), " /")
-				next = append(next, afcInputChoice{Label: combined, Response: map[string]any{"label": combined, "answers": answers}})
+				next = append(next, syncInputChoice{Label: combined, Response: map[string]any{"label": combined, "answers": answers}})
 			}
 		}
 		choices = next
@@ -369,11 +369,11 @@ func afcUserInputChoices(payloadJSON string) []afcInputChoice {
 	return choices
 }
 
-func afcPayloadString(payload map[string]any, key string) string {
+func syncPayloadString(payload map[string]any, key string) string {
 	value, _ := payload[key].(string)
 	return strings.TrimSpace(value)
 }
-func afcPayloadInt64(payload map[string]any, key string) int64 {
+func syncPayloadInt64(payload map[string]any, key string) int64 {
 	switch value := payload[key].(type) {
 	case float64:
 		return int64(value)

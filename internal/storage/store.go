@@ -177,7 +177,7 @@ func (s *Store) initialize(ctx context.Context) error {
 		UNIQUE(source, external_id)
 	);
 
-	CREATE TABLE IF NOT EXISTS afc_state (
+	CREATE TABLE IF NOT EXISTS sync_state (
 		id INTEGER PRIMARY KEY CHECK (id = 1),
 		session_id TEXT NOT NULL,
 		chat_id INTEGER NOT NULL,
@@ -189,7 +189,7 @@ func (s *Store) initialize(ctx context.Context) error {
 		ended_at TEXT
 	);
 
-	CREATE TABLE IF NOT EXISTS afc_topics (
+	CREATE TABLE IF NOT EXISTS sync_topics (
 		session_id TEXT NOT NULL,
 		chat_id INTEGER NOT NULL,
 		topic_id INTEGER NOT NULL,
@@ -213,7 +213,7 @@ func (s *Store) initialize(ctx context.Context) error {
 		UNIQUE(session_id, thread_id)
 	);
 
-	CREATE TABLE IF NOT EXISTS afc_topic_drafts (
+	CREATE TABLE IF NOT EXISTS sync_topic_drafts (
 		session_id TEXT NOT NULL,
 		chat_id INTEGER NOT NULL,
 		topic_id INTEGER NOT NULL,
@@ -229,7 +229,7 @@ func (s *Store) initialize(ctx context.Context) error {
 		PRIMARY KEY(session_id, topic_id)
 	);
 
-	CREATE TABLE IF NOT EXISTS afc_message_receipts (
+	CREATE TABLE IF NOT EXISTS sync_message_receipts (
 		chat_id INTEGER NOT NULL,
 		topic_id INTEGER NOT NULL,
 		message_id INTEGER NOT NULL,
@@ -245,9 +245,9 @@ func (s *Store) initialize(ctx context.Context) error {
 	CREATE INDEX IF NOT EXISTS idx_threads_project_updated_at ON threads(project_name, updated_at DESC);
 	CREATE INDEX IF NOT EXISTS idx_delivery_queue_status_available_at ON delivery_queue(status, available_at);
 	CREATE INDEX IF NOT EXISTS idx_external_launch_status_updated_at ON external_launch_requests(status, updated_at);
-	CREATE INDEX IF NOT EXISTS idx_afc_topics_session_state ON afc_topics(session_id, telegram_state, rank);
-	CREATE INDEX IF NOT EXISTS idx_afc_topic_drafts_session_state ON afc_topic_drafts(session_id, state, rank);
-	CREATE INDEX IF NOT EXISTS idx_afc_receipts_session_thread ON afc_message_receipts(session_id, thread_id, updated_at);
+	CREATE INDEX IF NOT EXISTS idx_sync_topics_session_state ON sync_topics(session_id, telegram_state, rank);
+	CREATE INDEX IF NOT EXISTS idx_sync_topic_drafts_session_state ON sync_topic_drafts(session_id, state, rank);
+	CREATE INDEX IF NOT EXISTS idx_sync_receipts_session_thread ON sync_message_receipts(session_id, thread_id, updated_at);
 	`
 	if _, err := s.db.ExecContext(ctx, schema); err != nil {
 		return err
@@ -258,25 +258,25 @@ func (s *Store) initialize(ctx context.Context) error {
 		return err
 	}
 
-	if err := s.ensureColumn(ctx, "afc_topics", "active_turn_id", `ALTER TABLE afc_topics ADD COLUMN active_turn_id TEXT`); err != nil {
+	if err := s.ensureColumn(ctx, "sync_topics", "active_turn_id", `ALTER TABLE sync_topics ADD COLUMN active_turn_id TEXT`); err != nil {
 		return err
 	}
-	if err := s.ensureColumn(ctx, "afc_topics", "active_turn_state", `ALTER TABLE afc_topics ADD COLUMN active_turn_state TEXT`); err != nil {
+	if err := s.ensureColumn(ctx, "sync_topics", "active_turn_state", `ALTER TABLE sync_topics ADD COLUMN active_turn_state TEXT`); err != nil {
 		return err
 	}
-	if err := s.ensureColumn(ctx, "afc_topics", "writer_generation", `ALTER TABLE afc_topics ADD COLUMN writer_generation INTEGER NOT NULL DEFAULT 0`); err != nil {
+	if err := s.ensureColumn(ctx, "sync_topics", "writer_generation", `ALTER TABLE sync_topics ADD COLUMN writer_generation INTEGER NOT NULL DEFAULT 0`); err != nil {
 		return err
 	}
-	if err := s.ensureColumn(ctx, "afc_topics", "status_turn_id", `ALTER TABLE afc_topics ADD COLUMN status_turn_id TEXT`); err != nil {
+	if err := s.ensureColumn(ctx, "sync_topics", "status_turn_id", `ALTER TABLE sync_topics ADD COLUMN status_turn_id TEXT`); err != nil {
 		return err
 	}
-	if err := s.ensureColumn(ctx, "afc_topics", "last_user_fp", `ALTER TABLE afc_topics ADD COLUMN last_user_fp TEXT`); err != nil {
+	if err := s.ensureColumn(ctx, "sync_topics", "last_user_fp", `ALTER TABLE sync_topics ADD COLUMN last_user_fp TEXT`); err != nil {
 		return err
 	}
-	if err := s.ensureColumn(ctx, "afc_topics", "pending_telegram_user_fp", `ALTER TABLE afc_topics ADD COLUMN pending_telegram_user_fp TEXT`); err != nil {
+	if err := s.ensureColumn(ctx, "sync_topics", "pending_telegram_user_fp", `ALTER TABLE sync_topics ADD COLUMN pending_telegram_user_fp TEXT`); err != nil {
 		return err
 	}
-	if err := s.ensureColumn(ctx, "afc_topics", "pending_telegram_turn_id", `ALTER TABLE afc_topics ADD COLUMN pending_telegram_turn_id TEXT`); err != nil {
+	if err := s.ensureColumn(ctx, "sync_topics", "pending_telegram_turn_id", `ALTER TABLE sync_topics ADD COLUMN pending_telegram_turn_id TEXT`); err != nil {
 		return err
 	}
 	externalColumns := []struct {
@@ -316,19 +316,19 @@ func (s *Store) initialize(ctx context.Context) error {
 	if _, err := s.db.ExecContext(ctx, `CREATE INDEX IF NOT EXISTS idx_external_ack_status_available ON external_launch_requests(ack_status, ack_available_at)`); err != nil {
 		return err
 	}
-	if _, err := s.db.ExecContext(ctx, `UPDATE afc_topics SET status_turn_id=(
-		SELECT last_seen_turn_id FROM thread_snapshots WHERE thread_snapshots.thread_id=afc_topics.thread_id
+	if _, err := s.db.ExecContext(ctx, `UPDATE sync_topics SET status_turn_id=(
+		SELECT last_seen_turn_id FROM thread_snapshots WHERE thread_snapshots.thread_id=sync_topics.thread_id
 	) WHERE status_message_id<>0 AND coalesce(status_turn_id,'')='' AND EXISTS (
-		SELECT 1 FROM thread_snapshots WHERE thread_snapshots.thread_id=afc_topics.thread_id
+		SELECT 1 FROM thread_snapshots WHERE thread_snapshots.thread_id=sync_topics.thread_id
 		AND coalesce(thread_snapshots.last_seen_turn_id,'')<>''
 	)`); err != nil {
 		return err
 	}
-	if _, err := s.db.ExecContext(ctx, `UPDATE afc_topics SET last_user_fp=(
+	if _, err := s.db.ExecContext(ctx, `UPDATE sync_topics SET last_user_fp=(
 		SELECT coalesce(json_extract(thread_snapshots.snapshot_json, '$.compact_json.LatestUserMessageFP'),'')
-		FROM thread_snapshots WHERE thread_snapshots.thread_id=afc_topics.thread_id
+		FROM thread_snapshots WHERE thread_snapshots.thread_id=sync_topics.thread_id
 	) WHERE status_message_id<>0 AND coalesce(last_user_fp,'')='' AND EXISTS (
-		SELECT 1 FROM thread_snapshots WHERE thread_snapshots.thread_id=afc_topics.thread_id
+		SELECT 1 FROM thread_snapshots WHERE thread_snapshots.thread_id=sync_topics.thread_id
 		AND coalesce(json_extract(thread_snapshots.snapshot_json, '$.compact_json.LatestUserMessageFP'),'')<>''
 	)`); err != nil {
 		return err
@@ -570,14 +570,14 @@ func (s *Store) ExpireCallbackRoute(ctx context.Context, token string) error {
 	return err
 }
 
-func (s *Store) ExpireAFCCallbackRoutes(ctx context.Context, threadID, turnID string) error {
-	_, err := s.db.ExecContext(ctx, `UPDATE callback_routes SET status=? WHERE action LIKE 'afc_%' AND thread_id=? AND turn_id=?`,
+func (s *Store) ExpireSyncCallbackRoutes(ctx context.Context, threadID, turnID string) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE callback_routes SET status=? WHERE action LIKE 'sync_%' AND thread_id=? AND turn_id=?`,
 		model.CallbackStatusExpired, threadID, turnID)
 	return err
 }
 
-func (s *Store) ExpireAFCCallbackRoutesByRequest(ctx context.Context, requestID string) error {
-	_, err := s.db.ExecContext(ctx, `UPDATE callback_routes SET status=? WHERE action LIKE 'afc_%' AND request_id=?`,
+func (s *Store) ExpireSyncCallbackRoutesByRequest(ctx context.Context, requestID string) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE callback_routes SET status=? WHERE action LIKE 'sync_%' AND request_id=?`,
 		model.CallbackStatusExpired, requestID)
 	return err
 }
@@ -652,7 +652,7 @@ func (s *Store) SupersedeDelivery(ctx context.Context, queueID int64) error {
 	return err
 }
 
-func (s *Store) RetireUnsupportedTelegramDeliveries(ctx context.Context, afcGroupID int64) (int64, error) {
+func (s *Store) RetireUnsupportedTelegramDeliveries(ctx context.Context, syncGroupID int64) (int64, error) {
 	result, err := s.db.ExecContext(ctx, `
 	UPDATE delivery_queue
 	SET status = ?, updated_at = ?
@@ -663,7 +663,7 @@ func (s *Store) RetireUnsupportedTelegramDeliveries(ctx context.Context, afcGrou
 		model.DeliveryStatusPending,
 		model.DeliveryStatusRetry,
 		model.DeliveryStatusProcessing,
-		afcGroupID,
+		syncGroupID,
 	)
 	if err != nil {
 		return 0, err

@@ -28,7 +28,7 @@ responsibilities.
   `Documents` tree may require copying the bootstrap to a service-owned path.
 - Polling is sequential and defaults to once per minute. The adapter is
   disabled by default and requires an absolute working directory, the shared
-  external Requests topic, and AFC group configuration when enabled.
+  external Requests topic, and Sync group configuration when enabled.
 - PR identity is its decimal id under source `arcanum_review`. The existing
   unique `(source, external_id)` constraint is the restart-safe idempotency
   authority for every request state.
@@ -50,7 +50,7 @@ responsibilities.
 - An auto-start with a configured Requests topic is not claimable until the
   initial buttonless `[Launch request]` card has a persisted Telegram message
   id. The card says `Queued for automatic start`; a later delivery cycle claims
-  and dispatches it through the same durable AFC path.
+  and dispatches it through the same durable Sync path.
 - No final answer is posted back to Arcanum. Terminal state edits the original
   card and the generic external delivery contract emits one short durable
   Requests-topic notification without copying the full Final.

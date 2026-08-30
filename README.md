@@ -2,7 +2,7 @@
 
 `codex-tg` mirrors local Codex chats into one private Telegram forum. Each Codex thread has one topic where the operator can follow status, steer work, answer input, approve commands, stop a turn, and read the final result.
 
-The supported Telegram surface is AFC/Sync mode only. Direct-message observer commands and global observer panels are not supported.
+The supported Telegram surface is Sync mode only. Direct-message observer commands and global observer panels are not supported.
 
 ## What it does
 
@@ -36,7 +36,7 @@ ctr-go service install --start --start-at-login
 ctr-go doctor
 ```
 
-The wizard asks for the bot token, one allowed user id, the AFC forum group id, and local Codex paths. It writes `~/.codex-tg/config.env`, installs a user LaunchAgent, and starts the daemon.
+The wizard asks for the bot token, one allowed user id, the Sync forum group id, and local Codex paths. It writes `~/.codex-tg/config.env`, installs a user LaunchAgent, and starts the daemon.
 
 For a manual installation:
 
@@ -61,7 +61,7 @@ Environment-only setup:
 ```powershell
 $env:CTR_GO_TELEGRAM_BOT_TOKEN = "<telegram-bot-token>"
 $env:CTR_GO_ALLOWED_USER_IDS = "<one-telegram-user-id>"
-$env:CTR_GO_AFC_GROUP_ID = "<private-forum-supergroup-id>"
+$env:CTR_GO_SYNC_GROUP_ID = "<private-forum-supergroup-id>"
 $env:CTR_GO_DEFAULT_CWD = "C:\Users\you\Projects\Codex"
 ```
 
@@ -100,7 +100,7 @@ The visible menu contains exactly:
 
 `/projects` lists known local project workspaces. Choosing a project creates a ready topic; the first text message creates the Codex thread and first turn. `/newchat` creates a dated Codex Chat under `CTR_GO_CODEX_CHATS_ROOT`.
 
-Messages, callbacks, and commands outside the configured AFC group are ignored before route or App Server access.
+Messages, callbacks, and commands outside the configured Sync group are ignored before route or App Server access.
 
 ## Permissions and approvals
 
@@ -145,7 +145,7 @@ Required:
 
 - `CTR_GO_TELEGRAM_BOT_TOKEN`
 - `CTR_GO_ALLOWED_USER_IDS` — exactly one id
-- `CTR_GO_AFC_GROUP_ID`
+- `CTR_GO_SYNC_GROUP_ID`
 - `CTR_GO_DEFAULT_CWD`
 
 Common optional settings:
@@ -157,7 +157,7 @@ Common optional settings:
 - `CTR_GO_APP_SERVER_MODE`
 - `CTR_GO_APP_SERVER_SOCKET`
 - `CTR_GO_APP_SERVER_LISTEN`
-- `CTR_GO_AFC_INITIAL_TOPIC_LIMIT`
+- `CTR_GO_SYNC_INITIAL_TOPIC_LIMIT`
 - `CTR_GO_SYNC_POLL_SECONDS`
 - `CTR_GO_CONTROL_API_LISTEN`
 - `CTR_GO_LOG_ENABLED`

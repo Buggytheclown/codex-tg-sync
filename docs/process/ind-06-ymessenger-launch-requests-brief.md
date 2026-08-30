@@ -17,8 +17,8 @@ Add one optional Yandex Messenger adapter to the existing `codex-tg` daemon:
 - show that request in one configured permanent Telegram forum topic;
 - start or dismiss it through inline buttons;
 - create a normal Codex thread and first turn through the existing App Server
-  and AFC lifecycle after approval;
-- keep the normal AFC topic as the surface for all later Codex activity.
+  and Sync lifecycle after approval;
+- keep the normal Sync topic as the surface for all later Codex activity.
 - include one direct replied-to message or one thread root fetched on demand as
   context;
 - return the terminal Codex final as a Bot API reply to the invoking message;
@@ -55,7 +55,7 @@ From: <sender>
 
 The same message is edited as the request moves through `Starting`, `Started`,
 `Dismissed`, `Failed`, or `Outcome unknown`. Successful dispatch includes the
-durable Codex thread id. A normal AFC topic is created through existing AFC
+durable Codex thread id. A normal Sync topic is created through existing Sync
 materialization and carries the live Codex session afterward.
 
 ## Architecture
@@ -70,7 +70,7 @@ LaunchRequestSink -> SQLite external_launch_requests
         +----------------> Telegram approval renderer
                                    |
                                    v
-                         App Server / AFC dispatch
+                         App Server / Sync dispatch
 ```
 
 - `internal/ymessenger` owns Bot API transport, update parsing, filtering,
@@ -148,8 +148,8 @@ and errors.
 - [x] Stale or mismatched callbacks fail closed.
 - [x] Repeated Start creates at most one thread and first turn.
 - [x] Dismiss never invokes App Server.
-- [x] Successful Start yields one normal AFC topic through the existing lifecycle.
-- [x] The permanent approval topic is never registered for AFC cleanup.
+- [x] Successful Start yields one normal Sync topic through the existing lifecycle.
+- [x] The permanent approval topic is never registered for Sync cleanup.
 - [x] Ambiguous dispatch is visible and non-replayable.
 - [x] Unit/integration tests pass.
 - [x] Approval can be disabled without bypassing sender/mention authorization.

@@ -10,7 +10,7 @@ import (
 
 func TestTelegramSurfaceRejectsOutOfScopeMessagesAndCallbacksBeforeStorage(t *testing.T) {
 	service := newTestService(t)
-	service.cfg.AFCGroupID = -1001
+	service.cfg.SyncGroupID = -1001
 
 	if err := service.store.Close(); err != nil {
 		t.Fatal(err)
@@ -61,7 +61,7 @@ func TestServiceStartRetiresUnsupportedTelegramDeliveries(t *testing.T) {
 	}
 }
 
-func TestAFCTurnStartIgnoresRetiredTelegramSettings(t *testing.T) {
+func TestSyncTurnStartIgnoresRetiredTelegramSettings(t *testing.T) {
 	service := newTestService(t)
 	ctx := context.Background()
 	if err := service.store.SetState(ctx, "codex.model", "retired-model"); err != nil {

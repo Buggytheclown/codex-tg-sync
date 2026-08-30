@@ -1,4 +1,4 @@
-# ADR-029: AFC Reliability And External Delivery Transparency
+# ADR-029: Sync Reliability And External Delivery Transparency
 
 - Status: accepted
 - Amends: ADR-027, ADR-028
@@ -6,7 +6,7 @@
 
 ## Context
 
-The reset-on-start AFC boundary is intentionally simple, but an in-process
+The reset-on-start Sync boundary is intentionally simple, but an in-process
 managed-daemon transport failure could still leave Telegram state looking
 active. YMessenger launch requests also had durable execution claims but no
 durable acknowledgement, and some terminal outcomes could remain visible only
@@ -68,10 +68,10 @@ update behind one message.
 - In managed-daemon mode, a periodic bounded `thread/list` heartbeat detects a
   half-open poll connection. Transport loss makes the connection status false,
   requests poll repair, and applies the ADR-027 reset boundary immediately:
-  AFC becomes `off`, old topics/drafts become cleanup-only, accepted receipts
+  Sync becomes `off`, old topics/drafts become cleanup-only, accepted receipts
   become `unknown`, and no input is replayed. Closing bridge WebSocket clients
   does not interrupt the authoritative Codex runtime.
-- Transport repair never re-enables AFC. A recovery notice tells the operator
+- Transport repair never re-enables Sync. A recovery notice tells the operator
   to run `/sync on` explicitly.
 - Telegram captions are accepted as text. A supported message containing only
   media receives an explicit plain-text-only response after normal
@@ -98,8 +98,8 @@ signal on laptops.
 ## Non-goals
 
 - Exactly-once delivery across remote API and SQLite commit boundaries.
-- Preserving or rebinding AFC topics across transport loss.
-- Automatically replaying prompts or re-enabling AFC.
+- Preserving or rebinding Sync topics across transport loss.
+- Automatically replaying prompts or re-enabling Sync.
 - A generic external outbox or separate health database schema.
 - A launch-attempt history table or automatic replay of ambiguous dispatch.
 - Uploading Telegram or YMessenger attachments to Codex.

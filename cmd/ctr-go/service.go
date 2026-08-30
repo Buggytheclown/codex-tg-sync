@@ -78,7 +78,7 @@ type serviceInstallOptions struct {
 	ConfigPath      string
 	TelegramToken   string
 	AllowedUserIDs  string
-	AFCGroupID      string
+	SyncGroupID     string
 	DefaultCWD      string
 	CodexChatsRoot  string
 	CodexBin        string
@@ -99,7 +99,7 @@ func parseServiceInstallOptions(args []string) (serviceInstallOptions, error) {
 	fs.StringVar(&opts.ConfigPath, "config", opts.ConfigPath, "config.env path")
 	fs.StringVar(&opts.TelegramToken, "telegram-bot-token", "", "Telegram bot token")
 	fs.StringVar(&opts.AllowedUserIDs, "allowed-user-ids", "", "allowed Telegram user ids")
-	fs.StringVar(&opts.AFCGroupID, "afc-group-id", "", "private AFC forum group id")
+	fs.StringVar(&opts.SyncGroupID, "sync-group-id", "", "private Sync forum group id")
 	fs.StringVar(&opts.DefaultCWD, "default-cwd", "", "default Codex working directory")
 	fs.StringVar(&opts.CodexChatsRoot, "codex-chats-root", "", "Codex UI Chats root")
 	fs.StringVar(&opts.CodexBin, "codex-bin", "", "Codex binary path")
@@ -176,7 +176,7 @@ func runServiceInstall(args []string, in io.Reader, out io.Writer) error {
 	_, _ = fmt.Fprintln(out, "\nSetup summary")
 	_, _ = fmt.Fprintln(out, "  Telegram bot token: configured")
 	_, _ = fmt.Fprintf(out, "  Allowed users: %s\n", values["CTR_GO_ALLOWED_USER_IDS"])
-	_, _ = fmt.Fprintf(out, "  AFC group: %s\n", values["CTR_GO_AFC_GROUP_ID"])
+	_, _ = fmt.Fprintf(out, "  Sync group: %s\n", values["CTR_GO_SYNC_GROUP_ID"])
 	_, _ = fmt.Fprintf(out, "  Default cwd: %s\n", values["CTR_GO_DEFAULT_CWD"])
 	_, _ = fmt.Fprintf(out, "  Codex Chats root: %s\n", values["CTR_GO_CODEX_CHATS_ROOT"])
 	_, _ = fmt.Fprintf(out, "  Codex binary: %s\n", values["CTR_GO_CODEX_BIN"])
@@ -220,7 +220,7 @@ func collectServiceInstallValues(opts serviceInstallOptions, existing map[string
 	}
 	values["CTR_GO_TELEGRAM_BOT_TOKEN"] = strings.TrimSpace(firstNonEmpty(opts.TelegramToken, existing["CTR_GO_TELEGRAM_BOT_TOKEN"]))
 	values["CTR_GO_ALLOWED_USER_IDS"] = strings.TrimSpace(firstNonEmpty(opts.AllowedUserIDs, existing["CTR_GO_ALLOWED_USER_IDS"]))
-	values["CTR_GO_AFC_GROUP_ID"] = strings.TrimSpace(firstNonEmpty(opts.AFCGroupID, existing["CTR_GO_AFC_GROUP_ID"]))
+	values["CTR_GO_SYNC_GROUP_ID"] = strings.TrimSpace(firstNonEmpty(opts.SyncGroupID, existing["CTR_GO_SYNC_GROUP_ID"]))
 	values["CTR_GO_DEFAULT_CWD"] = strings.TrimSpace(firstNonEmpty(opts.DefaultCWD, existing["CTR_GO_DEFAULT_CWD"], cwd))
 	values["CTR_GO_CODEX_CHATS_ROOT"] = strings.TrimSpace(firstNonEmpty(opts.CodexChatsRoot, existing["CTR_GO_CODEX_CHATS_ROOT"], config.DefaultCodexChatsRoot()))
 	values["CTR_GO_CODEX_BIN"] = strings.TrimSpace(firstNonEmpty(opts.CodexBin, existing["CTR_GO_CODEX_BIN"], codexBin))
@@ -263,12 +263,12 @@ func runServiceWizard(values map[string]string, in io.Reader, out io.Writer) (ma
 			Validate: validateTelegramUserID,
 		},
 		{
-			Key:      "CTR_GO_AFC_GROUP_ID",
+			Key:      "CTR_GO_SYNC_GROUP_ID",
 			Step:     "3/6",
-			Label:    "AFC forum group id",
+			Label:    "Sync forum group id",
 			Help:     "The exact private Telegram forum group used by codex-tg. Example: -1001234567890",
 			Required: true,
-			Validate: validateAFCGroupID,
+			Validate: validateSyncGroupID,
 		},
 		{
 			Key:      "CTR_GO_DEFAULT_CWD",
@@ -380,7 +380,7 @@ func validateServiceValues(values map[string]string) (map[string]string, error) 
 	required := map[string]string{
 		"CTR_GO_TELEGRAM_BOT_TOKEN": "--telegram-bot-token",
 		"CTR_GO_ALLOWED_USER_IDS":   "--allowed-user-ids",
-		"CTR_GO_AFC_GROUP_ID":       "--afc-group-id",
+		"CTR_GO_SYNC_GROUP_ID":      "--sync-group-id",
 		"CTR_GO_DEFAULT_CWD":        "--default-cwd",
 		"CTR_GO_CODEX_CHATS_ROOT":   "--codex-chats-root",
 		"CTR_GO_CODEX_BIN":          "--codex-bin",
@@ -401,7 +401,7 @@ func validateServiceValues(values map[string]string) (map[string]string, error) 
 	}{
 		{"CTR_GO_TELEGRAM_BOT_TOKEN", validateTokenLike},
 		{"CTR_GO_ALLOWED_USER_IDS", validateTelegramUserID},
-		{"CTR_GO_AFC_GROUP_ID", validateAFCGroupID},
+		{"CTR_GO_SYNC_GROUP_ID", validateSyncGroupID},
 		{"CTR_GO_DEFAULT_CWD", validateDirectory},
 		{"CTR_GO_CODEX_CHATS_ROOT", validateNonEmpty},
 		{"CTR_GO_CODEX_BIN", validateExecutableRef},
@@ -741,7 +741,7 @@ func validateTelegramUserID(value string) error {
 	return nil
 }
 
-func validateAFCGroupID(value string) error {
+func validateSyncGroupID(value string) error {
 	id, err := parseSingleID(value)
 	if err != nil {
 		return err

@@ -61,7 +61,7 @@ func TestDefaultCommandsExposeSyncAndOperatorStatusCommands(t *testing.T) {
 	}
 }
 
-func TestBotStartScopesCommandsToConfiguredAFCGroup(t *testing.T) {
+func TestBotStartScopesCommandsToConfiguredSyncGroup(t *testing.T) {
 	t.Parallel()
 
 	var paths []string
@@ -87,7 +87,7 @@ func TestBotStartScopesCommandsToConfiguredAFCGroup(t *testing.T) {
 	client := NewClient("token")
 	client.baseURL = server.URL
 	bot := &Bot{
-		cfg:    config.Config{AFCGroupID: -10042},
+		cfg:    config.Config{SyncGroupID: -10042},
 		client: client,
 		logger: log.New(io.Discard, "", 0),
 	}
@@ -99,7 +99,7 @@ func TestBotStartScopesCommandsToConfiguredAFCGroup(t *testing.T) {
 	}
 	scope, _ := commandPayload["scope"].(map[string]any)
 	if scope["type"] != "chat" || scope["chat_id"] != float64(-10042) {
-		t.Fatalf("setMyCommands scope = %#v, want exact AFC chat", scope)
+		t.Fatalf("setMyCommands scope = %#v, want exact Sync chat", scope)
 	}
 	commands, _ := commandPayload["commands"].([]any)
 	if len(commands) != 8 {
@@ -180,7 +180,7 @@ func TestBotSendRenderedMessagesFallsBackToPlainEntities(t *testing.T) {
 	}
 }
 
-func TestBotAFCMessagePreservesRenderedEntitiesOnSendAndEdit(t *testing.T) {
+func TestBotSyncMessagePreservesRenderedEntitiesOnSendAndEdit(t *testing.T) {
 	t.Parallel()
 
 	payloads := make([]map[string]any, 0, 2)
@@ -201,17 +201,17 @@ func TestBotAFCMessagePreservesRenderedEntitiesOnSendAndEdit(t *testing.T) {
 
 	client := NewClient("token")
 	client.baseURL = server.URL
-	bot := &Bot{cfg: config.Config{AFCGroupID: -1001}, client: client}
+	bot := &Bot{cfg: config.Config{SyncGroupID: -1001}, client: client}
 	rendered := model.RenderedMessage{
 		Text:     "status\nbody",
 		Entities: []model.MessageEntity{{Type: "expandable_blockquote", Offset: 7, Length: 4}},
 	}
-	messageID, err := bot.SendAFCMessage(context.Background(), 11, rendered, true)
+	messageID, err := bot.SendSyncMessage(context.Background(), 11, rendered, true)
 	if err != nil || messageID != 81 {
-		t.Fatalf("SendAFCMessage id=%d err=%v", messageID, err)
+		t.Fatalf("SendSyncMessage id=%d err=%v", messageID, err)
 	}
-	if err := bot.EditAFCMessage(context.Background(), 11, messageID, rendered); err != nil {
-		t.Fatalf("EditAFCMessage failed: %v", err)
+	if err := bot.EditSyncMessage(context.Background(), 11, messageID, rendered); err != nil {
+		t.Fatalf("EditSyncMessage failed: %v", err)
 	}
 
 	if len(payloads) != 2 || payloads[0]["path"] != "/sendMessage" || payloads[1]["path"] != "/editMessageText" {
@@ -307,7 +307,7 @@ func TestTelegramInboundTextUsesCaptionAndDetectsUnsupportedMedia(t *testing.T) 
 	}
 }
 
-func TestBotIgnoresUnsupportedMediaOutsideAFCGroup(t *testing.T) {
+func TestBotIgnoresUnsupportedMediaOutsideSyncGroup(t *testing.T) {
 	var calls int
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calls++
@@ -315,7 +315,7 @@ func TestBotIgnoresUnsupportedMediaOutsideAFCGroup(t *testing.T) {
 	}))
 	defer server.Close()
 	root := t.TempDir()
-	service, err := daemon.New(config.Config{AllowedUserIDs: []int64{7}, AFCGroupID: -1001, Paths: config.Paths{
+	service, err := daemon.New(config.Config{AllowedUserIDs: []int64{7}, SyncGroupID: -1001, Paths: config.Paths{
 		Home: root, DataDir: filepath.Join(root, "data"), LogDir: filepath.Join(root, "logs"), DBPath: filepath.Join(root, "data", "state.sqlite"),
 	}})
 	if err != nil {

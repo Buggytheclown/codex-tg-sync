@@ -70,8 +70,8 @@ type Config struct {
 	ExternalSandboxMode       string
 	TelegramBotToken          string
 	AllowedUserIDs            []int64
-	AFCGroupID                int64
-	AFCInitialTopicLimit      int
+	SyncGroupID               int64
+	SyncInitialTopicLimit     int
 	DefaultCWD                string
 	CodexChatsRoot            string
 	LogEnabled                bool
@@ -83,7 +83,7 @@ type Config struct {
 	DeliveryMaxAttempts       int
 }
 
-const DefaultAFCInitialTopicLimit = 5
+const DefaultSyncInitialTopicLimit = 5
 
 var runtimeEnvPassthroughKeys = []string{
 	"HTTP_PROXY",
@@ -181,8 +181,8 @@ func fromSource(source envSource) Config {
 		ExternalSandboxMode:       strings.TrimSpace(source.get("CTR_GO_EXTERNAL_REQUEST_SANDBOX_MODE")),
 		TelegramBotToken:          source.first("CTR_GO_TELEGRAM_BOT_TOKEN", "CTR_TELEGRAM_BOT_TOKEN"),
 		AllowedUserIDs:            parseInt64List(source.first("CTR_GO_ALLOWED_USER_IDS", "CTR_ALLOWED_USER_IDS")),
-		AFCGroupID:                parseInt64(source.get("CTR_GO_AFC_GROUP_ID")),
-		AFCInitialTopicLimit:      source.positiveInt("CTR_GO_AFC_INITIAL_TOPIC_LIMIT", DefaultAFCInitialTopicLimit),
+		SyncGroupID:               parseInt64(source.get("CTR_GO_SYNC_GROUP_ID")),
+		SyncInitialTopicLimit:     source.positiveInt("CTR_GO_SYNC_INITIAL_TOPIC_LIMIT", DefaultSyncInitialTopicLimit),
 		DefaultCWD:                defaultCWD,
 		CodexChatsRoot:            source.path("CTR_GO_CODEX_CHATS_ROOT", DefaultCodexChatsRoot()),
 		LogEnabled:                source.bool("CTR_GO_LOG_ENABLED", true),
@@ -220,8 +220,8 @@ func (c Config) MarshalJSON() ([]byte, error) {
 		ExternalSandboxMode       string  `json:"external_request_sandbox_mode,omitempty"`
 		HasTelegramToken          bool    `json:"telegram_configured"`
 		AllowedUserIDs            []int64 `json:"allowed_user_ids"`
-		AFCGroupID                int64   `json:"afc_group_id,omitempty"`
-		AFCInitialTopicLimit      int     `json:"afc_initial_topic_limit"`
+		SyncGroupID               int64   `json:"sync_group_id,omitempty"`
+		SyncInitialTopicLimit     int     `json:"sync_initial_topic_limit"`
 		DefaultCWD                string  `json:"default_cwd"`
 		CodexChatsRoot            string  `json:"codex_chats_root"`
 		LogEnabled                bool    `json:"log_enabled"`
@@ -254,8 +254,8 @@ func (c Config) MarshalJSON() ([]byte, error) {
 		ExternalSandboxMode:       c.ExternalSandboxMode,
 		HasTelegramToken:          c.TelegramBotToken != "",
 		AllowedUserIDs:            c.AllowedUserIDs,
-		AFCGroupID:                c.AFCGroupID,
-		AFCInitialTopicLimit:      positiveOrDefault(c.AFCInitialTopicLimit, DefaultAFCInitialTopicLimit),
+		SyncGroupID:               c.SyncGroupID,
+		SyncInitialTopicLimit:     positiveOrDefault(c.SyncInitialTopicLimit, DefaultSyncInitialTopicLimit),
 		DefaultCWD:                c.DefaultCWD,
 		CodexChatsRoot:            c.CodexChatsRoot,
 		LogEnabled:                c.LogEnabled,
@@ -268,8 +268,8 @@ func (c Config) MarshalJSON() ([]byte, error) {
 }
 
 func (c Config) ValidateTelegramSurface() error {
-	if c.AFCGroupID >= 0 {
-		return fmt.Errorf("CTR_GO_AFC_GROUP_ID must be a negative Telegram supergroup id")
+	if c.SyncGroupID >= 0 {
+		return fmt.Errorf("CTR_GO_SYNC_GROUP_ID must be a negative Telegram supergroup id")
 	}
 	if len(c.AllowedUserIDs) != 1 {
 		return fmt.Errorf("CTR_GO_ALLOWED_USER_IDS must contain exactly one Telegram user id")
@@ -303,8 +303,8 @@ func (c Config) ValidateYMessenger() error {
 	if c.YMessengerPollInterval <= 0 {
 		return fmt.Errorf("CTR_GO_YMESSENGER_POLL_SECONDS must be positive")
 	}
-	if c.AFCGroupID == 0 {
-		return fmt.Errorf("CTR_GO_AFC_GROUP_ID is required when YMessenger is enabled")
+	if c.SyncGroupID == 0 {
+		return fmt.Errorf("CTR_GO_SYNC_GROUP_ID is required when YMessenger is enabled")
 	}
 	if c.ExternalRequestsTopicID == 0 {
 		return fmt.Errorf("CTR_GO_EXTERNAL_REQUESTS_TOPIC_ID is required when YMessenger is enabled")
@@ -345,8 +345,8 @@ func (c Config) ValidateArcanumReview() error {
 	if c.ArcanumReviewPollInterval <= 0 {
 		return fmt.Errorf("CTR_GO_ARCANUM_REVIEW_POLL_SECONDS must be positive")
 	}
-	if c.AFCGroupID == 0 {
-		return fmt.Errorf("CTR_GO_AFC_GROUP_ID is required when Arcanum review polling is enabled")
+	if c.SyncGroupID == 0 {
+		return fmt.Errorf("CTR_GO_SYNC_GROUP_ID is required when Arcanum review polling is enabled")
 	}
 	if c.ExternalRequestsTopicID == 0 {
 		return fmt.Errorf("CTR_GO_EXTERNAL_REQUESTS_TOPIC_ID is required when Arcanum review polling is enabled")

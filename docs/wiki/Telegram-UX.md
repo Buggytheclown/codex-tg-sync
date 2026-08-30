@@ -1,6 +1,6 @@
 # Telegram UX
 
-The exact configured AFC forum group is the only Telegram surface. Messages and callbacks elsewhere are silently ignored before storage or App Server access.
+The exact configured Sync forum group is the only Telegram surface. Messages and callbacks elsewhere are silently ignored before storage or App Server access.
 
 ## Forum layout
 

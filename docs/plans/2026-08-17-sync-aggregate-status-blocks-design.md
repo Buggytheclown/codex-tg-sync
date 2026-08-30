@@ -1,8 +1,8 @@
-# AFC Aggregate Status Blocks
+# Sync Aggregate Status Blocks
 
 ## Product Contract
 
-Each AFC turn owns one live Status message. The message keeps every textual
+Each Sync turn owns one live Status message. The message keeps every textual
 commentary/reasoning or plan block observed for that turn in chronological
 order. A new block is appended to the rendered aggregate; an update for the
 same stable item id edits that block in place. User, Final, tool, and tool-output

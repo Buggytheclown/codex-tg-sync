@@ -273,7 +273,7 @@ func runStatus(cfg config.Config, out io.Writer) error {
 		fmt.Sprintf("YMessenger launch requests: %s", map[bool]string{true: "enabled", false: "off"}[cfg.YMessengerEnabled]),
 		fmt.Sprintf("YMessenger approval required: %t", cfg.YMessengerRequireApproval),
 		fmt.Sprintf("Allowed users: %s", formatIDs(cfg.AllowedUserIDs)),
-		fmt.Sprintf("AFC group: %d", cfg.AFCGroupID),
+		fmt.Sprintf("Sync group: %d", cfg.SyncGroupID),
 		fmt.Sprintf("Default cwd: %s", cfg.DefaultCWD),
 		fmt.Sprintf("Codex Chats root: %s", cfg.CodexChatsRoot),
 		fmt.Sprintf("Delivery backlog: %d", backlog),
@@ -383,12 +383,12 @@ func runInit(args []string, in io.Reader, out io.Writer) error {
 	if err := validateTelegramUserID(allowedUsers); err != nil {
 		return fmt.Errorf("Allowed Telegram user id: %w", err)
 	}
-	afcGroupID, err := promptRequired(reader, out, "AFC forum group id")
+	syncGroupID, err := promptRequired(reader, out, "Sync forum group id")
 	if err != nil {
 		return err
 	}
-	if err := validateAFCGroupID(afcGroupID); err != nil {
-		return fmt.Errorf("AFC forum group id: %w", err)
+	if err := validateSyncGroupID(syncGroupID); err != nil {
+		return fmt.Errorf("Sync forum group id: %w", err)
 	}
 	defaultCWD, err := prompt(reader, out, "Default cwd", cwd)
 	if err != nil {
@@ -405,7 +405,7 @@ func runInit(args []string, in io.Reader, out io.Writer) error {
 	values := map[string]string{
 		"CTR_GO_TELEGRAM_BOT_TOKEN": token,
 		"CTR_GO_ALLOWED_USER_IDS":   allowedUsers,
-		"CTR_GO_AFC_GROUP_ID":       afcGroupID,
+		"CTR_GO_SYNC_GROUP_ID":      syncGroupID,
 		"CTR_GO_DEFAULT_CWD":        defaultCWD,
 		"CTR_GO_CODEX_CHATS_ROOT":   chatsRoot,
 		"CTR_GO_CODEX_BIN":          selectedCodexBin,

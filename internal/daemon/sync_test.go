@@ -16,7 +16,7 @@ import (
 	"github.com/mideco-tech/codex-tg/internal/tgformat"
 )
 
-type fakeAFCForum struct {
+type fakeSyncForum struct {
 	validateErr      error
 	prepareErr       error
 	prepares         int
@@ -28,53 +28,53 @@ type fakeAFCForum struct {
 	renameErr        error
 	messageDeleteErr error
 	creates          []string
-	renames          []fakeAFCRename
+	renames          []fakeSyncRename
 	deletes          []int64
-	messageDeletes   []fakeAFCMessageDelete
-	sends            []fakeAFCSend
-	edits            []fakeAFCEdit
-	actions          []fakeAFCAction
+	messageDeletes   []fakeSyncMessageDelete
+	sends            []fakeSyncSend
+	edits            []fakeSyncEdit
+	actions          []fakeSyncAction
 	onDelete         func()
 	onCreate         func(string)
 }
 
-type fakeAFCSend struct {
+type fakeSyncSend struct {
 	topicID, messageID int64
 	text               string
 	message            model.RenderedMessage
 	silent             bool
 }
-type fakeAFCRename struct {
+type fakeSyncRename struct {
 	topicID int64
 	title   string
 }
-type fakeAFCEdit struct {
+type fakeSyncEdit struct {
 	topicID, messageID int64
 	text               string
 	message            model.RenderedMessage
 }
-type fakeAFCMessageDelete struct {
+type fakeSyncMessageDelete struct {
 	topicID, messageID int64
 }
-type fakeAFCAction struct {
+type fakeSyncAction struct {
 	topicID, messageID int64
 	text               string
 	buttons            [][]model.ButtonSpec
 }
 
-type afcWriterSession struct {
+type syncWriterSession struct {
 	*stubSession
 	events chan appserver.Event
 }
 
-func (s *afcWriterSession) Subscribe() <-chan appserver.Event { return s.events }
+func (s *syncWriterSession) Subscribe() <-chan appserver.Event { return s.events }
 
-func (f *fakeAFCForum) ValidateAFCGroup(context.Context, int64) error { return f.validateErr }
-func (f *fakeAFCForum) PrepareAFCControl(context.Context) error {
+func (f *fakeSyncForum) ValidateSyncGroup(context.Context, int64) error { return f.validateErr }
+func (f *fakeSyncForum) PrepareSyncControl(context.Context) error {
 	f.prepares++
 	return f.prepareErr
 }
-func (f *fakeAFCForum) CreateAFCTopic(_ context.Context, title string) (int64, error) {
+func (f *fakeSyncForum) CreateSyncTopic(_ context.Context, title string) (int64, error) {
 	f.creates = append(f.creates, title)
 	if f.onCreate != nil {
 		f.onCreate(title)
@@ -85,25 +85,25 @@ func (f *fakeAFCForum) CreateAFCTopic(_ context.Context, title string) (int64, e
 	f.nextTopicID++
 	return f.nextTopicID, nil
 }
-func (f *fakeAFCForum) RenameAFCTopic(_ context.Context, topicID int64, title string) error {
-	f.renames = append(f.renames, fakeAFCRename{topicID: topicID, title: title})
+func (f *fakeSyncForum) RenameSyncTopic(_ context.Context, topicID int64, title string) error {
+	f.renames = append(f.renames, fakeSyncRename{topicID: topicID, title: title})
 	return f.renameErr
 }
-func (f *fakeAFCForum) DeleteAFCTopic(_ context.Context, topicID int64) error {
+func (f *fakeSyncForum) DeleteSyncTopic(_ context.Context, topicID int64) error {
 	if f.onDelete != nil {
 		f.onDelete()
 	}
 	f.deletes = append(f.deletes, topicID)
 	return nil
 }
-func (f *fakeAFCForum) DeleteAFCMessage(_ context.Context, topicID, messageID int64) error {
-	f.messageDeletes = append(f.messageDeletes, fakeAFCMessageDelete{topicID: topicID, messageID: messageID})
+func (f *fakeSyncForum) DeleteSyncMessage(_ context.Context, topicID, messageID int64) error {
+	f.messageDeletes = append(f.messageDeletes, fakeSyncMessageDelete{topicID: topicID, messageID: messageID})
 	return f.messageDeleteErr
 }
-func (f *fakeAFCForum) SendAFCMessage(_ context.Context, topicID int64, message model.RenderedMessage, silent bool) (int64, error) {
+func (f *fakeSyncForum) SendSyncMessage(_ context.Context, topicID int64, message model.RenderedMessage, silent bool) (int64, error) {
 	id := int64(100 + len(f.sends))
-	f.sends = append(f.sends, fakeAFCSend{topicID: topicID, messageID: id, text: message.Text, message: message, silent: silent})
-	if f.rejectOversize && afcUTF16Len(message.Text) > tgformat.TelegramMessageLimit {
+	f.sends = append(f.sends, fakeSyncSend{topicID: topicID, messageID: id, text: message.Text, message: message, silent: silent})
+	if f.rejectOversize && syncUTF16Len(message.Text) > tgformat.TelegramMessageLimit {
 		return 0, errors.New("message is too long")
 	}
 	if f.sendErrAt > 0 && len(f.sends) == f.sendErrAt {
@@ -114,19 +114,19 @@ func (f *fakeAFCForum) SendAFCMessage(_ context.Context, topicID int64, message 
 	}
 	return id, nil
 }
-func (f *fakeAFCForum) EditAFCMessage(_ context.Context, topicID, messageID int64, message model.RenderedMessage) error {
-	f.edits = append(f.edits, fakeAFCEdit{topicID: topicID, messageID: messageID, text: message.Text, message: message})
+func (f *fakeSyncForum) EditSyncMessage(_ context.Context, topicID, messageID int64, message model.RenderedMessage) error {
+	f.edits = append(f.edits, fakeSyncEdit{topicID: topicID, messageID: messageID, text: message.Text, message: message})
 	return nil
 }
-func (f *fakeAFCForum) SendAFCActionMessage(_ context.Context, topicID int64, text string, buttons [][]model.ButtonSpec) (int64, error) {
+func (f *fakeSyncForum) SendSyncActionMessage(_ context.Context, topicID int64, text string, buttons [][]model.ButtonSpec) (int64, error) {
 	id := int64(200 + len(f.actions))
-	f.actions = append(f.actions, fakeAFCAction{topicID: topicID, messageID: id, text: text, buttons: buttons})
+	f.actions = append(f.actions, fakeSyncAction{topicID: topicID, messageID: id, text: text, buttons: buttons})
 	return id, nil
 }
 
-func TestAFCPartialActivationOwnsGroupAndDisablesLegacyObserver(t *testing.T) {
+func TestSyncPartialActivationOwnsGroupAndDisablesLegacyObserver(t *testing.T) {
 	service := newTestService(t)
-	service.cfg.AFCGroupID = -1001
+	service.cfg.SyncGroupID = -1001
 	poll := &stubSession{threadListResult: map[string]any{"data": []any{
 		map[string]any{"id": "thread-old", "title": "Old", "updatedAt": float64(10)},
 		map[string]any{"id": "thread-new", "title": "New", "updatedAt": float64(20)},
@@ -134,8 +134,8 @@ func TestAFCPartialActivationOwnsGroupAndDisablesLegacyObserver(t *testing.T) {
 	}}}
 	service.poll = poll
 	service.pollConnected = true
-	forum := &fakeAFCForum{nextTopicID: 10, createErrAt: 2}
-	service.SetAFCForum(forum)
+	forum := &fakeSyncForum{nextTopicID: 10, createErrAt: 2}
+	service.SetSyncForum(forum)
 	ctx := context.Background()
 	response, err := service.HandleMessage(ctx, -1001, 1, 123456789, "/sync on", 0)
 	if err != nil {
@@ -153,8 +153,8 @@ func TestAFCPartialActivationOwnsGroupAndDisablesLegacyObserver(t *testing.T) {
 	if !strings.Contains(response.Text, "1. New\nTelegram: connected") || !strings.Contains(response.Text, "2. Old\nTelegram: create outcome unknown") || strings.Index(response.Text, "1. New") > strings.Index(response.Text, "2. Old") {
 		t.Fatalf("ordered activation summary = %q", response.Text)
 	}
-	state, _ := service.store.GetAFCState(ctx)
-	if state.State != model.AFCStateActive {
+	state, _ := service.store.GetSyncState(ctx)
+	if state.State != model.SyncStateActive {
 		t.Fatalf("state = %#v", state)
 	}
 	if poll.threadResumeCalls != nil || poll.turnStartCalls != nil {
@@ -162,10 +162,10 @@ func TestAFCPartialActivationOwnsGroupAndDisablesLegacyObserver(t *testing.T) {
 	}
 }
 
-func TestAFCActivationUsesConfiguredInitialTopicLimit(t *testing.T) {
+func TestSyncActivationUsesConfiguredInitialTopicLimit(t *testing.T) {
 	service := newTestService(t)
-	service.cfg.AFCGroupID = -1001
-	service.cfg.AFCInitialTopicLimit = 5
+	service.cfg.SyncGroupID = -1001
+	service.cfg.SyncInitialTopicLimit = 5
 	items := make([]any, 0, 7)
 	for i := 1; i <= 7; i++ {
 		items = append(items, map[string]any{
@@ -174,8 +174,8 @@ func TestAFCActivationUsesConfiguredInitialTopicLimit(t *testing.T) {
 	}
 	service.poll = &stubSession{threadListResult: map[string]any{"data": items}}
 	service.pollConnected = true
-	forum := &fakeAFCForum{nextTopicID: 10}
-	service.SetAFCForum(forum)
+	forum := &fakeSyncForum{nextTopicID: 10}
+	service.SetSyncForum(forum)
 
 	response, err := service.HandleMessage(context.Background(), -1001, 1, 123456789, "/sync on", 0)
 	if err != nil || response == nil {
@@ -189,11 +189,11 @@ func TestAFCActivationUsesConfiguredInitialTopicLimit(t *testing.T) {
 	}
 }
 
-func TestAFCSyncDiscoversNewDesktopThreadExactlyOnceAndResubscribesAfterReconnect(t *testing.T) {
-	service := activeAFCService(t)
+func TestSyncReconcileDiscoversNewDesktopThreadExactlyOnceAndResubscribesAfterReconnect(t *testing.T) {
+	service := activeSyncService(t)
 	service.cfg.AppServerMode = "daemon"
 	ctx := context.Background()
-	state, err := service.store.GetAFCState(ctx)
+	state, err := service.store.GetSyncState(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -205,27 +205,27 @@ func TestAFCSyncDiscoversNewDesktopThreadExactlyOnceAndResubscribesAfterReconnec
 			map[string]any{"id": "thread-old", "title": "Old untracked", "createdAt": float64(cutoff - 1), "updatedAt": float64(cutoff + 3)},
 		}},
 		threadReads: map[string]map[string]any{
-			"thread-1":   afcRunningPayload("thread-1", "turn-1"),
-			"thread-2":   afcRunningPayload("thread-2", "turn-2"),
-			"thread-new": afcRunningPayloadWithCommentary("thread-new", "turn-new", "desktop progress"),
+			"thread-1":   syncRunningPayload("thread-1", "turn-1"),
+			"thread-2":   syncRunningPayload("thread-2", "turn-2"),
+			"thread-new": syncRunningPayloadWithCommentary("thread-new", "turn-new", "desktop progress"),
 		},
 	}
 	service.mu.Lock()
 	service.poll, service.pollConnected, service.pollGeneration = poll, true, 7
 	service.mu.Unlock()
-	forum := &fakeAFCForum{nextTopicID: 20}
-	service.SetAFCForum(forum)
+	forum := &fakeSyncForum{nextTopicID: 20}
+	service.SetSyncForum(forum)
 
-	service.syncAFC(ctx)
-	service.syncAFC(ctx)
+	service.reconcileSync(ctx)
+	service.reconcileSync(ctx)
 
 	if len(forum.creates) != 1 || forum.creates[0] != "Desktop task" {
 		t.Fatalf("creates=%#v, want one new Desktop topic", forum.creates)
 	}
-	if topic, err := service.store.GetActiveAFCTopicByThread(ctx, "s", "thread-new"); err != nil || topic == nil || topic.TopicID != 21 {
+	if topic, err := service.store.GetActiveSyncTopicByThread(ctx, "s", "thread-new"); err != nil || topic == nil || topic.TopicID != 21 {
 		t.Fatalf("topic=%#v err=%v", topic, err)
 	}
-	if topic, err := service.store.GetActiveAFCTopicByThread(ctx, "s", "thread-old"); err != nil || topic != nil {
+	if topic, err := service.store.GetActiveSyncTopicByThread(ctx, "s", "thread-old"); err != nil || topic != nil {
 		t.Fatalf("old topic=%#v err=%v, want activation cutoff preserved", topic, err)
 	}
 	if len(poll.threadResumeCalls) != 3 {
@@ -235,16 +235,16 @@ func TestAFCSyncDiscoversNewDesktopThreadExactlyOnceAndResubscribesAfterReconnec
 	service.mu.Lock()
 	service.pollGeneration = 8
 	service.mu.Unlock()
-	service.syncAFC(ctx)
+	service.reconcileSync(ctx)
 	if len(poll.threadResumeCalls) != 6 {
 		t.Fatalf("resume calls after reconnect=%#v, want one resubscribe per thread", poll.threadResumeCalls)
 	}
 }
 
-func TestAFCRefreshControlCommandReportsDiscoveryAndHelpAdvertisesIt(t *testing.T) {
-	service := activeAFCService(t)
+func TestSyncRefreshControlCommandReportsDiscoveryAndHelpAdvertisesIt(t *testing.T) {
+	service := activeSyncService(t)
 	ctx := context.Background()
-	state, err := service.store.GetAFCState(ctx)
+	state, err := service.store.GetSyncState(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -255,8 +255,8 @@ func TestAFCRefreshControlCommandReportsDiscoveryAndHelpAdvertisesIt(t *testing.
 	}}}
 	service.pollConnected = true
 	service.mu.Unlock()
-	forum := &fakeAFCForum{nextTopicID: 30}
-	service.SetAFCForum(forum)
+	forum := &fakeSyncForum{nextTopicID: 30}
+	service.SetSyncForum(forum)
 
 	response, err := service.HandleMessage(ctx, -1001, 1, 123456789, "/refresh", 0)
 	if err != nil || response == nil || !strings.Contains(response.Text, "discovered: 1") {
@@ -268,70 +268,70 @@ func TestAFCRefreshControlCommandReportsDiscoveryAndHelpAdvertisesIt(t *testing.
 	}
 }
 
-func TestAFCActivationFailsClosedWhenControlPreparationFails(t *testing.T) {
+func TestSyncActivationFailsClosedWhenControlPreparationFails(t *testing.T) {
 	service := newTestService(t)
-	service.cfg.AFCGroupID = -1001
+	service.cfg.SyncGroupID = -1001
 	service.poll = &stubSession{threadListResult: map[string]any{"data": []any{
 		map[string]any{"id": "thread-1", "title": "One", "updatedAt": float64(10)},
 	}}}
 	service.pollConnected = true
-	forum := &fakeAFCForum{prepareErr: errors.New("cannot rename General")}
-	service.SetAFCForum(forum)
+	forum := &fakeSyncForum{prepareErr: errors.New("cannot rename General")}
+	service.SetSyncForum(forum)
 
 	response, err := service.HandleMessage(context.Background(), -1001, 1, 123456789, "/sync on", 0)
-	if err == nil || !strings.Contains(err.Error(), "prepare AFC Control") {
+	if err == nil || !strings.Contains(err.Error(), "prepare Sync Control") {
 		t.Fatalf("response=%#v err=%v, want Control preparation failure", response, err)
 	}
 	if forum.prepares != 1 || len(forum.creates) != 0 {
 		t.Fatalf("forum prepares=%d creates=%v, want fail before topic creation", forum.prepares, forum.creates)
 	}
-	state, stateErr := service.store.GetAFCState(context.Background())
-	if stateErr != nil || state.State != model.AFCStateOff {
+	state, stateErr := service.store.GetSyncState(context.Background())
+	if stateErr != nil || state.State != model.SyncStateOff {
 		t.Fatalf("state=%#v err=%v, want off", state, stateErr)
 	}
 }
 
-func TestAFCUnknownTopicAndCallbacksFailClosed(t *testing.T) {
+func TestSyncUnknownTopicAndCallbacksFailClosed(t *testing.T) {
 	service := newTestService(t)
-	service.cfg.AFCGroupID = -1001
+	service.cfg.SyncGroupID = -1001
 	response, err := service.HandleMessage(context.Background(), -1001, 999, 123456789, "hello", 0)
-	if err != nil || response == nil || !strings.Contains(response.Text, "AFC") {
+	if err != nil || response == nil || !strings.Contains(response.Text, "Sync") {
 		t.Fatalf("response=%#v err=%v", response, err)
 	}
 	response, err = service.HandleCallback(context.Background(), -1001, 999, 5, 123456789, "legacy-token")
-	if err != nil || response == nil || !strings.Contains(response.CallbackText, "AFC") {
+	if err != nil || response == nil || !strings.Contains(response.CallbackText, "Sync") {
 		t.Fatalf("callback=%#v err=%v", response, err)
 	}
 }
 
-func TestAFCZeroTopicActivationReturnsToOff(t *testing.T) {
+func TestSyncZeroTopicActivationReturnsToOff(t *testing.T) {
 	service := newTestService(t)
-	service.cfg.AFCGroupID = -1001
+	service.cfg.SyncGroupID = -1001
 	service.poll = &stubSession{threadListResult: map[string]any{"data": []any{map[string]any{"id": "thread-1", "title": "One", "updatedAt": float64(10)}}}}
 	service.pollConnected = true
-	service.SetAFCForum(&fakeAFCForum{createErrAt: 1})
+	service.SetSyncForum(&fakeSyncForum{createErrAt: 1})
 	ctx := context.Background()
 	response, err := service.HandleMessage(ctx, -1001, 1, 123456789, "/sync on", 0)
 	if err != nil || response == nil || !strings.Contains(response.Text, "active: 0") {
 		t.Fatalf("response=%#v err=%v", response, err)
 	}
-	state, _ := service.store.GetAFCState(ctx)
-	if state.State != model.AFCStateOff {
+	state, _ := service.store.GetSyncState(ctx)
+	if state.State != model.SyncStateOff {
 		t.Fatalf("state=%#v", state)
 	}
 }
 
-func TestAFCPassiveSyncSendsSilentStatusAndNotifyingFinal(t *testing.T) {
+func TestSyncPassiveSyncSendsSilentStatusAndNotifyingFinal(t *testing.T) {
 	service := newTestService(t)
-	service.cfg.AFCGroupID = -1001
+	service.cfg.SyncGroupID = -1001
 	ctx := context.Background()
-	if err := service.store.BeginAFCActivation(ctx, "s", -1001); err != nil {
+	if err := service.store.BeginSyncActivation(ctx, "s", -1001); err != nil {
 		t.Fatal(err)
 	}
-	if err := service.store.UpsertAFCTopic(ctx, model.AFCTopic{SessionID: "s", ChatID: -1001, TopicID: 11, ThreadID: "thread-1", Title: "One", TelegramState: model.AFCTopicConnected}); err != nil {
+	if err := service.store.UpsertSyncTopic(ctx, model.SyncTopic{SessionID: "s", ChatID: -1001, TopicID: 11, ThreadID: "thread-1", Title: "One", TelegramState: model.SyncTopicConnected}); err != nil {
 		t.Fatal(err)
 	}
-	if err := service.store.FinishAFCActivation(ctx, "s", `{}`, true); err != nil {
+	if err := service.store.FinishSyncActivation(ctx, "s", `{}`, true); err != nil {
 		t.Fatal(err)
 	}
 	poll := &stubSession{threadReads: map[string]map[string]any{
@@ -346,13 +346,13 @@ func TestAFCPassiveSyncSendsSilentStatusAndNotifyingFinal(t *testing.T) {
 		},
 	}}
 	service.poll, service.pollConnected = poll, true
-	forum := &fakeAFCForum{}
-	service.SetAFCForum(forum)
-	service.syncAFC(ctx)
+	forum := &fakeSyncForum{}
+	service.SetSyncForum(forum)
+	service.reconcileSync(ctx)
 	if len(forum.sends) != 2 || !forum.sends[0].silent || forum.sends[1].silent {
 		t.Fatalf("sends = %#v", forum.sends)
 	}
-	if !strings.HasPrefix(forum.sends[1].text, afcFinalHeader+"\n") || !strings.Contains(forum.sends[1].text, "done") {
+	if !strings.HasPrefix(forum.sends[1].text, syncFinalHeader+"\n") || !strings.Contains(forum.sends[1].text, "done") {
 		t.Fatalf("final = %q", forum.sends[1].text)
 	}
 	if len(poll.threadResumeCalls) != 0 || len(poll.turnStartCalls) != 0 {
@@ -360,30 +360,30 @@ func TestAFCPassiveSyncSendsSilentStatusAndNotifyingFinal(t *testing.T) {
 	}
 }
 
-func TestAFCLongFinalKeepsFinalHeaderOnEveryChunk(t *testing.T) {
-	service := activeAFCService(t)
+func TestSyncLongFinalKeepsFinalHeaderOnEveryChunk(t *testing.T) {
+	service := activeSyncService(t)
 	ctx := context.Background()
 	finalText := strings.Repeat("🙂", tgformat.TelegramMessageLimit/2+600)
 	poll := &stubSession{threadReads: map[string]map[string]any{
-		"thread-1": afcCompletedPayload("thread-1", "turn-1", finalText),
+		"thread-1": syncCompletedPayload("thread-1", "turn-1", finalText),
 	}}
 	service.mu.Lock()
 	service.poll, service.pollConnected = poll, true
 	service.mu.Unlock()
-	forum := &fakeAFCForum{rejectOversize: true}
-	service.SetAFCForum(forum)
+	forum := &fakeSyncForum{rejectOversize: true}
+	service.SetSyncForum(forum)
 
-	service.syncAFC(ctx)
+	service.reconcileSync(ctx)
 	if len(forum.sends) < 3 {
 		t.Fatalf("sends=%d, want status and multiple Final chunks", len(forum.sends))
 	}
 	finalSends := forum.sends[1:]
 	var delivered strings.Builder
 	for index, send := range finalSends {
-		if got := afcUTF16Len(send.text); got > tgformat.TelegramMessageLimit {
+		if got := syncUTF16Len(send.text); got > tgformat.TelegramMessageLimit {
 			t.Fatalf("chunk %d UTF-16 length=%d, want <=%d", index+1, got, tgformat.TelegramMessageLimit)
 		}
-		prefix := afcFinalHeader + "\n"
+		prefix := syncFinalHeader + "\n"
 		if !strings.HasPrefix(send.text, prefix) {
 			t.Fatalf("chunk %d = %q, want Final header for topic preview", index+1, send.text)
 		}
@@ -392,69 +392,69 @@ func TestAFCLongFinalKeepsFinalHeaderOnEveryChunk(t *testing.T) {
 	if got, want := delivered.String(), finalText; got != want {
 		t.Fatalf("delivered Final length=%d, want exact length=%d", len(got), len(want))
 	}
-	topic, err := service.store.GetActiveAFCTopic(ctx, -1001, 11)
+	topic, err := service.store.GetActiveSyncTopic(ctx, -1001, 11)
 	if err != nil || topic == nil || topic.LastFinalFP == "" {
 		t.Fatalf("topic=%#v err=%v, want committed Final fingerprint", topic, err)
 	}
 	deliveredCount := len(forum.sends)
-	service.syncAFC(ctx)
+	service.reconcileSync(ctx)
 	if len(forum.sends) != deliveredCount {
 		t.Fatalf("sends=%d after retry, want deduped count=%d", len(forum.sends), deliveredCount)
 	}
 }
 
-func TestAFCLongFinalFailureKeepsFingerprintPending(t *testing.T) {
-	service := activeAFCService(t)
+func TestSyncLongFinalFailureKeepsFingerprintPending(t *testing.T) {
+	service := activeSyncService(t)
 	ctx := context.Background()
 	finalText := strings.Repeat("x", tgformat.TelegramMessageLimit+1200)
 	poll := &stubSession{threadReads: map[string]map[string]any{
-		"thread-1": afcCompletedPayload("thread-1", "turn-1", finalText),
+		"thread-1": syncCompletedPayload("thread-1", "turn-1", finalText),
 	}}
 	service.mu.Lock()
 	service.poll, service.pollConnected = poll, true
 	service.mu.Unlock()
-	forum := &fakeAFCForum{sendErrAt: 3, sendErr: errors.New("temporary Telegram failure")}
-	service.SetAFCForum(forum)
+	forum := &fakeSyncForum{sendErrAt: 3, sendErr: errors.New("temporary Telegram failure")}
+	service.SetSyncForum(forum)
 	var logs bytes.Buffer
 	service.SetLogger(log.New(&logs, "", 0))
 
-	service.syncAFC(ctx)
-	topic, err := service.store.GetActiveAFCTopic(ctx, -1001, 11)
+	service.reconcileSync(ctx)
+	topic, err := service.store.GetActiveSyncTopic(ctx, -1001, 11)
 	if err != nil || topic == nil {
 		t.Fatalf("topic=%#v err=%v", topic, err)
 	}
 	if topic.LastFinalFP != "" {
 		t.Fatalf("last_final_fp=%q, want pending after failed continuation", topic.LastFinalFP)
 	}
-	if got := logs.String(); !strings.Contains(got, "afc_final_delivery_failed") || !strings.Contains(got, `"chunk_index":2`) {
+	if got := logs.String(); !strings.Contains(got, "sync_final_delivery_failed") || !strings.Contains(got, `"chunk_index":2`) {
 		t.Fatalf("logs=%q, want chunk delivery diagnostic", got)
 	}
 }
 
-func TestAFCPresentationCreatesFreshStatusForEachObservedTurn(t *testing.T) {
-	service := activeAFCService(t)
+func TestSyncPresentationCreatesFreshStatusForEachObservedTurn(t *testing.T) {
+	service := activeSyncService(t)
 	ctx := context.Background()
 	poll := &stubSession{threadReads: map[string]map[string]any{
-		"thread-1": afcRunningPayloadWithCommentary("thread-1", "turn-1", "first progress"),
+		"thread-1": syncRunningPayloadWithCommentary("thread-1", "turn-1", "first progress"),
 	}}
 	service.mu.Lock()
 	service.poll, service.pollConnected = poll, true
 	service.mu.Unlock()
-	forum := &fakeAFCForum{}
-	service.SetAFCForum(forum)
+	forum := &fakeSyncForum{}
+	service.SetSyncForum(forum)
 
-	service.syncAFC(ctx)
+	service.reconcileSync(ctx)
 	if len(forum.sends) != 1 || forum.sends[0].topicID != 11 || !forum.sends[0].silent {
 		t.Fatalf("first turn sends=%#v, want one silent status in topic 11", forum.sends)
 	}
 	firstStatusID := forum.sends[0].messageID
-	firstTopic, err := service.store.GetActiveAFCTopic(ctx, -1001, 11)
+	firstTopic, err := service.store.GetActiveSyncTopic(ctx, -1001, 11)
 	if err != nil || firstTopic == nil || firstTopic.StatusTurnID != "turn-1" || firstTopic.StatusMessageID != firstStatusID {
 		t.Fatalf("first turn delivery=%#v err=%v", firstTopic, err)
 	}
 
-	poll.threadReads["thread-1"] = afcRunningPayloadWithCommentary("thread-1", "turn-1", "updated progress")
-	service.syncAFC(ctx)
+	poll.threadReads["thread-1"] = syncRunningPayloadWithCommentary("thread-1", "turn-1", "updated progress")
+	service.reconcileSync(ctx)
 	if len(forum.sends) != 1 {
 		t.Fatalf("same turn created another status: %#v", forum.sends)
 	}
@@ -462,160 +462,160 @@ func TestAFCPresentationCreatesFreshStatusForEachObservedTurn(t *testing.T) {
 		t.Fatalf("same turn edits=%#v, want existing status %d", forum.edits, firstStatusID)
 	}
 
-	poll.threadReads["thread-1"] = afcRunningPayloadWithCommentary("thread-1", "turn-2", "second turn progress")
-	service.syncAFC(ctx)
+	poll.threadReads["thread-1"] = syncRunningPayloadWithCommentary("thread-1", "turn-2", "second turn progress")
+	service.reconcileSync(ctx)
 	if len(forum.sends) != 2 {
 		t.Fatalf("new turn sends=%#v, want a fresh status message", forum.sends)
 	}
 	if forum.sends[1].messageID == firstStatusID || !strings.Contains(forum.sends[1].text, "second turn progress") {
 		t.Fatalf("new turn status=%#v, want new message after previous turn", forum.sends[1])
 	}
-	secondTopic, err := service.store.GetActiveAFCTopic(ctx, -1001, 11)
+	secondTopic, err := service.store.GetActiveSyncTopic(ctx, -1001, 11)
 	if err != nil || secondTopic == nil || secondTopic.StatusTurnID != "turn-2" || secondTopic.StatusMessageID != forum.sends[1].messageID {
 		t.Fatalf("second turn delivery=%#v err=%v", secondTopic, err)
 	}
 }
 
-func TestAFCPassiveSyncMirrorsDesktopUserBeforeStatusExactlyOnce(t *testing.T) {
-	service := activeAFCService(t)
+func TestSyncPassiveSyncMirrorsDesktopUserBeforeStatusExactlyOnce(t *testing.T) {
+	service := activeSyncService(t)
 	ctx := context.Background()
 	poll := &stubSession{threadReads: map[string]map[string]any{
-		"thread-1": afcRunningPayloadWithUser("thread-1", "turn-1", "user-1", "Desktop prompt", "working"),
+		"thread-1": syncRunningPayloadWithUser("thread-1", "turn-1", "user-1", "Desktop prompt", "working"),
 	}}
 	service.mu.Lock()
 	service.poll, service.pollConnected = poll, true
 	service.mu.Unlock()
-	forum := &fakeAFCForum{}
-	service.SetAFCForum(forum)
+	forum := &fakeSyncForum{}
+	service.SetSyncForum(forum)
 
-	service.syncAFC(ctx)
+	service.reconcileSync(ctx)
 	if len(forum.sends) != 2 {
 		t.Fatalf("sends=%#v, want user then status", forum.sends)
 	}
-	if !forum.sends[0].silent || forum.sends[0].text != afcUserHeader+"\nDesktop prompt" {
+	if !forum.sends[0].silent || forum.sends[0].text != syncUserHeader+"\nDesktop prompt" {
 		t.Fatalf("user mirror=%#v", forum.sends[0])
 	}
-	if !forum.sends[1].silent || !strings.HasPrefix(forum.sends[1].text, afcStatusHeader+" ") {
+	if !forum.sends[1].silent || !strings.HasPrefix(forum.sends[1].text, syncStatusHeader+" ") {
 		t.Fatalf("status=%#v", forum.sends[1])
 	}
-	topic, err := service.store.GetActiveAFCTopic(ctx, -1001, 11)
+	topic, err := service.store.GetActiveSyncTopic(ctx, -1001, 11)
 	if err != nil || topic == nil || topic.LastUserFP == "" || topic.StatusMessageID != forum.sends[1].messageID {
 		t.Fatalf("topic=%#v err=%v", topic, err)
 	}
 
-	service.syncAFC(ctx)
+	service.reconcileSync(ctx)
 	if len(forum.sends) != 2 {
 		t.Fatalf("repeat poll duplicated user/status: %#v", forum.sends)
 	}
 }
 
-func TestAFCSameTurnDesktopUserReanchorsStatusAfterUser(t *testing.T) {
-	service := activeAFCService(t)
+func TestSyncSameTurnDesktopUserReanchorsStatusAfterUser(t *testing.T) {
+	service := activeSyncService(t)
 	ctx := context.Background()
 	poll := &stubSession{threadReads: map[string]map[string]any{
-		"thread-1": afcRunningPayloadWithUser("thread-1", "turn-1", "user-1", "First prompt", "working"),
+		"thread-1": syncRunningPayloadWithUser("thread-1", "turn-1", "user-1", "First prompt", "working"),
 	}}
 	service.mu.Lock()
 	service.poll, service.pollConnected = poll, true
 	service.mu.Unlock()
-	forum := &fakeAFCForum{}
-	service.SetAFCForum(forum)
+	forum := &fakeSyncForum{}
+	service.SetSyncForum(forum)
 
-	service.syncAFC(ctx)
+	service.reconcileSync(ctx)
 	oldStatusID := forum.sends[1].messageID
-	poll.threadReads["thread-1"] = afcRunningPayloadWithUsers("thread-1", "turn-1", []afcTestUser{
+	poll.threadReads["thread-1"] = syncRunningPayloadWithUsers("thread-1", "turn-1", []syncTestUser{
 		{id: "user-1", text: "First prompt"},
 		{id: "user-2", text: "Desktop follow-up"},
 	}, "updated progress")
-	service.syncAFC(ctx)
+	service.reconcileSync(ctx)
 
-	if len(forum.sends) != 4 || forum.sends[2].text != afcUserHeader+"\nDesktop follow-up" || !strings.HasPrefix(forum.sends[3].text, afcStatusHeader+" ") {
+	if len(forum.sends) != 4 || forum.sends[2].text != syncUserHeader+"\nDesktop follow-up" || !strings.HasPrefix(forum.sends[3].text, syncStatusHeader+" ") {
 		t.Fatalf("sends=%#v, want follow-up user then reanchored status", forum.sends)
 	}
 	if len(forum.messageDeletes) != 1 || forum.messageDeletes[0].messageID != oldStatusID {
 		t.Fatalf("status deletes=%#v, want old status %d", forum.messageDeletes, oldStatusID)
 	}
-	topic, err := service.store.GetActiveAFCTopic(ctx, -1001, 11)
+	topic, err := service.store.GetActiveSyncTopic(ctx, -1001, 11)
 	if err != nil || topic == nil || topic.StatusMessageID != forum.sends[3].messageID {
 		t.Fatalf("topic=%#v err=%v", topic, err)
 	}
 }
 
-func TestAFCTelegramUserIsNotEchoedByPassiveSync(t *testing.T) {
-	service := activeAFCService(t)
+func TestSyncTelegramUserIsNotEchoedByPassiveSync(t *testing.T) {
+	service := activeSyncService(t)
 	ctx := context.Background()
-	pending := afcUserTextFingerprint("turn-1", "Telegram prompt")
-	if err := service.store.UpdateAFCTopicUserDelivery(ctx, "s", 11, "", "turn-1", pending); err != nil {
+	pending := syncUserTextFingerprint("turn-1", "Telegram prompt")
+	if err := service.store.UpdateSyncTopicUserDelivery(ctx, "s", 11, "", "turn-1", pending); err != nil {
 		t.Fatal(err)
 	}
 	poll := &stubSession{threadReads: map[string]map[string]any{
-		"thread-1": afcRunningPayloadWithUser("thread-1", "turn-1", "user-tg", "Telegram prompt", "working"),
+		"thread-1": syncRunningPayloadWithUser("thread-1", "turn-1", "user-tg", "Telegram prompt", "working"),
 	}}
 	service.mu.Lock()
 	service.poll, service.pollConnected = poll, true
 	service.mu.Unlock()
-	forum := &fakeAFCForum{}
-	service.SetAFCForum(forum)
+	forum := &fakeSyncForum{}
+	service.SetSyncForum(forum)
 
-	service.syncAFC(ctx)
-	if len(forum.sends) != 1 || !strings.HasPrefix(forum.sends[0].text, afcStatusHeader+" ") {
+	service.reconcileSync(ctx)
+	if len(forum.sends) != 1 || !strings.HasPrefix(forum.sends[0].text, syncStatusHeader+" ") {
 		t.Fatalf("sends=%#v, want status without Telegram user echo", forum.sends)
 	}
-	topic, err := service.store.GetActiveAFCTopic(ctx, -1001, 11)
+	topic, err := service.store.GetActiveSyncTopic(ctx, -1001, 11)
 	if err != nil || topic == nil || topic.LastUserFP == "" || topic.PendingTelegramUserFP != "" || topic.PendingTelegramTurnID != "" {
 		t.Fatalf("topic=%#v err=%v", topic, err)
 	}
 }
 
-func TestAFCPendingTelegramUserDefersStaleDesktopSnapshot(t *testing.T) {
-	service := activeAFCService(t)
+func TestSyncPendingTelegramUserDefersStaleDesktopSnapshot(t *testing.T) {
+	service := activeSyncService(t)
 	ctx := context.Background()
-	pending := afcUserTextFingerprint("turn-1", "Telegram steer")
-	if err := service.store.UpdateAFCTopicUserDelivery(ctx, "s", 11, "old-user-fp", "turn-1", pending); err != nil {
+	pending := syncUserTextFingerprint("turn-1", "Telegram steer")
+	if err := service.store.UpdateSyncTopicUserDelivery(ctx, "s", 11, "old-user-fp", "turn-1", pending); err != nil {
 		t.Fatal(err)
 	}
 	poll := &stubSession{threadReads: map[string]map[string]any{
-		"thread-1": afcRunningPayloadWithUser("thread-1", "turn-1", "user-old", "Old Desktop prompt", "working"),
+		"thread-1": syncRunningPayloadWithUser("thread-1", "turn-1", "user-old", "Old Desktop prompt", "working"),
 	}}
 	service.mu.Lock()
 	service.poll, service.pollConnected = poll, true
 	service.mu.Unlock()
-	forum := &fakeAFCForum{}
-	service.SetAFCForum(forum)
+	forum := &fakeSyncForum{}
+	service.SetSyncForum(forum)
 
-	service.syncAFC(ctx)
+	service.reconcileSync(ctx)
 	if len(forum.sends) != 0 {
 		t.Fatalf("stale snapshot delivered while Telegram input pending: %#v", forum.sends)
 	}
-	poll.threadReads["thread-1"] = afcRunningPayloadWithUsers("thread-1", "turn-1", []afcTestUser{
+	poll.threadReads["thread-1"] = syncRunningPayloadWithUsers("thread-1", "turn-1", []syncTestUser{
 		{id: "user-old", text: "Old Desktop prompt"},
 		{id: "user-tg", text: "Telegram steer"},
 	}, "working")
-	service.syncAFC(ctx)
-	if len(forum.sends) != 1 || !strings.HasPrefix(forum.sends[0].text, afcStatusHeader+" ") {
+	service.reconcileSync(ctx)
+	if len(forum.sends) != 1 || !strings.HasPrefix(forum.sends[0].text, syncStatusHeader+" ") {
 		t.Fatalf("resolved pending input sends=%#v, want status only", forum.sends)
 	}
 }
 
-func TestAFCDirectDeliveryReanchorsSameTurnStatusAtTopicTail(t *testing.T) {
-	service := activeAFCService(t)
+func TestSyncDirectDeliveryReanchorsSameTurnStatusAtTopicTail(t *testing.T) {
+	service := activeSyncService(t)
 	ctx := context.Background()
 	poll := &stubSession{threadReads: map[string]map[string]any{
-		"thread-1": afcRunningPayloadWithCommentary("thread-1", "turn-1", "progress"),
+		"thread-1": syncRunningPayloadWithCommentary("thread-1", "turn-1", "progress"),
 	}}
 	service.mu.Lock()
 	service.poll, service.pollConnected = poll, true
 	service.mu.Unlock()
-	forum := &fakeAFCForum{}
-	service.SetAFCForum(forum)
+	forum := &fakeSyncForum{}
+	service.SetSyncForum(forum)
 
-	service.syncAFC(ctx)
+	service.reconcileSync(ctx)
 	if len(forum.sends) != 1 {
 		t.Fatalf("initial sends=%#v, want one status", forum.sends)
 	}
 	oldStatusID := forum.sends[0].messageID
 	if err := service.RegisterDirectDelivery(ctx, -1001, 11, 501, &DirectResponse{
-		Text:     "AFC input steered to active turn: turn-1",
+		Text:     "Sync input steered to active turn: turn-1",
 		ThreadID: "thread-1",
 		TurnID:   "turn-1",
 	}); err != nil {
@@ -631,29 +631,29 @@ func TestAFCDirectDeliveryReanchorsSameTurnStatusAtTopicTail(t *testing.T) {
 	if len(forum.messageDeletes) != 1 || forum.messageDeletes[0].topicID != 11 || forum.messageDeletes[0].messageID != oldStatusID {
 		t.Fatalf("message deletes=%#v, want old live status %d deleted", forum.messageDeletes, oldStatusID)
 	}
-	topic, err := service.store.GetActiveAFCTopic(ctx, -1001, 11)
+	topic, err := service.store.GetActiveSyncTopic(ctx, -1001, 11)
 	if err != nil || topic == nil || topic.StatusMessageID != newStatusID || topic.StatusTurnID != "turn-1" {
 		t.Fatalf("topic=%#v err=%v, want new status anchor %d", topic, err, newStatusID)
 	}
 }
 
-func TestAFCDirectDeliveryKeepsPreviousTurnStatusHistory(t *testing.T) {
-	service := activeAFCService(t)
+func TestSyncDirectDeliveryKeepsPreviousTurnStatusHistory(t *testing.T) {
+	service := activeSyncService(t)
 	ctx := context.Background()
 	poll := &stubSession{threadReads: map[string]map[string]any{
-		"thread-1": afcRunningPayloadWithCommentary("thread-1", "turn-1", "first progress"),
+		"thread-1": syncRunningPayloadWithCommentary("thread-1", "turn-1", "first progress"),
 	}}
 	service.mu.Lock()
 	service.poll, service.pollConnected = poll, true
 	service.mu.Unlock()
-	forum := &fakeAFCForum{}
-	service.SetAFCForum(forum)
-	service.syncAFC(ctx)
+	forum := &fakeSyncForum{}
+	service.SetSyncForum(forum)
+	service.reconcileSync(ctx)
 	oldStatusID := forum.sends[0].messageID
 
-	poll.threadReads["thread-1"] = afcRunningPayloadWithCommentary("thread-1", "turn-2", "second progress")
+	poll.threadReads["thread-1"] = syncRunningPayloadWithCommentary("thread-1", "turn-2", "second progress")
 	if err := service.RegisterDirectDelivery(ctx, -1001, 11, 502, &DirectResponse{
-		Text: "AFC turn started: turn-2", ThreadID: "thread-1", TurnID: "turn-2",
+		Text: "Sync turn started: turn-2", ThreadID: "thread-1", TurnID: "turn-2",
 	}); err != nil {
 		t.Fatalf("RegisterDirectDelivery failed: %v", err)
 	}
@@ -665,21 +665,21 @@ func TestAFCDirectDeliveryKeepsPreviousTurnStatusHistory(t *testing.T) {
 	}
 }
 
-func TestAFCDirectDeliveryDeleteFailureStillCreatesTailStatus(t *testing.T) {
-	service := activeAFCService(t)
+func TestSyncDirectDeliveryDeleteFailureStillCreatesTailStatus(t *testing.T) {
+	service := activeSyncService(t)
 	ctx := context.Background()
 	poll := &stubSession{threadReads: map[string]map[string]any{
-		"thread-1": afcRunningPayloadWithCommentary("thread-1", "turn-1", "progress"),
+		"thread-1": syncRunningPayloadWithCommentary("thread-1", "turn-1", "progress"),
 	}}
 	service.mu.Lock()
 	service.poll, service.pollConnected = poll, true
 	service.mu.Unlock()
-	forum := &fakeAFCForum{messageDeleteErr: errors.New("delete failed")}
-	service.SetAFCForum(forum)
-	service.syncAFC(ctx)
+	forum := &fakeSyncForum{messageDeleteErr: errors.New("delete failed")}
+	service.SetSyncForum(forum)
+	service.reconcileSync(ctx)
 
 	if err := service.RegisterDirectDelivery(ctx, -1001, 11, 503, &DirectResponse{
-		Text: "AFC input steered to active turn: turn-1", ThreadID: "thread-1", TurnID: "turn-1",
+		Text: "Sync input steered to active turn: turn-1", ThreadID: "thread-1", TurnID: "turn-1",
 	}); err != nil {
 		t.Fatalf("RegisterDirectDelivery failed after best-effort delete: %v", err)
 	}
@@ -688,43 +688,43 @@ func TestAFCDirectDeliveryDeleteFailureStillCreatesTailStatus(t *testing.T) {
 	}
 }
 
-func TestAFCPassiveSyncReconcilesCodexThreadTitleToTopic(t *testing.T) {
-	service := activeAFCService(t)
+func TestSyncPassiveSyncReconcilesCodexThreadTitleToTopic(t *testing.T) {
+	service := activeSyncService(t)
 	ctx := context.Background()
-	payload := afcRunningPayloadWithCommentary("thread-1", "turn-1", "progress")
+	payload := syncRunningPayloadWithCommentary("thread-1", "turn-1", "progress")
 	payload["thread"].(map[string]any)["title"] = "Readable task title"
 	poll := &stubSession{threadReads: map[string]map[string]any{"thread-1": payload}}
 	service.mu.Lock()
 	service.poll, service.pollConnected = poll, true
 	service.mu.Unlock()
-	forum := &fakeAFCForum{}
-	service.SetAFCForum(forum)
+	forum := &fakeSyncForum{}
+	service.SetSyncForum(forum)
 
-	service.syncAFC(ctx)
+	service.reconcileSync(ctx)
 	if len(forum.renames) != 1 || forum.renames[0].topicID != 11 || forum.renames[0].title != "Readable task title" {
 		t.Fatalf("renames=%#v", forum.renames)
 	}
-	topic, err := service.store.GetActiveAFCTopic(ctx, -1001, 11)
+	topic, err := service.store.GetActiveSyncTopic(ctx, -1001, 11)
 	if err != nil || topic == nil || topic.Title != "Readable task title" {
 		t.Fatalf("topic=%#v err=%v", topic, err)
 	}
 }
 
-func TestAFCTopicRenameReanchorsActiveStatusWithoutLosingAggregate(t *testing.T) {
-	service := activeAFCService(t)
+func TestSyncTopicRenameReanchorsActiveStatusWithoutLosingAggregate(t *testing.T) {
+	service := activeSyncService(t)
 	ctx := context.Background()
 	now := time.Date(2026, time.August, 24, 12, 0, 0, 0, time.UTC)
 	service.now = func() time.Time { return now }
-	payload := afcRunningPayloadWithCommentaries("thread-1", "turn-1", "first block", "second block", "third block")
+	payload := syncRunningPayloadWithCommentaries("thread-1", "turn-1", "first block", "second block", "third block")
 	payload["thread"].(map[string]any)["title"] = "Topic"
 	poll := &stubSession{threadReads: map[string]map[string]any{"thread-1": payload}}
 	service.mu.Lock()
 	service.poll, service.pollConnected = poll, true
 	service.mu.Unlock()
-	forum := &fakeAFCForum{}
-	service.SetAFCForum(forum)
+	forum := &fakeSyncForum{}
+	service.SetSyncForum(forum)
 
-	service.syncAFC(ctx)
+	service.reconcileSync(ctx)
 	if len(forum.sends) != 1 {
 		t.Fatalf("initial sends=%#v, want one aggregate status", forum.sends)
 	}
@@ -739,7 +739,7 @@ func TestAFCTopicRenameReanchorsActiveStatusWithoutLosingAggregate(t *testing.T)
 	}
 
 	payload["thread"].(map[string]any)["title"] = "Renamed task"
-	service.syncAFC(ctx)
+	service.reconcileSync(ctx)
 
 	if len(forum.renames) != 1 || forum.renames[0].title != "Renamed task" {
 		t.Fatalf("renames=%#v", forum.renames)
@@ -776,30 +776,30 @@ func TestAFCTopicRenameReanchorsActiveStatusWithoutLosingAggregate(t *testing.T)
 			t.Fatalf("detail item %d changed: before=%#v after=%#v", index, beforeSnapshot.DetailItems[index], afterSnapshot.DetailItems[index])
 		}
 	}
-	topic, err := service.store.GetActiveAFCTopic(ctx, -1001, 11)
+	topic, err := service.store.GetActiveSyncTopic(ctx, -1001, 11)
 	if err != nil || topic == nil || topic.StatusMessageID != forum.sends[1].messageID || topic.StatusTurnID != "turn-1" {
 		t.Fatalf("topic=%#v err=%v, want reanchored turn-1 status", topic, err)
 	}
 }
 
-func TestAFCTopicRenameKeepsPreviousTurnStatusHistory(t *testing.T) {
-	service := activeAFCService(t)
+func TestSyncTopicRenameKeepsPreviousTurnStatusHistory(t *testing.T) {
+	service := activeSyncService(t)
 	ctx := context.Background()
-	payload := afcRunningPayloadWithCommentary("thread-1", "turn-1", "first turn")
+	payload := syncRunningPayloadWithCommentary("thread-1", "turn-1", "first turn")
 	payload["thread"].(map[string]any)["title"] = "Topic"
 	poll := &stubSession{threadReads: map[string]map[string]any{"thread-1": payload}}
 	service.mu.Lock()
 	service.poll, service.pollConnected = poll, true
 	service.mu.Unlock()
-	forum := &fakeAFCForum{}
-	service.SetAFCForum(forum)
+	forum := &fakeSyncForum{}
+	service.SetSyncForum(forum)
 
-	service.syncAFC(ctx)
+	service.reconcileSync(ctx)
 	oldStatusID := forum.sends[0].messageID
-	secondTurn := afcRunningPayloadWithCommentary("thread-1", "turn-2", "second turn")
+	secondTurn := syncRunningPayloadWithCommentary("thread-1", "turn-2", "second turn")
 	secondTurn["thread"].(map[string]any)["title"] = "Renamed task"
 	poll.threadReads["thread-1"] = secondTurn
-	service.syncAFC(ctx)
+	service.reconcileSync(ctx)
 
 	if len(forum.renames) != 1 || len(forum.messageDeletes) != 0 {
 		t.Fatalf("renames=%#v deletes=%#v, want rename without deleting previous turn", forum.renames, forum.messageDeletes)
@@ -807,48 +807,48 @@ func TestAFCTopicRenameKeepsPreviousTurnStatusHistory(t *testing.T) {
 	if len(forum.sends) != 2 || forum.sends[1].messageID == oldStatusID || !strings.Contains(forum.sends[1].text, "second turn") {
 		t.Fatalf("sends=%#v, want retained turn-1 status and fresh turn-2 status", forum.sends)
 	}
-	topic, err := service.store.GetActiveAFCTopic(ctx, -1001, 11)
+	topic, err := service.store.GetActiveSyncTopic(ctx, -1001, 11)
 	if err != nil || topic == nil || topic.StatusMessageID != forum.sends[1].messageID || topic.StatusTurnID != "turn-2" {
 		t.Fatalf("topic=%#v err=%v, want turn-2 status anchor", topic, err)
 	}
 }
 
-func TestAFCPresentationIgnoresStalePollTurnWhileAFCWriterIsActive(t *testing.T) {
-	service := activeAFCService(t)
+func TestSyncPresentationIgnoresStalePollTurnWhileSyncWriterIsActive(t *testing.T) {
+	service := activeSyncService(t)
 	ctx := context.Background()
-	writer := &afcWriterSession{stubSession: &stubSession{threadReads: map[string]map[string]any{
-		"thread-1": afcRunningPayloadWithCommentary("thread-1", "started-turn", "live progress"),
+	writer := &syncWriterSession{stubSession: &stubSession{threadReads: map[string]map[string]any{
+		"thread-1": syncRunningPayloadWithCommentary("thread-1", "started-turn", "live progress"),
 	}}, events: make(chan appserver.Event, 2)}
 	service.liveFactory = func() Session { return writer }
-	forum := &fakeAFCForum{}
-	service.SetAFCForum(forum)
+	forum := &fakeSyncForum{}
+	service.SetSyncForum(forum)
 	if _, err := service.HandleMessageWithID(ctx, -1001, 11, 501, 123456789, "one", 0); err != nil {
 		t.Fatal(err)
 	}
-	service.handleAFCWriterEvent(ctx, writer, appserver.Event{Method: "item/updated", Params: map[string]any{
+	service.handleSyncWriterEvent(ctx, writer, appserver.Event{Method: "item/updated", Params: map[string]any{
 		"threadId": "thread-1", "turnId": "started-turn",
-	}}, service.afcWriter.Snapshot().Generation)
+	}}, service.syncWriter.Snapshot().Generation)
 	if len(forum.sends) != 1 || !strings.Contains(forum.sends[0].text, "live progress") {
 		t.Fatalf("live sends=%#v", forum.sends)
 	}
 
 	service.mu.Lock()
 	service.poll = &stubSession{threadReads: map[string]map[string]any{
-		"thread-1": afcRunningPayloadWithCommentary("thread-1", "older-turn", "stale progress"),
+		"thread-1": syncRunningPayloadWithCommentary("thread-1", "older-turn", "stale progress"),
 	}}
 	service.pollConnected = true
 	service.mu.Unlock()
-	service.syncAFC(ctx)
+	service.reconcileSync(ctx)
 	if len(forum.sends) != 1 || len(forum.edits) != 0 {
 		t.Fatalf("stale poll mutated active presentation: sends=%#v edits=%#v", forum.sends, forum.edits)
 	}
-	topic, err := service.store.GetActiveAFCTopic(ctx, -1001, 11)
+	topic, err := service.store.GetActiveSyncTopic(ctx, -1001, 11)
 	if err != nil || topic == nil || topic.StatusTurnID != "started-turn" {
 		t.Fatalf("topic=%#v err=%v", topic, err)
 	}
 }
 
-func TestAFCStatusUsesCompactTimingInHeader(t *testing.T) {
+func TestSyncStatusUsesCompactTimingInHeader(t *testing.T) {
 	t.Parallel()
 
 	startedAt := time.Date(2026, time.August, 15, 12, 0, 0, 0, time.UTC)
@@ -858,37 +858,37 @@ func TestAFCStatusUsesCompactTimingInHeader(t *testing.T) {
 		LatestTurnStatus:    "inProgress",
 		LatestTurnStartedAt: startedAt.Format(time.RFC3339Nano),
 	}
-	if got := renderAFCStatusAt(active, startedAt.Add(8*time.Second)).Text; got != "⏱ [Status] inProgress · 8s" {
+	if got := renderSyncStatusAt(active, startedAt.Add(8*time.Second)).Text; got != "⏱ [Status] inProgress · 8s" {
 		t.Fatalf("active status = %q, want compact elapsed header", got)
 	}
 
 	active.LatestTurnStatus = "completed"
 	active.LatestTurnUpdatedAt = startedAt.Add(2 * time.Minute).Format(time.RFC3339Nano)
-	if got := renderAFCStatusAt(active, startedAt.Add(5*time.Minute)).Text; got != "⏱ [Status] completed · 2m" {
+	if got := renderSyncStatusAt(active, startedAt.Add(5*time.Minute)).Text; got != "⏱ [Status] completed · 2m" {
 		t.Fatalf("terminal status = %q, want compact duration header", got)
 	}
 }
 
-func TestAFCStatusAggregatesCommentaryBlocksInOneMessage(t *testing.T) {
-	service := activeAFCService(t)
+func TestSyncStatusAggregatesCommentaryBlocksInOneMessage(t *testing.T) {
+	service := activeSyncService(t)
 	ctx := context.Background()
 	poll := &stubSession{threadReads: map[string]map[string]any{
-		"thread-1": afcRunningPayloadWithCommentaries("thread-1", "turn-1", "first block"),
+		"thread-1": syncRunningPayloadWithCommentaries("thread-1", "turn-1", "first block"),
 	}}
 	service.mu.Lock()
 	service.poll, service.pollConnected = poll, true
 	service.mu.Unlock()
-	forum := &fakeAFCForum{}
-	service.SetAFCForum(forum)
+	forum := &fakeSyncForum{}
+	service.SetSyncForum(forum)
 
-	service.syncAFC(ctx)
+	service.reconcileSync(ctx)
 	if len(forum.sends) != 1 || !strings.Contains(forum.sends[0].text, "first block") {
 		t.Fatalf("initial status sends=%#v, want first commentary block", forum.sends)
 	}
 	statusID := forum.sends[0].messageID
 
-	poll.threadReads["thread-1"] = afcRunningPayloadWithCommentaries("thread-1", "turn-1", "first block", "newest block")
-	service.syncAFC(ctx)
+	poll.threadReads["thread-1"] = syncRunningPayloadWithCommentaries("thread-1", "turn-1", "first block", "newest block")
+	service.reconcileSync(ctx)
 	if len(forum.sends) != 1 {
 		t.Fatalf("new commentary created another status: %#v", forum.sends)
 	}
@@ -901,7 +901,7 @@ func TestAFCStatusAggregatesCommentaryBlocksInOneMessage(t *testing.T) {
 	}
 }
 
-func TestAFCStatusUpdatesSameBlockWithoutDuplicatingAndExcludesTools(t *testing.T) {
+func TestSyncStatusUpdatesSameBlockWithoutDuplicatingAndExcludesTools(t *testing.T) {
 	t.Parallel()
 
 	startedAt := time.Date(2026, time.August, 17, 12, 0, 0, 0, time.UTC)
@@ -918,7 +918,7 @@ func TestAFCStatusUpdatesSameBlockWithoutDuplicatingAndExcludesTools(t *testing.
 		},
 	}
 
-	message := renderAFCStatusAt(snapshot, startedAt.Add(10*time.Second))
+	message := renderSyncStatusAt(snapshot, startedAt.Add(10*time.Second))
 	if strings.Count(message.Text, "Блок 1 ·") != 1 || strings.Count(message.Text, "Expanded reasoning") != 1 {
 		t.Fatalf("status duplicated updated block: %q", message.Text)
 	}
@@ -927,7 +927,7 @@ func TestAFCStatusUpdatesSameBlockWithoutDuplicatingAndExcludesTools(t *testing.
 	}
 }
 
-func TestAFCStatusBlockDurationsPartitionOverallDuration(t *testing.T) {
+func TestSyncStatusBlockDurationsPartitionOverallDuration(t *testing.T) {
 	t.Parallel()
 
 	startedAt := time.Date(2026, time.August, 17, 12, 0, 0, 0, time.UTC)
@@ -943,7 +943,7 @@ func TestAFCStatusBlockDurationsPartitionOverallDuration(t *testing.T) {
 		},
 	}
 
-	message := renderAFCStatusAt(snapshot, startedAt.Add(30*time.Second))
+	message := renderSyncStatusAt(snapshot, startedAt.Add(30*time.Second))
 	for _, want := range []string{
 		"⏱ [Status] inProgress · 30s",
 		"Блок 1 · 10s\none",
@@ -956,7 +956,7 @@ func TestAFCStatusBlockDurationsPartitionOverallDuration(t *testing.T) {
 	}
 }
 
-func TestAFCCompletedStatusCollapsesBodyAndKeepsHeaderVisible(t *testing.T) {
+func TestSyncCompletedStatusCollapsesBodyAndKeepsHeaderVisible(t *testing.T) {
 	t.Parallel()
 
 	startedAt := time.Date(2026, time.August, 17, 12, 0, 0, 0, time.UTC)
@@ -971,18 +971,18 @@ func TestAFCCompletedStatusCollapsesBodyAndKeepsHeaderVisible(t *testing.T) {
 		},
 	}
 
-	message := renderAFCStatusAt(snapshot, startedAt.Add(time.Minute))
+	message := renderSyncStatusAt(snapshot, startedAt.Add(time.Minute))
 	if !strings.HasPrefix(message.Text, "⏱ [Status] completed · 10s\n") || len(message.Entities) != 1 {
 		t.Fatalf("terminal message=%#v", message)
 	}
 	entity := message.Entities[0]
-	wantOffset := afcUTF16Len("⏱ [Status] completed · 10s\n")
-	if entity.Type != "expandable_blockquote" || entity.Offset != wantOffset || entity.Length != afcUTF16Len(message.Text)-wantOffset {
+	wantOffset := syncUTF16Len("⏱ [Status] completed · 10s\n")
+	if entity.Type != "expandable_blockquote" || entity.Offset != wantOffset || entity.Length != syncUTF16Len(message.Text)-wantOffset {
 		t.Fatalf("terminal entity=%#v text=%q", entity, message.Text)
 	}
 }
 
-func TestAFCStatusTrimsOldLinesAndPreservesLatestTail(t *testing.T) {
+func TestSyncStatusTrimsOldLinesAndPreservesLatestTail(t *testing.T) {
 	t.Parallel()
 
 	startedAt := time.Date(2026, time.August, 17, 12, 0, 0, 0, time.UTC)
@@ -997,58 +997,58 @@ func TestAFCStatusTrimsOldLinesAndPreservesLatestTail(t *testing.T) {
 		},
 	}
 
-	message := renderAFCStatusAt(snapshot, startedAt.Add(2*time.Second))
-	if afcUTF16Len(message.Text) > 4096 || !strings.HasPrefix(message.Text, "⏱ [Status] inProgress · 2s\n") ||
+	message := renderSyncStatusAt(snapshot, startedAt.Add(2*time.Second))
+	if syncUTF16Len(message.Text) > 4096 || !strings.HasPrefix(message.Text, "⏱ [Status] inProgress · 2s\n") ||
 		!strings.Contains(message.Text, "… удалено строк:") || !strings.HasSuffix(message.Text, "LATEST STATUS TAIL") {
-		t.Fatalf("trimmed status length=%d text tail=%q", afcUTF16Len(message.Text), afcUTF16Suffix(message.Text, 200))
+		t.Fatalf("trimmed status length=%d text tail=%q", syncUTF16Len(message.Text), syncUTF16Suffix(message.Text, 200))
 	}
 }
 
-func TestAFCPassiveSyncTicksElapsedFromStableTurnStart(t *testing.T) {
-	service := activeAFCService(t)
+func TestSyncPassiveSyncTicksElapsedFromStableTurnStart(t *testing.T) {
+	service := activeSyncService(t)
 	ctx := context.Background()
 	now := time.Date(2026, time.August, 15, 12, 0, 0, 0, time.UTC)
 	service.now = func() time.Time { return now }
 	service.mu.Lock()
 	service.poll = &stubSession{threadReads: map[string]map[string]any{
-		"thread-1": afcRunningPayload("thread-1", "turn-1"),
+		"thread-1": syncRunningPayload("thread-1", "turn-1"),
 	}}
 	service.pollConnected = true
 	service.mu.Unlock()
-	forum := &fakeAFCForum{}
-	service.SetAFCForum(forum)
+	forum := &fakeSyncForum{}
+	service.SetSyncForum(forum)
 
-	service.syncAFC(ctx)
-	if len(forum.sends) != 1 || !strings.HasPrefix(forum.sends[0].text, afcStatusHeader+" inProgress · 0s") {
+	service.reconcileSync(ctx)
+	if len(forum.sends) != 1 || !strings.HasPrefix(forum.sends[0].text, syncStatusHeader+" inProgress · 0s") {
 		t.Fatalf("initial status=%#v, want observed start in compact header", forum.sends)
 	}
 
 	now = now.Add(5 * time.Second)
-	service.syncAFC(ctx)
-	if len(forum.edits) != 1 || !strings.HasPrefix(forum.edits[0].text, afcStatusHeader+" inProgress · 5s") {
+	service.reconcileSync(ctx)
+	if len(forum.edits) != 1 || !strings.HasPrefix(forum.edits[0].text, syncStatusHeader+" inProgress · 5s") {
 		t.Fatalf("elapsed edits=%#v, want elapsed-only edit from stable start", forum.edits)
 	}
 }
 
-func TestAFCPassiveSyncFreezesCompletedDuration(t *testing.T) {
-	service := activeAFCService(t)
+func TestSyncPassiveSyncFreezesCompletedDuration(t *testing.T) {
+	service := activeSyncService(t)
 	ctx := context.Background()
 	now := time.Date(2026, time.August, 17, 12, 0, 0, 0, time.UTC)
 	service.now = func() time.Time { return now }
 	poll := &stubSession{threadReads: map[string]map[string]any{
-		"thread-1": afcRunningPayloadWithCommentary("thread-1", "turn-1", "working"),
+		"thread-1": syncRunningPayloadWithCommentary("thread-1", "turn-1", "working"),
 	}}
 	service.mu.Lock()
 	service.poll, service.pollConnected = poll, true
 	service.mu.Unlock()
-	forum := &fakeAFCForum{}
-	service.SetAFCForum(forum)
+	forum := &fakeSyncForum{}
+	service.SetSyncForum(forum)
 
-	service.syncAFC(ctx)
+	service.reconcileSync(ctx)
 	now = now.Add(10 * time.Second)
-	poll.threadReads["thread-1"] = afcCompletedPayload("thread-1", "turn-1", "done")
-	service.syncAFC(ctx)
-	if len(forum.edits) != 1 || !strings.HasPrefix(forum.edits[0].text, afcStatusHeader+" completed · 10s") {
+	poll.threadReads["thread-1"] = syncCompletedPayload("thread-1", "turn-1", "done")
+	service.reconcileSync(ctx)
+	if len(forum.edits) != 1 || !strings.HasPrefix(forum.edits[0].text, syncStatusHeader+" completed · 10s") {
 		t.Fatalf("terminal edits=%#v, want compact frozen duration", forum.edits)
 	}
 	if strings.Contains(forum.edits[0].text, "Run duration:") {
@@ -1056,31 +1056,31 @@ func TestAFCPassiveSyncFreezesCompletedDuration(t *testing.T) {
 	}
 
 	now = now.Add(5 * time.Minute)
-	service.syncAFC(ctx)
+	service.reconcileSync(ctx)
 	if len(forum.edits) != 1 {
 		t.Fatalf("repeated terminal poll changed frozen status: %#v", forum.edits)
 	}
 }
 
-func TestAFCPassiveSyncRetainsCollapsedAggregateBeforeFinal(t *testing.T) {
-	service := activeAFCService(t)
+func TestSyncPassiveSyncRetainsCollapsedAggregateBeforeFinal(t *testing.T) {
+	service := activeSyncService(t)
 	ctx := context.Background()
 	now := time.Date(2026, time.August, 17, 12, 0, 0, 0, time.UTC)
 	service.now = func() time.Time { return now }
 	poll := &stubSession{threadReads: map[string]map[string]any{
-		"thread-1": afcRunningPayloadWithCommentaries("thread-1", "turn-1", "first block", "second block"),
+		"thread-1": syncRunningPayloadWithCommentaries("thread-1", "turn-1", "first block", "second block"),
 	}}
 	service.mu.Lock()
 	service.poll, service.pollConnected = poll, true
 	service.mu.Unlock()
-	forum := &fakeAFCForum{}
-	service.SetAFCForum(forum)
+	forum := &fakeSyncForum{}
+	service.SetSyncForum(forum)
 
-	service.syncAFC(ctx)
+	service.reconcileSync(ctx)
 	statusID := forum.sends[0].messageID
 	now = now.Add(10 * time.Second)
-	poll.threadReads["thread-1"] = afcCompletedPayloadWithCommentaries("thread-1", "turn-1", "done", "first block", "second block")
-	service.syncAFC(ctx)
+	poll.threadReads["thread-1"] = syncCompletedPayloadWithCommentaries("thread-1", "turn-1", "done", "first block", "second block")
+	service.reconcileSync(ctx)
 
 	if len(forum.edits) != 1 || forum.edits[0].messageID != statusID || len(forum.edits[0].message.Entities) != 1 {
 		t.Fatalf("terminal status edits=%#v, want retained collapsed status %d", forum.edits, statusID)
@@ -1088,73 +1088,73 @@ func TestAFCPassiveSyncRetainsCollapsedAggregateBeforeFinal(t *testing.T) {
 	if !strings.Contains(forum.edits[0].text, "first block") || !strings.Contains(forum.edits[0].text, "second block") {
 		t.Fatalf("terminal status lost aggregate: %q", forum.edits[0].text)
 	}
-	if len(forum.sends) != 2 || forum.sends[1].text != afcFinalHeader+"\ndone" {
+	if len(forum.sends) != 2 || forum.sends[1].text != syncFinalHeader+"\ndone" {
 		t.Fatalf("sends=%#v, want separate final after retained status", forum.sends)
 	}
-	topic, err := service.store.GetActiveAFCTopic(ctx, -1001, 11)
+	topic, err := service.store.GetActiveSyncTopic(ctx, -1001, 11)
 	if err != nil || topic == nil || topic.StatusMessageID != statusID || topic.LastFinalFP == "" {
 		t.Fatalf("topic=%#v err=%v, want retained status and delivered final", topic, err)
 	}
 }
 
-func TestAFCTelegramOriginHotPollRefreshesAndStopsAtTerminal(t *testing.T) {
-	service := activeAFCService(t)
+func TestSyncTelegramOriginHotPollRefreshesAndStopsAtTerminal(t *testing.T) {
+	service := activeSyncService(t)
 	ctx := context.Background()
 	writer := &stubSession{}
 	service.liveFactory = func() Session { return writer }
-	forum := &fakeAFCForum{}
-	service.SetAFCForum(forum)
+	forum := &fakeSyncForum{}
+	service.SetSyncForum(forum)
 	if _, err := service.HandleMessageWithID(ctx, -1001, 11, 501, 123456789, "one", 0); err != nil {
 		t.Fatal(err)
 	}
 	poll := &stubSession{threadReads: map[string]map[string]any{
-		"thread-1": afcRunningPayloadWithCommentary("thread-1", "started-turn", "hot progress"),
+		"thread-1": syncRunningPayloadWithCommentary("thread-1", "started-turn", "hot progress"),
 	}}
 	service.mu.Lock()
 	service.poll, service.pollConnected = poll, true
 	service.mu.Unlock()
 
-	if keepGoing := service.afcTelegramOriginHotPollOnce(ctx, "thread-1", "started-turn"); !keepGoing {
+	if keepGoing := service.syncTelegramOriginHotPollOnce(ctx, "thread-1", "started-turn"); !keepGoing {
 		t.Fatal("hot poll stopped before terminal state")
 	}
 	if len(forum.sends) != 1 || !strings.Contains(forum.sends[0].text, "hot progress") {
 		t.Fatalf("running hot-poll delivery=%#v", forum.sends)
 	}
 
-	poll.threadReads["thread-1"] = afcInterruptedPayload("thread-1", "started-turn")
-	if keepGoing := service.afcTelegramOriginHotPollOnce(ctx, "thread-1", "started-turn"); !keepGoing {
+	poll.threadReads["thread-1"] = syncInterruptedPayload("thread-1", "started-turn")
+	if keepGoing := service.syncTelegramOriginHotPollOnce(ctx, "thread-1", "started-turn"); !keepGoing {
 		t.Fatal("hot poll stopped on transient interrupted evidence")
 	}
-	if snapshot := service.afcWriter.Snapshot(); snapshot.State != appserver.WriterRunning || snapshot.Active != 1 {
+	if snapshot := service.syncWriter.Snapshot(); snapshot.State != appserver.WriterRunning || snapshot.Active != 1 {
 		t.Fatalf("transient interrupted hot poll released writer: %#v", snapshot)
 	}
 
-	poll.threadReads["thread-1"] = afcCompletedPayload("thread-1", "started-turn", "done")
-	if keepGoing := service.afcTelegramOriginHotPollOnce(ctx, "thread-1", "started-turn"); keepGoing {
+	poll.threadReads["thread-1"] = syncCompletedPayload("thread-1", "started-turn", "done")
+	if keepGoing := service.syncTelegramOriginHotPollOnce(ctx, "thread-1", "started-turn"); keepGoing {
 		t.Fatal("hot poll continued after terminal state")
 	}
-	if snapshot := service.afcWriter.Snapshot(); snapshot.State != appserver.WriterStopped || snapshot.Active != 0 {
+	if snapshot := service.syncWriter.Snapshot(); snapshot.State != appserver.WriterStopped || snapshot.Active != 0 {
 		t.Fatalf("terminal hot poll did not release writer: %#v", snapshot)
 	}
 }
 
-func TestAFCLiveToolOverlaySurvivesLaggingThreadReadWithoutEnteringAggregateStatus(t *testing.T) {
-	service := activeAFCService(t)
+func TestSyncLiveToolOverlaySurvivesLaggingThreadReadWithoutEnteringAggregateStatus(t *testing.T) {
+	service := activeSyncService(t)
 	ctx := context.Background()
 	fixedNow := time.Date(2026, time.August, 15, 12, 0, 0, 0, time.UTC)
 	service.now = func() time.Time { return fixedNow }
 	reads := map[string]map[string]any{
-		"thread-1": afcRunningPayload("thread-1", "started-turn"),
+		"thread-1": syncRunningPayload("thread-1", "started-turn"),
 	}
-	writer := &afcWriterSession{stubSession: &stubSession{threadReads: reads}, events: make(chan appserver.Event, 2)}
+	writer := &syncWriterSession{stubSession: &stubSession{threadReads: reads}, events: make(chan appserver.Event, 2)}
 	service.liveFactory = func() Session { return writer }
-	forum := &fakeAFCForum{}
-	service.SetAFCForum(forum)
+	forum := &fakeSyncForum{}
+	service.SetSyncForum(forum)
 	if _, err := service.HandleMessageWithID(ctx, -1001, 11, 501, 123456789, "one", 0); err != nil {
 		t.Fatal(err)
 	}
 
-	service.handleAFCWriterEvent(ctx, writer, appserver.Event{
+	service.handleSyncWriterEvent(ctx, writer, appserver.Event{
 		Channel: "notification",
 		Method:  "item/started",
 		Params: map[string]any{
@@ -1167,7 +1167,7 @@ func TestAFCLiveToolOverlaySurvivesLaggingThreadReadWithoutEnteringAggregateStat
 				"status":  "running",
 			},
 		},
-	}, service.afcWriter.Snapshot().Generation)
+	}, service.syncWriter.Snapshot().Generation)
 	if len(forum.sends) != 1 || strings.Contains(forum.sends[0].text, "sleep 20") {
 		t.Fatalf("live tool entered aggregate status: %#v", forum.sends)
 	}
@@ -1183,7 +1183,7 @@ func TestAFCLiveToolOverlaySurvivesLaggingThreadReadWithoutEnteringAggregateStat
 	service.mu.Lock()
 	service.poll, service.pollConnected = &stubSession{threadReads: reads}, true
 	service.mu.Unlock()
-	service.syncAFC(ctx)
+	service.reconcileSync(ctx)
 	stored, err = service.store.GetSnapshot(ctx, "thread-1")
 	if err != nil || stored == nil {
 		t.Fatalf("stored snapshot after lagging poll=%#v err=%v", stored, err)
@@ -1194,26 +1194,26 @@ func TestAFCLiveToolOverlaySurvivesLaggingThreadReadWithoutEnteringAggregateStat
 	}
 }
 
-func TestAFCOffMarksOffBeforeCleanupAndDoesNotRestoreLegacy(t *testing.T) {
+func TestSyncOffMarksOffBeforeCleanupAndDoesNotRestoreLegacy(t *testing.T) {
 	service := newTestService(t)
-	service.cfg.AFCGroupID = -1001
+	service.cfg.SyncGroupID = -1001
 	ctx := context.Background()
-	if err := service.store.BeginAFCActivation(ctx, "s", -1001); err != nil {
+	if err := service.store.BeginSyncActivation(ctx, "s", -1001); err != nil {
 		t.Fatal(err)
 	}
-	if err := service.store.UpsertAFCTopic(ctx, model.AFCTopic{SessionID: "s", ChatID: -1001, TopicID: 11, ThreadID: "thread-1", TelegramState: model.AFCTopicConnected}); err != nil {
+	if err := service.store.UpsertSyncTopic(ctx, model.SyncTopic{SessionID: "s", ChatID: -1001, TopicID: 11, ThreadID: "thread-1", TelegramState: model.SyncTopicConnected}); err != nil {
 		t.Fatal(err)
 	}
-	if err := service.store.FinishAFCActivation(ctx, "s", `{}`, true); err != nil {
+	if err := service.store.FinishSyncActivation(ctx, "s", `{}`, true); err != nil {
 		t.Fatal(err)
 	}
-	forum := &fakeAFCForum{onDelete: func() {
-		state, _ := service.store.GetAFCState(ctx)
-		if state.State != model.AFCStateOff {
+	forum := &fakeSyncForum{onDelete: func() {
+		state, _ := service.store.GetSyncState(ctx)
+		if state.State != model.SyncStateOff {
 			t.Fatalf("delete observed state %q", state.State)
 		}
 	}}
-	service.SetAFCForum(forum)
+	service.SetSyncForum(forum)
 	response, err := service.HandleMessage(ctx, -1001, 1, 123456789, "/sync off", 0)
 	if err != nil || response == nil {
 		t.Fatalf("response=%#v err=%v", response, err)
@@ -1223,15 +1223,15 @@ func TestAFCOffMarksOffBeforeCleanupAndDoesNotRestoreLegacy(t *testing.T) {
 	}
 }
 
-func TestAFCOffCleansReadyDraftTopic(t *testing.T) {
-	service := activeAFCService(t)
+func TestSyncOffCleansReadyDraftTopic(t *testing.T) {
+	service := activeSyncService(t)
 	ctx := context.Background()
-	if err := service.store.CreateAFCTopicDraft(ctx, model.AFCTopicDraft{SessionID: "s", ChatID: -1001, TopicID: 21,
+	if err := service.store.CreateSyncTopicDraft(ctx, model.SyncTopicDraft{SessionID: "s", ChatID: -1001, TopicID: 21,
 		Rank: 3, Title: "New task", CWD: "/tmp/project"}); err != nil {
 		t.Fatal(err)
 	}
-	forum := &fakeAFCForum{}
-	service.SetAFCForum(forum)
+	forum := &fakeSyncForum{}
+	service.SetSyncForum(forum)
 	response, err := service.HandleMessageWithID(ctx, -1001, 1, 908, 123456789, "/sync off", 0)
 	if err != nil || response == nil || !strings.Contains(response.Text, "deleted 3 topic") {
 		t.Fatalf("response=%#v err=%v deletes=%#v", response, err, forum.deletes)
@@ -1239,24 +1239,24 @@ func TestAFCOffCleansReadyDraftTopic(t *testing.T) {
 	if len(forum.deletes) != 3 {
 		t.Fatalf("deletes=%#v", forum.deletes)
 	}
-	drafts, err := service.store.ListAFCTopicDrafts(ctx, "s")
+	drafts, err := service.store.ListSyncTopicDrafts(ctx, "s")
 	if err != nil || len(drafts) != 0 {
 		t.Fatalf("drafts=%#v err=%v", drafts, err)
 	}
 }
 
-func TestAFCSafeOffRefusesStartingDraft(t *testing.T) {
-	service := activeAFCService(t)
+func TestSyncSafeOffRefusesStartingDraft(t *testing.T) {
+	service := activeSyncService(t)
 	ctx := context.Background()
-	if err := service.store.CreateAFCTopicDraft(ctx, model.AFCTopicDraft{SessionID: "s", ChatID: -1001, TopicID: 21,
+	if err := service.store.CreateSyncTopicDraft(ctx, model.SyncTopicDraft{SessionID: "s", ChatID: -1001, TopicID: 21,
 		Rank: 3, Title: "New task", CWD: "/tmp/project"}); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, _, err := service.store.ClaimAFCTopicDraftMessage(ctx, -1001, 21, 909); err != nil {
+	if _, _, _, err := service.store.ClaimSyncTopicDraftMessage(ctx, -1001, 21, 909); err != nil {
 		t.Fatal(err)
 	}
-	forum := &fakeAFCForum{}
-	service.SetAFCForum(forum)
+	forum := &fakeSyncForum{}
+	service.SetSyncForum(forum)
 	response, err := service.HandleMessageWithID(ctx, -1001, 1, 910, 123456789, "/sync off", 0)
 	if err != nil || response == nil || !strings.Contains(response.Text, "off refused") || !strings.Contains(response.Text, "New task") {
 		t.Fatalf("response=%#v err=%v", response, err)
@@ -1266,29 +1266,29 @@ func TestAFCSafeOffRefusesStartingDraft(t *testing.T) {
 	}
 }
 
-func TestAFCDraftRejectsSecondMessageFromCurrentDurableState(t *testing.T) {
-	service := activeAFCService(t)
+func TestSyncDraftRejectsSecondMessageFromCurrentDurableState(t *testing.T) {
+	service := activeSyncService(t)
 	ctx := context.Background()
-	draft := model.AFCTopicDraft{SessionID: "s", ChatID: -1001, TopicID: 21, Rank: 3, Title: "New task", CWD: "/tmp/project"}
-	if err := service.store.CreateAFCTopicDraft(ctx, draft); err != nil {
+	draft := model.SyncTopicDraft{SessionID: "s", ChatID: -1001, TopicID: 21, Rank: 3, Title: "New task", CWD: "/tmp/project"}
+	if err := service.store.CreateSyncTopicDraft(ctx, draft); err != nil {
 		t.Fatal(err)
 	}
-	stale, err := service.store.GetActiveAFCTopicDraft(ctx, -1001, 21)
-	if err != nil || stale == nil || stale.State != model.AFCDraftReady {
+	stale, err := service.store.GetActiveSyncTopicDraft(ctx, -1001, 21)
+	if err != nil || stale == nil || stale.State != model.SyncDraftReady {
 		t.Fatalf("stale=%#v err=%v", stale, err)
 	}
-	if _, _, _, err := service.store.ClaimAFCTopicDraftMessage(ctx, -1001, 21, 911); err != nil {
+	if _, _, _, err := service.store.ClaimSyncTopicDraftMessage(ctx, -1001, 21, 911); err != nil {
 		t.Fatal(err)
 	}
-	response, err := service.handleAFCDraftMessage(ctx, *stale, 912, "second message")
+	response, err := service.handleSyncDraftMessage(ctx, *stale, 912, "second message")
 	if err != nil || response == nil || !strings.Contains(response.Text, "already starting") {
 		t.Fatalf("response=%#v err=%v", response, err)
 	}
 }
 
-func TestAFCConcurrentTopicsShareWriterAndDuplicateDoesNotReplay(t *testing.T) {
-	service := activeAFCService(t)
-	writer := &afcWriterSession{stubSession: &stubSession{}, events: make(chan appserver.Event, 8)}
+func TestSyncConcurrentTopicsShareWriterAndDuplicateDoesNotReplay(t *testing.T) {
+	service := activeSyncService(t)
+	writer := &syncWriterSession{stubSession: &stubSession{}, events: make(chan appserver.Event, 8)}
 	service.liveFactory = func() Session { return writer }
 	ctx := context.Background()
 
@@ -1321,14 +1321,14 @@ func TestAFCConcurrentTopicsShareWriterAndDuplicateDoesNotReplay(t *testing.T) {
 	if writer.turnStartCalls[0].message != "first prompt" || writer.turnStartCalls[1].message != "parallel prompt" {
 		t.Fatalf("prompts=%#v", writer.turnStartCalls)
 	}
-	snapshot := service.afcWriter.Snapshot()
+	snapshot := service.syncWriter.Snapshot()
 	if snapshot.Active != 2 || snapshot.Generation == 0 {
 		t.Fatalf("writer snapshot=%#v", snapshot)
 	}
 }
 
-func TestAFCActiveTopicMessageSteersCurrentTelegramTurn(t *testing.T) {
-	service := activeAFCService(t)
+func TestSyncActiveTopicMessageSteersCurrentTelegramTurn(t *testing.T) {
+	service := activeSyncService(t)
 	writer := &stubSession{}
 	service.liveFactory = func() Session { return writer }
 	ctx := context.Background()
@@ -1346,14 +1346,14 @@ func TestAFCActiveTopicMessageSteersCurrentTelegramTurn(t *testing.T) {
 	if len(writer.turnStartCalls) != 1 {
 		t.Fatalf("turn starts=%#v, want only initial turn", writer.turnStartCalls)
 	}
-	topic, err := service.store.GetActiveAFCTopic(ctx, -1001, 11)
-	if err != nil || topic == nil || topic.PendingTelegramTurnID != "started-turn" || topic.PendingTelegramUserFP != afcUserTextFingerprint("started-turn", "steer this") {
+	topic, err := service.store.GetActiveSyncTopic(ctx, -1001, 11)
+	if err != nil || topic == nil || topic.PendingTelegramTurnID != "started-turn" || topic.PendingTelegramUserFP != syncUserTextFingerprint("started-turn", "steer this") {
 		t.Fatalf("pending Telegram user state=%#v err=%v", topic, err)
 	}
 }
 
-func TestAFCManagedSteerFallsBackToNewTurnAfterAuthoritativeIdle(t *testing.T) {
-	service := activeAFCService(t)
+func TestSyncManagedSteerFallsBackToNewTurnAfterAuthoritativeIdle(t *testing.T) {
+	service := activeSyncService(t)
 	writer := &stubSession{}
 	service.liveFactory = func() Session { return writer }
 	ctx := context.Background()
@@ -1362,7 +1362,7 @@ func TestAFCManagedSteerFallsBackToNewTurnAfterAuthoritativeIdle(t *testing.T) {
 	}
 	writer.turnSteerErrs = []error{errors.New("map[code:-32600 message:no active turn to steer]")}
 	writer.threadReads = map[string]map[string]any{
-		"thread-1": afcCompletedPayload("thread-1", "started-turn", "done"),
+		"thread-1": syncCompletedPayload("thread-1", "started-turn", "done"),
 	}
 
 	response, err := service.HandleMessageWithID(ctx, -1001, 11, 502, 123456789, "next", 0)
@@ -1372,14 +1372,14 @@ func TestAFCManagedSteerFallsBackToNewTurnAfterAuthoritativeIdle(t *testing.T) {
 	if len(writer.turnSteerCalls) != 1 || len(writer.turnStartCalls) != 2 || writer.turnStartCalls[1].message != "next" {
 		t.Fatalf("steers=%#v starts=%#v", writer.turnSteerCalls, writer.turnStartCalls)
 	}
-	receipt, err := service.store.GetAFCReceipt(ctx, 11, 502)
-	if err != nil || receipt == nil || receipt.State != model.AFCReceiptDispatched {
+	receipt, err := service.store.GetSyncReceipt(ctx, 11, 502)
+	if err != nil || receipt == nil || receipt.State != model.SyncReceiptDispatched {
 		t.Fatalf("receipt=%#v err=%v", receipt, err)
 	}
 }
 
-func TestAFCAuthoritativeSupersedingTurnReleasesStaleLocalLease(t *testing.T) {
-	service := activeAFCService(t)
+func TestSyncAuthoritativeSupersedingTurnReleasesStaleLocalLease(t *testing.T) {
+	service := activeSyncService(t)
 	writer := &stubSession{}
 	service.liveFactory = func() Session { return writer }
 	ctx := context.Background()
@@ -1387,49 +1387,49 @@ func TestAFCAuthoritativeSupersedingTurnReleasesStaleLocalLease(t *testing.T) {
 		t.Fatal(err)
 	}
 	service.cfg.AppServerMode = string(appserver.TransportDaemon)
-	if service.afcWriter.Snapshot().Active != 1 {
-		t.Fatalf("writer before supersession=%#v", service.afcWriter.Snapshot())
+	if service.syncWriter.Snapshot().Active != 1 {
+		t.Fatalf("writer before supersession=%#v", service.syncWriter.Snapshot())
 	}
-	state, err := service.store.GetAFCState(ctx)
+	state, err := service.store.GetSyncState(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
-	topic, err := service.store.GetActiveAFCTopic(ctx, -1001, 11)
+	topic, err := service.store.GetActiveSyncTopic(ctx, -1001, 11)
 	if err != nil || topic == nil {
 		t.Fatalf("topic=%#v err=%v", topic, err)
 	}
-	forum := &fakeAFCForum{}
-	service.processAFCSnapshotLocked(ctx, state, forum, *topic, appserver.SnapshotFromThreadRead(
-		afcRunningPayloadWithCommentary("thread-1", "desktop-turn", "desktop work")), "afc_poll")
+	forum := &fakeSyncForum{}
+	service.processSyncSnapshotLocked(ctx, state, forum, *topic, appserver.SnapshotFromThreadRead(
+		syncRunningPayloadWithCommentary("thread-1", "desktop-turn", "desktop work")), "sync_poll")
 
-	if snapshot := service.afcWriter.Snapshot(); snapshot.Active != 0 || snapshot.Unknown != 0 {
+	if snapshot := service.syncWriter.Snapshot(); snapshot.Active != 0 || snapshot.Unknown != 0 {
 		t.Fatalf("writer after supersession=%#v", snapshot)
 	}
-	updated, err := service.store.GetActiveAFCTopic(ctx, -1001, 11)
-	if err != nil || updated == nil || updated.ActiveTurnState != model.AFCTurnTerminal {
+	updated, err := service.store.GetActiveSyncTopic(ctx, -1001, 11)
+	if err != nil || updated == nil || updated.ActiveTurnState != model.SyncTurnTerminal {
 		t.Fatalf("topic after supersession=%#v err=%v", updated, err)
 	}
 }
 
-func TestAFCSharedDaemonRestartUnknownReconcilesBeforeSteer(t *testing.T) {
-	service := activeAFCService(t)
+func TestSyncSharedDaemonRestartUnknownReconcilesBeforeSteer(t *testing.T) {
+	service := activeSyncService(t)
 	service.cfg.AppServerMode = "daemon"
 	ctx := context.Background()
-	oldReceipt, _, err := service.store.AcceptAFCMessage(ctx, -1001, 11, 500)
+	oldReceipt, _, err := service.store.AcceptSyncMessage(ctx, -1001, 11, 500)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := service.store.MarkAFCStarting(ctx, oldReceipt, 7); err != nil {
+	if err := service.store.MarkSyncStarting(ctx, oldReceipt, 7); err != nil {
 		t.Fatal(err)
 	}
-	if err := service.store.MarkAFCDispatchState(ctx, oldReceipt, model.AFCReceiptDispatched, "shared-turn", model.AFCTurnActive, 7); err != nil {
+	if err := service.store.MarkSyncDispatchState(ctx, oldReceipt, model.SyncReceiptDispatched, "shared-turn", model.SyncTurnActive, 7); err != nil {
 		t.Fatal(err)
 	}
-	if err := service.store.RecoverAFCWriterState(ctx); err != nil {
+	if err := service.store.RecoverSyncWriterState(ctx); err != nil {
 		t.Fatal(err)
 	}
 	poll := &stubSession{threadReads: map[string]map[string]any{
-		"thread-1": afcRunningPayloadWithCommentary("thread-1", "shared-turn", "still running"),
+		"thread-1": syncRunningPayloadWithCommentary("thread-1", "shared-turn", "still running"),
 	}}
 	service.mu.Lock()
 	service.poll, service.pollConnected = poll, true
@@ -1447,18 +1447,18 @@ func TestAFCSharedDaemonRestartUnknownReconcilesBeforeSteer(t *testing.T) {
 	if len(writer.turnStartCalls) != 0 {
 		t.Fatalf("parallel starts=%#v", writer.turnStartCalls)
 	}
-	loadedOld, err := service.store.GetAFCReceipt(ctx, 11, 500)
-	if err != nil || loadedOld == nil || loadedOld.State != model.AFCReceiptDispatched {
+	loadedOld, err := service.store.GetSyncReceipt(ctx, 11, 500)
+	if err != nil || loadedOld == nil || loadedOld.State != model.SyncReceiptDispatched {
 		t.Fatalf("old receipt=%#v err=%v, want no replay mutation", loadedOld, err)
 	}
 }
 
-func TestAFCDesktopOriginActiveTurnIsSteeredWithoutParallelStart(t *testing.T) {
-	service := activeAFCService(t)
+func TestSyncDesktopOriginActiveTurnIsSteeredWithoutParallelStart(t *testing.T) {
+	service := activeSyncService(t)
 	service.cfg.AppServerMode = "daemon"
 	ctx := context.Background()
 	poll := &stubSession{threadReads: map[string]map[string]any{
-		"thread-1": afcRunningPayloadWithCommentary("thread-1", "desktop-turn", "desktop progress"),
+		"thread-1": syncRunningPayloadWithCommentary("thread-1", "desktop-turn", "desktop progress"),
 	}}
 	service.mu.Lock()
 	service.poll, service.pollConnected = poll, true
@@ -1478,19 +1478,19 @@ func TestAFCDesktopOriginActiveTurnIsSteeredWithoutParallelStart(t *testing.T) {
 	}
 }
 
-func TestAFCStaleDesktopActiveTurnFallsBackAfterAuthoritativeRead(t *testing.T) {
-	service := activeAFCService(t)
+func TestSyncStaleDesktopActiveTurnFallsBackAfterAuthoritativeRead(t *testing.T) {
+	service := activeSyncService(t)
 	service.cfg.AppServerMode = "daemon"
 	ctx := context.Background()
 	poll := &stubSession{threadReads: map[string]map[string]any{
-		"thread-1": afcRunningPayload("thread-1", "stale-desktop-turn"),
+		"thread-1": syncRunningPayload("thread-1", "stale-desktop-turn"),
 	}}
 	service.mu.Lock()
 	service.poll, service.pollConnected = poll, true
 	service.mu.Unlock()
 	writer := &stubSession{
 		turnSteerErr: errors.New("map[code:-32600 message:no active turn to steer]"),
-		threadReads:  map[string]map[string]any{"thread-1": afcCompletedPayload("thread-1", "stale-desktop-turn", "done")},
+		threadReads:  map[string]map[string]any{"thread-1": syncCompletedPayload("thread-1", "stale-desktop-turn", "done")},
 	}
 	service.liveFactory = func() Session { return writer }
 
@@ -1503,8 +1503,8 @@ func TestAFCStaleDesktopActiveTurnFallsBackAfterAuthoritativeRead(t *testing.T) 
 	}
 }
 
-func TestAFCAmbiguousTurnStartIsUnknownAndNeverReplayed(t *testing.T) {
-	service := activeAFCService(t)
+func TestSyncAmbiguousTurnStartIsUnknownAndNeverReplayed(t *testing.T) {
+	service := activeSyncService(t)
 	writer := &stubSession{turnStartErr: errors.New("request timeout for turn/start")}
 	service.liveFactory = func() Session { return writer }
 	ctx := context.Background()
@@ -1519,20 +1519,20 @@ func TestAFCAmbiguousTurnStartIsUnknownAndNeverReplayed(t *testing.T) {
 	if len(writer.turnStartCalls) != 0 {
 		t.Fatalf("stub records successful calls only, got %#v", writer.turnStartCalls)
 	}
-	if service.afcWriter.Snapshot().Unknown != 1 {
-		t.Fatalf("writer=%#v", service.afcWriter.Snapshot())
+	if service.syncWriter.Snapshot().Unknown != 1 {
+		t.Fatalf("writer=%#v", service.syncWriter.Snapshot())
 	}
 }
 
-func TestAFCTerminalEventsRoutePerTopicAndCloseAfterLastTurn(t *testing.T) {
-	service := activeAFCService(t)
-	writer := &afcWriterSession{stubSession: &stubSession{threadReads: map[string]map[string]any{
-		"thread-1": afcCompletedPayload("thread-1", "started-turn", "done one"),
-		"thread-2": afcCompletedPayload("thread-2", "started-turn", "done two"),
+func TestSyncTerminalEventsRoutePerTopicAndCloseAfterLastTurn(t *testing.T) {
+	service := activeSyncService(t)
+	writer := &syncWriterSession{stubSession: &stubSession{threadReads: map[string]map[string]any{
+		"thread-1": syncCompletedPayload("thread-1", "started-turn", "done one"),
+		"thread-2": syncCompletedPayload("thread-2", "started-turn", "done two"),
 	}}, events: make(chan appserver.Event, 8)}
 	service.liveFactory = func() Session { return writer }
-	forum := &fakeAFCForum{}
-	service.SetAFCForum(forum)
+	forum := &fakeSyncForum{}
+	service.SetSyncForum(forum)
 	ctx := context.Background()
 	if _, err := service.HandleMessageWithID(ctx, -1001, 11, 501, 123456789, "one", 0); err != nil {
 		t.Fatal(err)
@@ -1540,15 +1540,15 @@ func TestAFCTerminalEventsRoutePerTopicAndCloseAfterLastTurn(t *testing.T) {
 	if _, err := service.HandleMessageWithID(ctx, -1001, 12, 601, 123456789, "two", 0); err != nil {
 		t.Fatal(err)
 	}
-	generation := service.afcWriter.Snapshot().Generation
+	generation := service.syncWriter.Snapshot().Generation
 	eventOne := appserver.Event{Method: "turn/completed", Params: map[string]any{"threadId": "thread-1", "turnId": "started-turn"}}
-	service.handleAFCWriterEvent(ctx, writer, eventOne, generation+1)
+	service.handleSyncWriterEvent(ctx, writer, eventOne, generation+1)
 	if len(forum.sends) != 0 {
 		t.Fatalf("stale generation routed sends=%#v", forum.sends)
 	}
-	service.handleAFCWriterEvent(ctx, writer, eventOne, generation)
-	if service.afcWriter.Snapshot().Active != 1 || writer.closeCalls != 0 {
-		t.Fatalf("after first: writer=%#v closes=%d", service.afcWriter.Snapshot(), writer.closeCalls)
+	service.handleSyncWriterEvent(ctx, writer, eventOne, generation)
+	if service.syncWriter.Snapshot().Active != 1 || writer.closeCalls != 0 {
+		t.Fatalf("after first: writer=%#v closes=%d", service.syncWriter.Snapshot(), writer.closeCalls)
 	}
 	for _, send := range forum.sends {
 		if send.topicID != 11 {
@@ -1556,9 +1556,9 @@ func TestAFCTerminalEventsRoutePerTopicAndCloseAfterLastTurn(t *testing.T) {
 		}
 	}
 	eventTwo := appserver.Event{Method: "turn/completed", Params: map[string]any{"threadId": "thread-2", "turnId": "started-turn"}}
-	service.handleAFCWriterEvent(ctx, writer, eventTwo, generation)
-	if service.afcWriter.Snapshot().State != appserver.WriterStopped || writer.closeCalls != 1 {
-		t.Fatalf("after last: writer=%#v closes=%d", service.afcWriter.Snapshot(), writer.closeCalls)
+	service.handleSyncWriterEvent(ctx, writer, eventTwo, generation)
+	if service.syncWriter.Snapshot().State != appserver.WriterStopped || writer.closeCalls != 1 {
+		t.Fatalf("after last: writer=%#v closes=%d", service.syncWriter.Snapshot(), writer.closeCalls)
 	}
 	seenTwo := false
 	for _, send := range forum.sends {
@@ -1571,41 +1571,41 @@ func TestAFCTerminalEventsRoutePerTopicAndCloseAfterLastTurn(t *testing.T) {
 	}
 }
 
-func TestAFCTransientInterruptedEventKeepsWriterAndRecoversProgress(t *testing.T) {
-	service := activeAFCService(t)
+func TestSyncTransientInterruptedEventKeepsWriterAndRecoversProgress(t *testing.T) {
+	service := activeSyncService(t)
 	reads := map[string]map[string]any{
-		"thread-1": afcInterruptedPayload("thread-1", "started-turn"),
+		"thread-1": syncInterruptedPayload("thread-1", "started-turn"),
 	}
-	writer := &afcWriterSession{stubSession: &stubSession{threadReads: reads}, events: make(chan appserver.Event, 4)}
+	writer := &syncWriterSession{stubSession: &stubSession{threadReads: reads}, events: make(chan appserver.Event, 4)}
 	service.liveFactory = func() Session { return writer }
-	forum := &fakeAFCForum{}
-	service.SetAFCForum(forum)
+	forum := &fakeSyncForum{}
+	service.SetSyncForum(forum)
 	ctx := context.Background()
 	if _, err := service.HandleMessageWithID(ctx, -1001, 11, 501, 123456789, "one", 0); err != nil {
 		t.Fatal(err)
 	}
 	if !service.isTelegramOriginTurn(ctx, "thread-1", "started-turn") {
-		t.Fatal("AFC turn was not marked as Telegram-origin")
+		t.Fatal("Sync turn was not marked as Telegram-origin")
 	}
 
-	generation := service.afcWriter.Snapshot().Generation
+	generation := service.syncWriter.Snapshot().Generation
 	event := appserver.Event{Method: "turn/completed", Params: map[string]any{"threadId": "thread-1", "turnId": "started-turn"}}
-	service.handleAFCWriterEvent(ctx, writer, event, generation)
-	if snapshot := service.afcWriter.Snapshot(); snapshot.Active != 1 || snapshot.State != appserver.WriterRunning {
+	service.handleSyncWriterEvent(ctx, writer, event, generation)
+	if snapshot := service.syncWriter.Snapshot(); snapshot.Active != 1 || snapshot.State != appserver.WriterRunning {
 		t.Fatalf("transient interrupted released writer: %#v", snapshot)
 	}
 	if writer.closeCalls != 0 || len(forum.sends) != 0 {
 		t.Fatalf("transient interrupted became visible/terminal: closes=%d sends=%#v", writer.closeCalls, forum.sends)
 	}
 
-	reads["thread-1"] = afcRunningPayload("thread-1", "started-turn")
-	service.handleAFCWriterEvent(ctx, writer, appserver.Event{Method: "item/updated", Params: map[string]any{"threadId": "thread-1", "turnId": "started-turn"}}, generation)
+	reads["thread-1"] = syncRunningPayload("thread-1", "started-turn")
+	service.handleSyncWriterEvent(ctx, writer, appserver.Event{Method: "item/updated", Params: map[string]any{"threadId": "thread-1", "turnId": "started-turn"}}, generation)
 	if len(forum.sends) != 1 || !strings.Contains(forum.sends[0].text, "inProgress") {
 		t.Fatalf("recovered progress not delivered: %#v", forum.sends)
 	}
-	reads["thread-1"] = afcCompletedPayload("thread-1", "started-turn", "done")
-	service.handleAFCWriterEvent(ctx, writer, event, generation)
-	if snapshot := service.afcWriter.Snapshot(); snapshot.State != appserver.WriterStopped || snapshot.Active != 0 {
+	reads["thread-1"] = syncCompletedPayload("thread-1", "started-turn", "done")
+	service.handleSyncWriterEvent(ctx, writer, event, generation)
+	if snapshot := service.syncWriter.Snapshot(); snapshot.State != appserver.WriterStopped || snapshot.Active != 0 {
 		t.Fatalf("confirmed terminal did not release writer: %#v", snapshot)
 	}
 	if writer.closeCalls != 1 {
@@ -1613,8 +1613,8 @@ func TestAFCTransientInterruptedEventKeepsWriterAndRecoversProgress(t *testing.T
 	}
 }
 
-func TestAFCPollDefersTransientInterrupted(t *testing.T) {
-	service := activeAFCService(t)
+func TestSyncPollDefersTransientInterrupted(t *testing.T) {
+	service := activeSyncService(t)
 	writer := &stubSession{}
 	service.liveFactory = func() Session { return writer }
 	ctx := context.Background()
@@ -1623,13 +1623,13 @@ func TestAFCPollDefersTransientInterrupted(t *testing.T) {
 	}
 	service.mu.Lock()
 	service.poll = &stubSession{threadReads: map[string]map[string]any{
-		"thread-1": afcInterruptedPayload("thread-1", "started-turn"),
+		"thread-1": syncInterruptedPayload("thread-1", "started-turn"),
 	}}
 	service.pollConnected = true
 	service.mu.Unlock()
 
-	service.syncAFC(ctx)
-	if snapshot := service.afcWriter.Snapshot(); snapshot.Active != 1 || snapshot.State != appserver.WriterRunning {
+	service.reconcileSync(ctx)
+	if snapshot := service.syncWriter.Snapshot(); snapshot.Active != 1 || snapshot.State != appserver.WriterRunning {
 		t.Fatalf("poll released transient interrupted writer: %#v", snapshot)
 	}
 	if writer.closeCalls != 0 {
@@ -1637,10 +1637,10 @@ func TestAFCPollDefersTransientInterrupted(t *testing.T) {
 	}
 }
 
-func TestAFCExplicitStopInterruptedBypassesTerminalGrace(t *testing.T) {
-	service := activeAFCService(t)
-	writer := &afcWriterSession{stubSession: &stubSession{threadReads: map[string]map[string]any{
-		"thread-1": afcInterruptedPayload("thread-1", "started-turn"),
+func TestSyncExplicitStopInterruptedBypassesTerminalGrace(t *testing.T) {
+	service := activeSyncService(t)
+	writer := &syncWriterSession{stubSession: &stubSession{threadReads: map[string]map[string]any{
+		"thread-1": syncInterruptedPayload("thread-1", "started-turn"),
 	}}, events: make(chan appserver.Event, 4)}
 	service.liveFactory = func() Session { return writer }
 	ctx := context.Background()
@@ -1650,10 +1650,10 @@ func TestAFCExplicitStopInterruptedBypassesTerminalGrace(t *testing.T) {
 	if _, err := service.HandleMessageWithID(ctx, -1001, 11, 502, 123456789, "/stop", 0); err != nil {
 		t.Fatal(err)
 	}
-	service.handleAFCWriterEvent(ctx, writer, appserver.Event{Method: "turn/completed", Params: map[string]any{
+	service.handleSyncWriterEvent(ctx, writer, appserver.Event{Method: "turn/completed", Params: map[string]any{
 		"threadId": "thread-1", "turnId": "started-turn",
-	}}, service.afcWriter.Snapshot().Generation)
-	if snapshot := service.afcWriter.Snapshot(); snapshot.State != appserver.WriterStopped || snapshot.Active != 0 {
+	}}, service.syncWriter.Snapshot().Generation)
+	if snapshot := service.syncWriter.Snapshot(); snapshot.State != appserver.WriterStopped || snapshot.Active != 0 {
 		t.Fatalf("explicit stop did not bypass grace: %#v", snapshot)
 	}
 	if writer.closeCalls != 1 {
@@ -1661,20 +1661,20 @@ func TestAFCExplicitStopInterruptedBypassesTerminalGrace(t *testing.T) {
 	}
 }
 
-func TestAFCPollTerminalEvidenceClosesWriterWhenEventWasMissed(t *testing.T) {
-	service := activeAFCService(t)
+func TestSyncPollTerminalEvidenceClosesWriterWhenEventWasMissed(t *testing.T) {
+	service := activeSyncService(t)
 	writer := &stubSession{}
 	service.liveFactory = func() Session { return writer }
 	ctx := context.Background()
 	if _, err := service.HandleMessageWithID(ctx, -1001, 11, 501, 123456789, "one", 0); err != nil {
 		t.Fatal(err)
 	}
-	poll := &stubSession{threadReads: map[string]map[string]any{"thread-1": afcCompletedPayload("thread-1", "started-turn", "done")}}
+	poll := &stubSession{threadReads: map[string]map[string]any{"thread-1": syncCompletedPayload("thread-1", "started-turn", "done")}}
 	service.mu.Lock()
 	service.poll, service.pollConnected = poll, true
 	service.mu.Unlock()
-	service.syncAFC(ctx)
-	if snapshot := service.afcWriter.Snapshot(); snapshot.State != appserver.WriterStopped || snapshot.Active != 0 {
+	service.reconcileSync(ctx)
+	if snapshot := service.syncWriter.Snapshot(); snapshot.State != appserver.WriterStopped || snapshot.Active != 0 {
 		t.Fatalf("writer=%#v", snapshot)
 	}
 	if writer.closeCalls != 1 {
@@ -1682,28 +1682,28 @@ func TestAFCPollTerminalEvidenceClosesWriterWhenEventWasMissed(t *testing.T) {
 	}
 }
 
-func TestAFCApprovalCallbackIsGuardedByTopicTurnAndGeneration(t *testing.T) {
-	service := activeAFCService(t)
-	writer := &afcWriterSession{stubSession: &stubSession{}, events: make(chan appserver.Event, 4)}
+func TestSyncApprovalCallbackIsGuardedByTopicTurnAndGeneration(t *testing.T) {
+	service := activeSyncService(t)
+	writer := &syncWriterSession{stubSession: &stubSession{}, events: make(chan appserver.Event, 4)}
 	service.liveFactory = func() Session { return writer }
-	forum := &fakeAFCForum{}
-	service.SetAFCForum(forum)
+	forum := &fakeSyncForum{}
+	service.SetSyncForum(forum)
 	ctx := context.Background()
 	if _, err := service.HandleMessageWithID(ctx, -1001, 11, 501, 123456789, "needs approval", 0); err != nil {
 		t.Fatal(err)
 	}
-	generation := service.afcWriter.Snapshot().Generation
+	generation := service.syncWriter.Snapshot().Generation
 	event := appserver.Event{Channel: "server_request", Method: "item/commandExecution/requestApproval", ID: "request-1", Params: map[string]any{
 		"threadId": "thread-1", "turnId": "started-turn", "itemId": "item-1", "question": "Run it?",
 	}}
-	service.handleAFCWriterEvent(ctx, writer, event, generation)
+	service.handleSyncWriterEvent(ctx, writer, event, generation)
 	if len(forum.actions) != 1 || forum.actions[0].topicID != 11 || len(forum.actions[0].buttons) != 2 {
 		t.Fatalf("actions=%#v", forum.actions)
 	}
 	if got := forum.actions[0].buttons[0][1].Text; got != "Allow command prefix" {
 		t.Fatalf("persistent approval label=%q, want Allow command prefix", got)
 	}
-	if !strings.HasPrefix(forum.actions[0].text, afcApprovalHeader+"\n") {
+	if !strings.HasPrefix(forum.actions[0].text, syncApprovalHeader+"\n") {
 		t.Fatalf("approval text=%q, want icon header", forum.actions[0].text)
 	}
 	token := forum.actions[0].buttons[0][0].CallbackData
@@ -1730,7 +1730,7 @@ func TestAFCApprovalCallbackIsGuardedByTopicTurnAndGeneration(t *testing.T) {
 	}
 }
 
-func TestAFCApprovalDecisionsResolveSameCard(t *testing.T) {
+func TestSyncApprovalDecisionsResolveSameCard(t *testing.T) {
 	tests := []struct {
 		name       string
 		row        int
@@ -1745,11 +1745,11 @@ func TestAFCApprovalDecisionsResolveSameCard(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			service := activeAFCService(t)
-			writer := &afcWriterSession{stubSession: &stubSession{}, events: make(chan appserver.Event, 4)}
+			service := activeSyncService(t)
+			writer := &syncWriterSession{stubSession: &stubSession{}, events: make(chan appserver.Event, 4)}
 			service.liveFactory = func() Session { return writer }
-			forum := &fakeAFCForum{}
-			service.SetAFCForum(forum)
+			forum := &fakeSyncForum{}
+			service.SetSyncForum(forum)
 			ctx := context.Background()
 			if _, err := service.HandleMessageWithID(ctx, -1001, 11, 501, 123456789, "needs approval", 0); err != nil {
 				t.Fatal(err)
@@ -1757,7 +1757,7 @@ func TestAFCApprovalDecisionsResolveSameCard(t *testing.T) {
 			event := appserver.Event{Channel: "server_request", Method: "item/commandExecution/requestApproval", ID: "request-1", Params: map[string]any{
 				"threadId": "thread-1", "turnId": "started-turn", "itemId": "item-1", "question": "Run it?",
 			}}
-			service.handleAFCWriterEvent(ctx, writer, event, service.afcWriter.Snapshot().Generation)
+			service.handleSyncWriterEvent(ctx, writer, event, service.syncWriter.Snapshot().Generation)
 			if len(forum.actions) != 1 {
 				t.Fatalf("actions=%#v, want one", forum.actions)
 			}
@@ -1778,24 +1778,24 @@ func TestAFCApprovalDecisionsResolveSameCard(t *testing.T) {
 	}
 }
 
-func TestAFCDesktopOriginApprovalIsNotActionable(t *testing.T) {
-	service := activeAFCService(t)
-	forum := &fakeAFCForum{}
-	service.SetAFCForum(forum)
-	process := &afcWriterSession{stubSession: &stubSession{}, events: make(chan appserver.Event, 1)}
+func TestSyncDesktopOriginApprovalIsNotActionable(t *testing.T) {
+	service := activeSyncService(t)
+	forum := &fakeSyncForum{}
+	service.SetSyncForum(forum)
+	process := &syncWriterSession{stubSession: &stubSession{}, events: make(chan appserver.Event, 1)}
 	event := appserver.Event{Channel: "server_request", Method: "item/requestApproval", ID: "desktop-request", Params: map[string]any{"threadId": "thread-1", "turnId": "desktop-turn"}}
-	service.handleAFCWriterEvent(context.Background(), process, event, 99)
+	service.handleSyncWriterEvent(context.Background(), process, event, 99)
 	if len(forum.actions) != 0 {
 		t.Fatalf("desktop approval became actionable: %#v", forum.actions)
 	}
 }
 
-func TestAFCStructuredUserInputCallbackReturnsGuardedAnswers(t *testing.T) {
-	service := activeAFCService(t)
-	writer := &afcWriterSession{stubSession: &stubSession{}, events: make(chan appserver.Event, 4)}
+func TestSyncStructuredUserInputCallbackReturnsGuardedAnswers(t *testing.T) {
+	service := activeSyncService(t)
+	writer := &syncWriterSession{stubSession: &stubSession{}, events: make(chan appserver.Event, 4)}
 	service.liveFactory = func() Session { return writer }
-	forum := &fakeAFCForum{}
-	service.SetAFCForum(forum)
+	forum := &fakeSyncForum{}
+	service.SetSyncForum(forum)
 	ctx := context.Background()
 	if _, err := service.HandleMessageWithID(ctx, -1001, 11, 501, 123456789, "ask", 0); err != nil {
 		t.Fatal(err)
@@ -1803,11 +1803,11 @@ func TestAFCStructuredUserInputCallbackReturnsGuardedAnswers(t *testing.T) {
 	event := appserver.Event{Channel: "server_request", Method: "item/tool/requestUserInput", ID: "input-1", Params: map[string]any{
 		"threadId": "thread-1", "turnId": "started-turn", "questions": []any{map[string]any{"id": "target", "question": "Where?", "options": []any{map[string]any{"label": "staging"}, map[string]any{"label": "production"}}}},
 	}}
-	service.handleAFCWriterEvent(ctx, writer, event, service.afcWriter.Snapshot().Generation)
+	service.handleSyncWriterEvent(ctx, writer, event, service.syncWriter.Snapshot().Generation)
 	if len(forum.actions) != 1 || len(forum.actions[0].buttons) != 2 {
 		t.Fatalf("actions=%#v", forum.actions)
 	}
-	if !strings.HasPrefix(forum.actions[0].text, afcInputHeader+"\n") {
+	if !strings.HasPrefix(forum.actions[0].text, syncInputHeader+"\n") {
 		t.Fatalf("input text=%q, want icon header", forum.actions[0].text)
 	}
 	token := forum.actions[0].buttons[0][0].CallbackData
@@ -1826,8 +1826,8 @@ func TestAFCStructuredUserInputCallbackReturnsGuardedAnswers(t *testing.T) {
 	}
 }
 
-func TestAFCStopInterruptsOnlyCurrentTopicTurn(t *testing.T) {
-	service := activeAFCService(t)
+func TestSyncStopInterruptsOnlyCurrentTopicTurn(t *testing.T) {
+	service := activeSyncService(t)
 	writer := &stubSession{}
 	service.liveFactory = func() Session { return writer }
 	ctx := context.Background()
@@ -1846,12 +1846,12 @@ func TestAFCStopInterruptsOnlyCurrentTopicTurn(t *testing.T) {
 	}
 }
 
-func TestAFCStopInterruptsDesktopOriginTurnFromAuthoritativeDaemonSnapshot(t *testing.T) {
-	service := activeAFCService(t)
+func TestSyncStopInterruptsDesktopOriginTurnFromAuthoritativeDaemonSnapshot(t *testing.T) {
+	service := activeSyncService(t)
 	service.cfg.AppServerMode = "daemon"
 	ctx := context.Background()
 	poll := &stubSession{threadReads: map[string]map[string]any{
-		"thread-1": afcRunningPayload("thread-1", "desktop-turn"),
+		"thread-1": syncRunningPayload("thread-1", "desktop-turn"),
 	}}
 	service.mu.Lock()
 	service.poll, service.pollConnected = poll, true
@@ -1866,12 +1866,12 @@ func TestAFCStopInterruptsDesktopOriginTurnFromAuthoritativeDaemonSnapshot(t *te
 	}
 }
 
-func TestAFCSafeOffRefusesActiveTurnsWithoutCleanup(t *testing.T) {
-	service := activeAFCService(t)
+func TestSyncSafeOffRefusesActiveTurnsWithoutCleanup(t *testing.T) {
+	service := activeSyncService(t)
 	writer := &stubSession{}
 	service.liveFactory = func() Session { return writer }
-	forum := &fakeAFCForum{}
-	service.SetAFCForum(forum)
+	forum := &fakeSyncForum{}
+	service.SetSyncForum(forum)
 	ctx := context.Background()
 	if _, err := service.HandleMessageWithID(ctx, -1001, 11, 501, 123456789, "one", 0); err != nil {
 		t.Fatal(err)
@@ -1880,19 +1880,19 @@ func TestAFCSafeOffRefusesActiveTurnsWithoutCleanup(t *testing.T) {
 	if err != nil || response == nil || !strings.Contains(response.Text, "refused") {
 		t.Fatalf("response=%#v err=%v", response, err)
 	}
-	state, _ := service.store.GetAFCState(ctx)
-	if state.State != model.AFCStateActive || len(forum.deletes) != 0 {
+	state, _ := service.store.GetSyncState(ctx)
+	if state.State != model.SyncStateActive || len(forum.deletes) != 0 {
 		t.Fatalf("state=%#v deletes=%v", state, forum.deletes)
 	}
 }
 
-func TestAFCForceOffInterruptsAllAndWaitsForTerminalBeforeCleanup(t *testing.T) {
-	service := activeAFCService(t)
+func TestSyncForceOffInterruptsAllAndWaitsForTerminalBeforeCleanup(t *testing.T) {
+	service := activeSyncService(t)
 	service.cfg.RequestTimeout = 200 * time.Millisecond
 	writer := &stubSession{}
 	service.liveFactory = func() Session { return writer }
-	forum := &fakeAFCForum{}
-	service.SetAFCForum(forum)
+	forum := &fakeSyncForum{}
+	service.SetSyncForum(forum)
 	ctx := context.Background()
 	if _, err := service.HandleMessageWithID(ctx, -1001, 11, 501, 123456789, "one", 0); err != nil {
 		t.Fatal(err)
@@ -1901,36 +1901,36 @@ func TestAFCForceOffInterruptsAllAndWaitsForTerminalBeforeCleanup(t *testing.T) 
 		t.Fatal(err)
 	}
 	poll := &stubSession{threadReads: map[string]map[string]any{
-		"thread-1": afcCompletedPayload("thread-1", "started-turn", "one done"), "thread-2": afcCompletedPayload("thread-2", "started-turn", "two done"),
+		"thread-1": syncCompletedPayload("thread-1", "started-turn", "one done"), "thread-2": syncCompletedPayload("thread-2", "started-turn", "two done"),
 	}}
 	service.mu.Lock()
 	service.poll, service.pollConnected = poll, true
 	service.mu.Unlock()
 	response, err := service.HandleMessageWithID(ctx, -1001, 1, 700, 123456789, "/sync off --force", 0)
-	if err != nil || response == nil || !strings.Contains(response.Text, "AFC off") {
+	if err != nil || response == nil || !strings.Contains(response.Text, "Sync off") {
 		t.Fatalf("response=%#v err=%v", response, err)
 	}
 	if len(writer.turnInterruptCalls) != 2 {
 		t.Fatalf("interrupts=%#v", writer.turnInterruptCalls)
 	}
-	state, _ := service.store.GetAFCState(ctx)
-	if state.State != model.AFCStateOff || len(forum.deletes) != 2 {
+	state, _ := service.store.GetSyncState(ctx)
+	if state.State != model.SyncStateOff || len(forum.deletes) != 2 {
 		t.Fatalf("state=%#v deletes=%v", state, forum.deletes)
 	}
 }
 
-func TestAFCForceOffTimeoutStaysDrainingAndDoesNotCleanup(t *testing.T) {
-	service := activeAFCService(t)
+func TestSyncForceOffTimeoutStaysDrainingAndDoesNotCleanup(t *testing.T) {
+	service := activeSyncService(t)
 	service.cfg.RequestTimeout = 30 * time.Millisecond
 	writer := &stubSession{}
 	service.liveFactory = func() Session { return writer }
-	forum := &fakeAFCForum{}
-	service.SetAFCForum(forum)
+	forum := &fakeSyncForum{}
+	service.SetSyncForum(forum)
 	ctx := context.Background()
 	if _, err := service.HandleMessageWithID(ctx, -1001, 11, 501, 123456789, "one", 0); err != nil {
 		t.Fatal(err)
 	}
-	poll := &stubSession{threadReads: map[string]map[string]any{"thread-1": afcRunningPayload("thread-1", "started-turn")}}
+	poll := &stubSession{threadReads: map[string]map[string]any{"thread-1": syncRunningPayload("thread-1", "started-turn")}}
 	service.mu.Lock()
 	service.poll, service.pollConnected = poll, true
 	service.mu.Unlock()
@@ -1938,26 +1938,26 @@ func TestAFCForceOffTimeoutStaysDrainingAndDoesNotCleanup(t *testing.T) {
 	if err != nil || response == nil || !strings.Contains(response.Text, "remains draining") {
 		t.Fatalf("response=%#v err=%v", response, err)
 	}
-	state, _ := service.store.GetAFCState(ctx)
-	if state.State != model.AFCStateDraining || len(forum.deletes) != 0 || service.afcWriter.Snapshot().Accepting {
-		t.Fatalf("state=%#v deletes=%v writer=%#v", state, forum.deletes, service.afcWriter.Snapshot())
+	state, _ := service.store.GetSyncState(ctx)
+	if state.State != model.SyncStateDraining || len(forum.deletes) != 0 || service.syncWriter.Snapshot().Accepting {
+		t.Fatalf("state=%#v deletes=%v writer=%#v", state, forum.deletes, service.syncWriter.Snapshot())
 	}
 }
 
-func TestAFCRestartUnknownOwnershipBlocksSafeAndForceCleanup(t *testing.T) {
-	service := activeAFCService(t)
+func TestSyncRestartUnknownOwnershipBlocksSafeAndForceCleanup(t *testing.T) {
+	service := activeSyncService(t)
 	service.cfg.RequestTimeout = 25 * time.Millisecond
-	forum := &fakeAFCForum{}
-	service.SetAFCForum(forum)
+	forum := &fakeSyncForum{}
+	service.SetSyncForum(forum)
 	ctx := context.Background()
-	receipt, _, err := service.store.AcceptAFCMessage(ctx, -1001, 11, 501)
+	receipt, _, err := service.store.AcceptSyncMessage(ctx, -1001, 11, 501)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := service.store.MarkAFCStarting(ctx, receipt, 7); err != nil {
+	if err := service.store.MarkSyncStarting(ctx, receipt, 7); err != nil {
 		t.Fatal(err)
 	}
-	if err := service.store.RecoverAFCWriterState(ctx); err != nil {
+	if err := service.store.RecoverSyncWriterState(ctx); err != nil {
 		t.Fatal(err)
 	}
 	safe, err := service.HandleMessageWithID(ctx, -1001, 1, 700, 123456789, "/sync off", 0)
@@ -1973,8 +1973,8 @@ func TestAFCRestartUnknownOwnershipBlocksSafeAndForceCleanup(t *testing.T) {
 	}
 }
 
-func TestAFCStartupResetsSessionCleansTopicsAndWarnsOnceWhenWebSocketUnavailable(t *testing.T) {
-	service := activeAFCService(t)
+func TestSyncStartupResetsSessionCleansTopicsAndWarnsOnceWhenWebSocketUnavailable(t *testing.T) {
+	service := activeSyncService(t)
 	service.cfg.AppServerMode = string(appserver.TransportWebSocket)
 	service.cfg.AppServerListen = "ws://127.0.0.1:4500"
 	service.cfg.RequestTimeout = 25 * time.Millisecond
@@ -1983,8 +1983,8 @@ func TestAFCStartupResetsSessionCleansTopicsAndWarnsOnceWhenWebSocketUnavailable
 	failedPoll := &stubSession{startErr: errors.New("shared daemon unavailable")}
 	service.poll = failedPoll
 	service.pollFactory = func() Session { return failedPoll }
-	forum := &fakeAFCForum{}
-	service.SetAFCForum(forum)
+	forum := &fakeSyncForum{}
+	service.SetSyncForum(forum)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	if err := service.store.SetState(ctx, "appserver.poll_connected", "true"); err != nil {
@@ -2005,14 +2005,14 @@ func TestAFCStartupResetsSessionCleansTopicsAndWarnsOnceWhenWebSocketUnavailable
 		t.Fatal("startup finalization did not finish")
 	}
 
-	state, err := service.store.GetAFCState(ctx)
-	if err != nil || state.State != model.AFCStateOff {
+	state, err := service.store.GetSyncState(ctx)
+	if err != nil || state.State != model.SyncStateOff {
 		t.Fatalf("state=%#v err=%v", state, err)
 	}
 	if len(forum.deletes) != 2 || forum.deletes[0] != 11 || forum.deletes[1] != 12 {
 		t.Fatalf("deletes=%v", forum.deletes)
 	}
-	if len(forum.sends) != 1 || forum.sends[0].topicID != afcGeneralSendTopicID ||
+	if len(forum.sends) != 1 || forum.sends[0].topicID != syncGeneralSendTopicID ||
 		!strings.Contains(forum.sends[0].text, "Shared Codex App Server is unavailable") ||
 		!strings.Contains(forum.sends[0].text, "ws://127.0.0.1:4500") ||
 		!strings.Contains(forum.sends[0].text, "/sync on") {
@@ -2026,14 +2026,14 @@ func TestAFCStartupResetsSessionCleansTopicsAndWarnsOnceWhenWebSocketUnavailable
 	}
 }
 
-func TestAFCStartupDoesNotWarnWhenSharedDaemonConnects(t *testing.T) {
-	service := activeAFCService(t)
+func TestSyncStartupDoesNotWarnWhenSharedDaemonConnects(t *testing.T) {
+	service := activeSyncService(t)
 	service.cfg.AppServerMode = string(appserver.TransportDaemon)
 	service.cfg.IndexRefreshInterval = time.Hour
 	service.cfg.SyncPollInterval = time.Hour
 	service.poll = &stubSession{}
-	forum := &fakeAFCForum{}
-	service.SetAFCForum(forum)
+	forum := &fakeSyncForum{}
+	service.SetSyncForum(forum)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -2052,13 +2052,13 @@ func TestAFCStartupDoesNotWarnWhenSharedDaemonConnects(t *testing.T) {
 	}
 }
 
-func TestAFCProjectPickerCreatesThreadThenTopicThenDurableBinding(t *testing.T) {
-	service := activeAFCService(t)
+func TestSyncProjectPickerCreatesThreadThenTopicThenDurableBinding(t *testing.T) {
+	service := activeSyncService(t)
 	writer := &stubSession{threadStartResult: map[string]any{"thread": map[string]any{"id": "new-thread", "title": "New task", "cwd": "/tmp/project", "updatedAt": float64(100)}}}
 	service.liveFactory = func() Session { return writer }
 	ctx := context.Background()
-	forum := &fakeAFCForum{nextTopicID: 20}
-	service.SetAFCForum(forum)
+	forum := &fakeSyncForum{nextTopicID: 20}
+	service.SetSyncForum(forum)
 	menu, err := service.HandleMessageWithID(ctx, -1001, 1, 700, 123456789, "/projects", 0)
 	if err != nil || menu == nil || len(menu.Buttons) == 0 {
 		t.Fatalf("menu=%#v err=%v", menu, err)
@@ -2071,11 +2071,11 @@ func TestAFCProjectPickerCreatesThreadThenTopicThenDurableBinding(t *testing.T) 
 	if len(writer.threadStartCalls) != 0 || len(writer.turnStartCalls) != 0 {
 		t.Fatalf("thread starts=%#v turn starts=%#v", writer.threadStartCalls, writer.turnStartCalls)
 	}
-	drafts, err := service.store.ListAFCTopicDrafts(ctx, "s")
+	drafts, err := service.store.ListSyncTopicDrafts(ctx, "s")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(drafts) != 1 || drafts[0].TopicID != 21 || drafts[0].State != model.AFCDraftReady {
+	if len(drafts) != 1 || drafts[0].TopicID != 21 || drafts[0].State != model.SyncDraftReady {
 		t.Fatalf("drafts=%#v", drafts)
 	}
 	duplicate, err := service.HandleCallback(ctx, -1001, 1, 900, 123456789, token)
@@ -2098,7 +2098,7 @@ func TestAFCProjectPickerCreatesThreadThenTopicThenDurableBinding(t *testing.T) 
 	if got := writer.turnStartCalls[0]; got.approvalPolicy != "on-request" || got.approvalsReviewer != "auto_review" || got.sandboxMode != "workspace-write" {
 		t.Fatalf("turn permissions=%#v, want explicit Telegram permissions", got)
 	}
-	topics, err := service.store.ListAFCTopics(ctx, "s")
+	topics, err := service.store.ListSyncTopics(ctx, "s")
 	if err != nil || len(topics) != 3 || topics[2].ThreadID != "new-thread" || topics[2].TopicID != 21 {
 		t.Fatalf("topics=%#v err=%v", topics, err)
 	}
@@ -2110,15 +2110,15 @@ func TestAFCProjectPickerCreatesThreadThenTopicThenDurableBinding(t *testing.T) 
 	}
 }
 
-func TestAFCExistingEmptyTopicRecoversNoRolloutOnNextPrompt(t *testing.T) {
-	service := activeAFCService(t)
+func TestSyncExistingEmptyTopicRecoversNoRolloutOnNextPrompt(t *testing.T) {
+	service := activeSyncService(t)
 	writer := &stubSession{
 		threadResumeErr:   errors.New("map[code:-32600 message:no rollout found for thread id thread-1]"),
 		threadStartResult: map[string]any{"thread": map[string]any{"id": "replacement-thread", "cwd": "/tmp/project"}},
 	}
 	service.liveFactory = func() Session { return writer }
-	forum := &fakeAFCForum{}
-	service.SetAFCForum(forum)
+	forum := &fakeSyncForum{}
+	service.SetSyncForum(forum)
 
 	response, err := service.HandleMessageWithID(context.Background(), -1001, 11, 902, 123456789, "replacement prompt", 0)
 	if err != nil || response == nil || !strings.Contains(response.Text, "started") {
@@ -2130,7 +2130,7 @@ func TestAFCExistingEmptyTopicRecoversNoRolloutOnNextPrompt(t *testing.T) {
 	if len(writer.threadStartCalls) != 1 || len(writer.turnStartCalls) != 1 || writer.turnStartCalls[0].threadID != "replacement-thread" {
 		t.Fatalf("start calls=%#v turn calls=%#v", writer.threadStartCalls, writer.turnStartCalls)
 	}
-	topic, err := service.store.GetActiveAFCTopic(context.Background(), -1001, 11)
+	topic, err := service.store.GetActiveSyncTopic(context.Background(), -1001, 11)
 	if err != nil || topic == nil || topic.ThreadID != "replacement-thread" {
 		t.Fatalf("topic=%#v err=%v", topic, err)
 	}
@@ -2139,14 +2139,14 @@ func TestAFCExistingEmptyTopicRecoversNoRolloutOnNextPrompt(t *testing.T) {
 	}
 }
 
-func TestAFCExistingEmptyTopicDoesNotRecoverUnrelatedResumeError(t *testing.T) {
-	service := activeAFCService(t)
+func TestSyncExistingEmptyTopicDoesNotRecoverUnrelatedResumeError(t *testing.T) {
+	service := activeSyncService(t)
 	writer := &stubSession{
 		threadResumeErr:   errors.New("permission denied"),
 		threadStartResult: map[string]any{"thread": map[string]any{"id": "must-not-start"}},
 	}
 	service.liveFactory = func() Session { return writer }
-	service.SetAFCForum(&fakeAFCForum{})
+	service.SetSyncForum(&fakeSyncForum{})
 
 	response, err := service.HandleMessageWithID(context.Background(), -1001, 11, 904, 123456789, "do not recover", 0)
 	if err != nil || response == nil || !strings.Contains(response.Text, "could not resume") {
@@ -2157,12 +2157,12 @@ func TestAFCExistingEmptyTopicDoesNotRecoverUnrelatedResumeError(t *testing.T) {
 	}
 }
 
-func TestAFCDraftDefinitiveThreadStartFailureCanRetryWithNewMessage(t *testing.T) {
-	service := activeAFCService(t)
+func TestSyncDraftDefinitiveThreadStartFailureCanRetryWithNewMessage(t *testing.T) {
+	service := activeSyncService(t)
 	writer := &stubSession{threadStartErr: errors.New("invalid cwd")}
 	service.liveFactory = func() Session { return writer }
-	forum := &fakeAFCForum{nextTopicID: 20}
-	service.SetAFCForum(forum)
+	forum := &fakeSyncForum{nextTopicID: 20}
+	service.SetSyncForum(forum)
 	ctx := context.Background()
 	menu, err := service.HandleMessageWithID(ctx, -1001, 1, 700, 123456789, "/newchat", 0)
 	if err != nil || menu == nil || len(menu.Buttons) == 0 {
@@ -2175,12 +2175,12 @@ func TestAFCDraftDefinitiveThreadStartFailureCanRetryWithNewMessage(t *testing.T
 	if err != nil || failed == nil || !strings.Contains(failed.Text, "send a new message to retry") {
 		t.Fatalf("failed=%#v err=%v", failed, err)
 	}
-	drafts, err := service.store.ListAFCTopicDrafts(ctx, "s")
-	if err != nil || len(drafts) != 1 || drafts[0].State != model.AFCDraftReady || drafts[0].SourceMessageID != 0 {
+	drafts, err := service.store.ListSyncTopicDrafts(ctx, "s")
+	if err != nil || len(drafts) != 1 || drafts[0].State != model.SyncDraftReady || drafts[0].SourceMessageID != 0 {
 		t.Fatalf("drafts=%#v err=%v", drafts, err)
 	}
-	receipt, err := service.store.GetAFCReceipt(ctx, 21, 905)
-	if err != nil || receipt == nil || receipt.State != model.AFCReceiptRejected {
+	receipt, err := service.store.GetSyncReceipt(ctx, 21, 905)
+	if err != nil || receipt == nil || receipt.State != model.SyncReceiptRejected {
 		t.Fatalf("receipt=%#v err=%v", receipt, err)
 	}
 
@@ -2195,15 +2195,15 @@ func TestAFCDraftDefinitiveThreadStartFailureCanRetryWithNewMessage(t *testing.T
 	}
 }
 
-func TestAFCDraftDefinitiveFirstTurnFailureReturnsTopicToDraft(t *testing.T) {
-	service := activeAFCService(t)
+func TestSyncDraftDefinitiveFirstTurnFailureReturnsTopicToDraft(t *testing.T) {
+	service := activeSyncService(t)
 	writer := &stubSession{
 		threadStartResult: map[string]any{"thread": map[string]any{"id": "empty-thread", "cwd": "/tmp/project"}},
 		turnStartErr:      errors.New("invalid input"),
 	}
 	service.liveFactory = func() Session { return writer }
-	forum := &fakeAFCForum{nextTopicID: 20}
-	service.SetAFCForum(forum)
+	forum := &fakeSyncForum{nextTopicID: 20}
+	service.SetSyncForum(forum)
 	ctx := context.Background()
 	menu, err := service.HandleMessageWithID(ctx, -1001, 1, 700, 123456789, "/projects", 0)
 	if err != nil || menu == nil || len(menu.Buttons) == 0 {
@@ -2216,22 +2216,22 @@ func TestAFCDraftDefinitiveFirstTurnFailureReturnsTopicToDraft(t *testing.T) {
 	if err != nil || response == nil || !strings.Contains(response.Text, "send a new message to retry") {
 		t.Fatalf("response=%#v err=%v", response, err)
 	}
-	drafts, err := service.store.ListAFCTopicDrafts(ctx, "s")
-	if err != nil || len(drafts) != 1 || drafts[0].TopicID != 21 || drafts[0].State != model.AFCDraftReady {
+	drafts, err := service.store.ListSyncTopicDrafts(ctx, "s")
+	if err != nil || len(drafts) != 1 || drafts[0].TopicID != 21 || drafts[0].State != model.SyncDraftReady {
 		t.Fatalf("drafts=%#v err=%v", drafts, err)
 	}
-	topic, err := service.store.GetActiveAFCTopic(ctx, -1001, 21)
+	topic, err := service.store.GetActiveSyncTopic(ctx, -1001, 21)
 	if err != nil || topic != nil {
 		t.Fatalf("topic=%#v err=%v", topic, err)
 	}
-	receipt, err := service.store.GetAFCReceipt(ctx, 21, 907)
-	if err != nil || receipt == nil || receipt.State != model.AFCReceiptRejected {
+	receipt, err := service.store.GetSyncReceipt(ctx, 21, 907)
+	if err != nil || receipt == nil || receipt.State != model.SyncReceiptRejected {
 		t.Fatalf("receipt=%#v err=%v", receipt, err)
 	}
 }
 
-func TestAFCControlHelpListsNewTaskCommands(t *testing.T) {
-	service := activeAFCService(t)
+func TestSyncControlHelpListsNewTaskCommands(t *testing.T) {
+	service := activeSyncService(t)
 	response, err := service.HandleMessageWithID(context.Background(), -1001, 1, 903, 123456789, "/threads", 0)
 	if err != nil || response == nil || !strings.Contains(response.Text, "/projects") || !strings.Contains(response.Text, "/newchat") || !strings.Contains(response.Text, "/repair") {
 		t.Fatalf("response=%#v err=%v", response, err)
@@ -2248,8 +2248,8 @@ func TestAFCControlHelpListsNewTaskCommands(t *testing.T) {
 	}
 }
 
-func TestAFCControlRepairRequestsSoftSessionRepair(t *testing.T) {
-	service := activeAFCService(t)
+func TestSyncControlRepairRequestsSoftSessionRepair(t *testing.T) {
+	service := activeSyncService(t)
 	ctx := context.Background()
 
 	response, err := service.HandleMessageWithID(ctx, -1001, 1, 905, 123456789, "/repair@assistant_bot", 0)
@@ -2260,28 +2260,28 @@ func TestAFCControlRepairRequestsSoftSessionRepair(t *testing.T) {
 	if err != nil || !strings.HasSuffix(request, "|telegram") {
 		t.Fatalf("repair request=%q err=%v", request, err)
 	}
-	state, err := service.store.GetAFCState(ctx)
-	if err != nil || state.State != model.AFCStateActive {
-		t.Fatalf("AFC state=%#v err=%v, want unchanged active state", state, err)
+	state, err := service.store.GetSyncState(ctx)
+	if err != nil || state.State != model.SyncStateActive {
+		t.Fatalf("Sync state=%#v err=%v, want unchanged active state", state, err)
 	}
 }
 
-func TestAFCPromptTopicTitleKeepsUnicodeAndBoundsLength(t *testing.T) {
-	if got := afcPromptTopicTitle("  Собери   информацию про Codex server  "); got != "Собери информацию про Codex server" {
+func TestSyncPromptTopicTitleKeepsUnicodeAndBoundsLength(t *testing.T) {
+	if got := syncPromptTopicTitle("  Собери   информацию про Codex server  "); got != "Собери информацию про Codex server" {
 		t.Fatalf("title=%q", got)
 	}
-	got := afcPromptTopicTitle(strings.Repeat("длинное название ", 20))
-	if !strings.HasSuffix(got, "…") || len([]rune(got)) > afcPromptTitleMaxRunes+1 {
+	got := syncPromptTopicTitle(strings.Repeat("длинное название ", 20))
+	if !strings.HasSuffix(got, "…") || len([]rune(got)) > syncPromptTitleMaxRunes+1 {
 		t.Fatalf("bounded title=%q runes=%d", got, len([]rune(got)))
 	}
 }
 
-func TestAFCNewTaskDoesNotCreateThreadWhenTopicCreationFails(t *testing.T) {
-	service := activeAFCService(t)
+func TestSyncNewTaskDoesNotCreateThreadWhenTopicCreationFails(t *testing.T) {
+	service := activeSyncService(t)
 	writer := &stubSession{threadStartResult: map[string]any{"thread": map[string]any{"id": "orphan-thread", "title": "Safe partial", "cwd": "/tmp/project"}}}
 	service.liveFactory = func() Session { return writer }
-	forum := &fakeAFCForum{createErrAt: 1}
-	service.SetAFCForum(forum)
+	forum := &fakeSyncForum{createErrAt: 1}
+	service.SetSyncForum(forum)
 	ctx := context.Background()
 	menu, err := service.HandleMessageWithID(ctx, -1001, 1, 700, 123456789, "/newchat", 0)
 	if err != nil || menu == nil || len(menu.Buttons) == 0 {
@@ -2295,14 +2295,14 @@ func TestAFCNewTaskDoesNotCreateThreadWhenTopicCreationFails(t *testing.T) {
 	if thread != nil || len(writer.threadStartCalls) != 0 {
 		t.Fatalf("topic failure created Codex state: thread=%#v calls=%#v", thread, writer.threadStartCalls)
 	}
-	topics, _ := service.store.ListAFCTopics(ctx, "s")
+	topics, _ := service.store.ListSyncTopics(ctx, "s")
 	for _, topic := range topics {
 		if topic.ThreadID == "orphan-thread" {
 			t.Fatalf("failed topic got binding: %#v", topic)
 		}
 	}
-	if service.afcWriter.Snapshot().State != appserver.WriterStopped {
-		t.Fatalf("writer=%#v", service.afcWriter.Snapshot())
+	if service.syncWriter.Snapshot().State != appserver.WriterStopped {
+		t.Fatalf("writer=%#v", service.syncWriter.Snapshot())
 	}
 	duplicate, err := service.HandleCallback(ctx, -1001, 1, 900, 123456789, menu.Buttons[0][0].CallbackData)
 	if err != nil || duplicate == nil || !strings.Contains(duplicate.CallbackText, "stale") || len(writer.threadStartCalls) != 0 {
@@ -2310,22 +2310,22 @@ func TestAFCNewTaskDoesNotCreateThreadWhenTopicCreationFails(t *testing.T) {
 	}
 }
 
-func TestAFCProjectsFailClosedWhileOff(t *testing.T) {
+func TestSyncProjectsFailClosedWhileOff(t *testing.T) {
 	service := newTestService(t)
-	service.cfg.AFCGroupID = -1001
-	forum := &fakeAFCForum{}
-	service.SetAFCForum(forum)
+	service.cfg.SyncGroupID = -1001
+	forum := &fakeSyncForum{}
+	service.SetSyncForum(forum)
 	response, err := service.HandleMessageWithID(context.Background(), -1001, 1, 700, 123456789, "/projects", 0)
 	if err != nil || response == nil || len(response.Buttons) != 0 || len(forum.creates) != 0 {
 		t.Fatalf("response=%#v creates=%v err=%v", response, forum.creates, err)
 	}
-	if service.afcWriter.Snapshot().State != appserver.WriterStopped {
-		t.Fatalf("writer=%#v", service.afcWriter.Snapshot())
+	if service.syncWriter.Snapshot().State != appserver.WriterStopped {
+		t.Fatalf("writer=%#v", service.syncWriter.Snapshot())
 	}
 }
 
-func TestAFCProjectCallbackFromOldSessionFailsBeforeThreadStart(t *testing.T) {
-	service := activeAFCService(t)
+func TestSyncProjectCallbackFromOldSessionFailsBeforeThreadStart(t *testing.T) {
+	service := activeSyncService(t)
 	writer := &stubSession{threadStartResult: map[string]any{"thread": map[string]any{"id": "must-not-start"}}}
 	service.liveFactory = func() Session { return writer }
 	ctx := context.Background()
@@ -2333,7 +2333,7 @@ func TestAFCProjectCallbackFromOldSessionFailsBeforeThreadStart(t *testing.T) {
 	if err != nil || menu == nil || len(menu.Buttons) == 0 {
 		t.Fatalf("menu=%#v err=%v", menu, err)
 	}
-	if _, err := service.store.MarkAFCOff(ctx, "s"); err != nil {
+	if _, err := service.store.MarkSyncOff(ctx, "s"); err != nil {
 		t.Fatal(err)
 	}
 	response, err := service.HandleCallback(ctx, -1001, 1, 900, 123456789, menu.Buttons[0][0].CallbackData)
@@ -2345,15 +2345,15 @@ func TestAFCProjectCallbackFromOldSessionFailsBeforeThreadStart(t *testing.T) {
 	}
 }
 
-func afcRunningPayload(threadID, turnID string) map[string]any {
+func syncRunningPayload(threadID, turnID string) map[string]any {
 	return map[string]any{"thread": map[string]any{"id": threadID, "status": "inProgress", "turns": []any{map[string]any{"id": turnID, "status": "inProgress", "items": []any{}}}}}
 }
 
-func afcRunningPayloadWithCommentary(threadID, turnID, commentary string) map[string]any {
-	return afcRunningPayloadWithCommentaries(threadID, turnID, commentary)
+func syncRunningPayloadWithCommentary(threadID, turnID, commentary string) map[string]any {
+	return syncRunningPayloadWithCommentaries(threadID, turnID, commentary)
 }
 
-func afcRunningPayloadWithCommentaries(threadID, turnID string, commentaries ...string) map[string]any {
+func syncRunningPayloadWithCommentaries(threadID, turnID string, commentaries ...string) map[string]any {
 	items := make([]any, 0, len(commentaries))
 	for index, commentary := range commentaries {
 		items = append(items, map[string]any{
@@ -2365,16 +2365,16 @@ func afcRunningPayloadWithCommentaries(threadID, turnID string, commentaries ...
 	}}}}
 }
 
-type afcTestUser struct {
+type syncTestUser struct {
 	id   string
 	text string
 }
 
-func afcRunningPayloadWithUser(threadID, turnID, userID, userText, commentary string) map[string]any {
-	return afcRunningPayloadWithUsers(threadID, turnID, []afcTestUser{{id: userID, text: userText}}, commentary)
+func syncRunningPayloadWithUser(threadID, turnID, userID, userText, commentary string) map[string]any {
+	return syncRunningPayloadWithUsers(threadID, turnID, []syncTestUser{{id: userID, text: userText}}, commentary)
 }
 
-func afcRunningPayloadWithUsers(threadID, turnID string, users []afcTestUser, commentary string) map[string]any {
+func syncRunningPayloadWithUsers(threadID, turnID string, users []syncTestUser, commentary string) map[string]any {
 	items := make([]any, 0, len(users)+1)
 	for _, user := range users {
 		items = append(items, map[string]any{"id": user.id, "type": "userMessage", "content": []any{map[string]any{"type": "text", "text": user.text}}})
@@ -2387,17 +2387,17 @@ func afcRunningPayloadWithUsers(threadID, turnID string, users []afcTestUser, co
 	}}}}
 }
 
-func afcInterruptedPayload(threadID, turnID string) map[string]any {
+func syncInterruptedPayload(threadID, turnID string) map[string]any {
 	return map[string]any{"thread": map[string]any{"id": threadID, "status": "interrupted", "turns": []any{map[string]any{"id": turnID, "status": "interrupted", "items": []any{}}}}}
 }
 
-func afcCompletedPayload(threadID, turnID, finalText string) map[string]any {
+func syncCompletedPayload(threadID, turnID, finalText string) map[string]any {
 	return map[string]any{"thread": map[string]any{"id": threadID, "status": "completed", "turns": []any{map[string]any{
 		"id": turnID, "status": "completed", "items": []any{map[string]any{"id": "final", "type": "agentMessage", "phase": "final_answer", "text": finalText}},
 	}}}}
 }
 
-func afcCompletedPayloadWithCommentaries(threadID, turnID, finalText string, commentaries ...string) map[string]any {
+func syncCompletedPayloadWithCommentaries(threadID, turnID, finalText string, commentaries ...string) map[string]any {
 	items := make([]any, 0, len(commentaries)+1)
 	for index, commentary := range commentaries {
 		items = append(items, map[string]any{
@@ -2410,26 +2410,26 @@ func afcCompletedPayloadWithCommentaries(threadID, turnID, finalText string, com
 	}}}}
 }
 
-func activeAFCService(t *testing.T) *Service {
+func activeSyncService(t *testing.T) *Service {
 	t.Helper()
 	service := newTestService(t)
-	service.cfg.AFCGroupID = -1001
+	service.cfg.SyncGroupID = -1001
 	ctx := context.Background()
-	if err := service.store.BeginAFCActivation(ctx, "s", -1001); err != nil {
+	if err := service.store.BeginSyncActivation(ctx, "s", -1001); err != nil {
 		t.Fatal(err)
 	}
 	for index, topicID := range []int64{11, 12} {
 		threadID := fmt.Sprintf("thread-%d", index+1)
-		if err := service.store.UpsertAFCTopic(ctx, model.AFCTopic{SessionID: "s", ChatID: -1001, TopicID: topicID, ThreadID: threadID, Title: "Topic", TelegramState: model.AFCTopicConnected}); err != nil {
+		if err := service.store.UpsertSyncTopic(ctx, model.SyncTopic{SessionID: "s", ChatID: -1001, TopicID: topicID, ThreadID: threadID, Title: "Topic", TelegramState: model.SyncTopicConnected}); err != nil {
 			t.Fatal(err)
 		}
 		if err := service.store.UpsertThread(ctx, model.Thread{ID: threadID, Title: "Topic", CWD: "/tmp/project", Status: "idle"}); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if err := service.store.FinishAFCActivation(ctx, "s", `{}`, true); err != nil {
+	if err := service.store.FinishSyncActivation(ctx, "s", `{}`, true); err != nil {
 		t.Fatal(err)
 	}
-	service.SetAFCForum(&fakeAFCForum{})
+	service.SetSyncForum(&fakeSyncForum{})
 	return service
 }

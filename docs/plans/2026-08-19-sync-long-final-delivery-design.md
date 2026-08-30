@@ -1,8 +1,8 @@
-# AFC Long Final Delivery
+# Sync Long Final Delivery
 
 ## Problem
 
-AFC currently sends the complete Final as one Bot API `sendMessage` request.
+Sync currently sends the complete Final as one Bot API `sendMessage` request.
 Telegram limits message text to 4096 UTF-16 code units, so a longer Codex Final
 is rejected. The status message remains visible, the Final fingerprint remains
 pending, and reconciliation keeps retrying the same invalid request without an
@@ -10,7 +10,7 @@ operator-visible diagnostic.
 
 ## Decision
 
-- Split only AFC Final messages. Status messages keep their existing single
+- Split only Sync Final messages. Status messages keep their existing single
   editable-message contract.
 - Reuse the shared `tgformat` UTF-16-aware splitter with the Telegram message
   limit instead of adding another length implementation.
