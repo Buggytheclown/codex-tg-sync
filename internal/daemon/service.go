@@ -2398,11 +2398,28 @@ func (s *Service) turnStartOptions(ctx context.Context, collaborationMode string
 		CollaborationMode: strings.TrimSpace(collaborationMode),
 		Model:             strings.TrimSpace(modelValue),
 		ReasoningEffort:   normalizeReasoningEffort(reasoningValue),
+		ApprovalPolicy:    telegramApprovalPolicy,
+		ApprovalsReviewer: telegramApprovalsReviewer,
+		SandboxMode:       telegramSandboxMode,
 	}
 	if options.Model == "" && thread != nil {
 		options.Model = strings.TrimSpace(thread.PreferredModel)
 	}
 	return options
+}
+
+const (
+	telegramApprovalPolicy    = "on-request"
+	telegramApprovalsReviewer = "auto_review"
+	telegramSandboxMode       = "workspace-write"
+)
+
+func telegramThreadStartOptions() appserver.ThreadStartOptions {
+	return appserver.ThreadStartOptions{
+		ApprovalPolicy:    telegramApprovalPolicy,
+		ApprovalsReviewer: telegramApprovalsReviewer,
+		SandboxMode:       telegramSandboxMode,
+	}
 }
 
 func (s *Service) ensureStartedTurnSnapshot(ctx context.Context, thread *model.Thread, turnID string) {
@@ -3457,7 +3474,7 @@ func (s *Service) renderPendingApproval(ctx context.Context, approval model.Pend
 	buttons := [][]model.ButtonSpec{
 		{
 			s.callbackButton(ctx, "Approve", "approve", approval.ThreadID, approval.TurnID, approval.RequestID, nil),
-			s.callbackButton(ctx, "Approve Session", "approve_session", approval.ThreadID, approval.TurnID, approval.RequestID, nil),
+			s.callbackButton(ctx, "Allow command prefix", "approve_session", approval.ThreadID, approval.TurnID, approval.RequestID, nil),
 		},
 		{
 			s.callbackButton(ctx, "Deny", "deny", approval.ThreadID, approval.TurnID, approval.RequestID, nil),

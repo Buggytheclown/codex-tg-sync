@@ -725,7 +725,7 @@ func (s *Service) renderSummaryPanel(ctx context.Context, thread model.Thread, s
 			buttons = append(buttons,
 				[]model.ButtonSpec{
 					s.callbackButton(ctx, "Approve", "approve", pending.ThreadID, pending.TurnID, pending.RequestID, nil),
-					s.callbackButton(ctx, "Approve Session", "approve_session", pending.ThreadID, pending.TurnID, pending.RequestID, nil),
+					s.callbackButton(ctx, "Allow command prefix", "approve_session", pending.ThreadID, pending.TurnID, pending.RequestID, nil),
 				},
 				[]model.ButtonSpec{
 					s.callbackButton(ctx, "Deny", "deny", pending.ThreadID, pending.TurnID, pending.RequestID, nil),

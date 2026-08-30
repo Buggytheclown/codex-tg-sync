@@ -35,7 +35,7 @@ func (s *Service) dispatchAFCDraftMessage(ctx context.Context, draft model.AFCTo
 	if !created {
 		return afcDuplicateReceiptResponse(receipt), nil
 	}
-	return s.startClaimedAFCDraftLocked(ctx, claimed, receipt, text, text, appserver.ThreadStartOptions{}, appserver.TurnStartOptions{})
+	return s.startClaimedAFCDraftLocked(ctx, claimed, receipt, text, text, telegramThreadStartOptions(), appserver.TurnStartOptions{})
 }
 
 func (s *Service) startClaimedAFCDraftLocked(ctx context.Context, draft model.AFCTopicDraft, receipt model.AFCMessageReceipt, text, titleText string, permissions appserver.ThreadStartOptions, execution appserver.TurnStartOptions) (*DirectResponse, error) {

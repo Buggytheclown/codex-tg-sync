@@ -818,11 +818,17 @@ func TestProjectNewThreadArmsThenPlainTextCreatesThread(t *testing.T) {
 	if len(stub.threadStartCalls) != 1 || stub.threadStartCalls[0] != "/Users/example/project" {
 		t.Fatalf("threadStartCalls = %#v, want project cwd", stub.threadStartCalls)
 	}
+	if len(stub.threadStartOptions) != 1 || stub.threadStartOptions[0].ApprovalPolicy != "on-request" || stub.threadStartOptions[0].ApprovalsReviewer != "auto_review" || stub.threadStartOptions[0].SandboxMode != "workspace-write" {
+		t.Fatalf("threadStartOptions = %#v, want explicit Telegram permissions", stub.threadStartOptions)
+	}
 	if len(stub.turnStartCalls) != 1 {
 		t.Fatalf("turnStartCalls = %#v, want one turn start", stub.turnStartCalls)
 	}
 	if got := stub.turnStartCalls[0]; got.threadID != "new-thread-id" || got.message != "first prompt" || got.cwd != "/Users/example/project" {
 		t.Fatalf("turnStartCall = %#v, want new thread first prompt in project cwd", got)
+	}
+	if got := stub.turnStartCalls[0]; got.approvalPolicy != "on-request" || got.approvalsReviewer != "auto_review" || got.sandboxMode != "workspace-write" {
+		t.Fatalf("turnStartCall = %#v, want explicit Telegram permissions", got)
 	}
 	binding, err := service.store.GetBinding(ctx, 123456789, 0)
 	if err != nil {

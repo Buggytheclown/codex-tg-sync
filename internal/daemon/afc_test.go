@@ -1805,6 +1805,9 @@ func TestAFCApprovalCallbackIsGuardedByTopicTurnAndGeneration(t *testing.T) {
 	if len(forum.actions) != 1 || forum.actions[0].topicID != 11 || len(forum.actions[0].buttons) != 2 {
 		t.Fatalf("actions=%#v", forum.actions)
 	}
+	if got := forum.actions[0].buttons[0][1].Text; got != "Allow command prefix" {
+		t.Fatalf("persistent approval label=%q, want Allow command prefix", got)
+	}
 	if !strings.HasPrefix(forum.actions[0].text, afcApprovalHeader+"\n") {
 		t.Fatalf("approval text=%q, want icon header", forum.actions[0].text)
 	}
@@ -1822,6 +1825,9 @@ func TestAFCApprovalCallbackIsGuardedByTopicTurnAndGeneration(t *testing.T) {
 	}
 	if len(writer.respondRequestCalls) != 1 || writer.respondRequestCalls[0].requestID != "request-1" || writer.respondRequestCalls[0].result["decision"] != "accept" {
 		t.Fatalf("responses=%#v", writer.respondRequestCalls)
+	}
+	if len(forum.edits) != 1 || forum.edits[0].topicID != 11 || forum.edits[0].messageID != forum.actions[0].messageID || !strings.Contains(forum.edits[0].text, "Approved") {
+		t.Fatalf("approval card edits=%#v, want same card marked Approved", forum.edits)
 	}
 	response, err = service.HandleCallback(ctx, -1001, 11, forum.actions[0].messageID, 123456789, token)
 	if err != nil || response == nil || !strings.Contains(response.CallbackText, "stale") {
@@ -2146,6 +2152,12 @@ func TestAFCProjectPickerCreatesThreadThenTopicThenDurableBinding(t *testing.T) 
 	}
 	if len(writer.threadStartCalls) != 1 {
 		t.Fatalf("thread starts=%#v", writer.threadStartCalls)
+	}
+	if len(writer.threadStartOptions) != 1 || writer.threadStartOptions[0].ApprovalPolicy != "on-request" || writer.threadStartOptions[0].ApprovalsReviewer != "auto_review" || writer.threadStartOptions[0].SandboxMode != "workspace-write" {
+		t.Fatalf("thread permissions=%#v, want explicit Telegram permissions", writer.threadStartOptions)
+	}
+	if got := writer.turnStartCalls[0]; got.approvalPolicy != "on-request" || got.approvalsReviewer != "auto_review" || got.sandboxMode != "workspace-write" {
+		t.Fatalf("turn permissions=%#v, want explicit Telegram permissions", got)
 	}
 	topics, err := service.store.ListAFCTopics(ctx, "s")
 	if err != nil || len(topics) != 3 || topics[2].ThreadID != "new-thread" || topics[2].TopicID != 21 {

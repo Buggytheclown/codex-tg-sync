@@ -196,7 +196,7 @@ func (s *Service) handleAFCPendingRequestLocked(ctx context.Context, topic model
 	var buttons [][]model.ButtonSpec
 	if approval.PromptKind == "approval" {
 		row := []model.ButtonSpec{}
-		for _, choice := range []struct{ label, decision string }{{"Approve", "accept"}, {"Approve session", "acceptForSession"}, {"Deny", "decline"}, {"Cancel", "cancel"}} {
+		for _, choice := range []struct{ label, decision string }{{"Approve", "accept"}, {"Allow command prefix", "acceptForSession"}, {"Deny", "decline"}, {"Cancel", "cancel"}} {
 			route, button := s.newAFCCallbackRoute(ctx, topic, approval, "afc_approval", map[string]any{"decision": choice.decision})
 			routes, row = append(routes, route), append(row, button)
 		}
@@ -225,7 +225,7 @@ func (s *Service) handleAFCPendingRequestLocked(ctx context.Context, topic model
 }
 
 func (s *Service) newAFCCallbackRoute(ctx context.Context, topic model.AFCTopic, approval model.PendingApproval, action string, extra map[string]any) (model.CallbackRoute, model.ButtonSpec) {
-	payload := map[string]any{"session_id": topic.SessionID, "topic_id": topic.TopicID, "thread_id": topic.ThreadID, "turn_id": topic.ActiveTurnID, "generation": topic.WriterGeneration}
+	payload := map[string]any{"session_id": topic.SessionID, "topic_id": topic.TopicID, "thread_id": topic.ThreadID, "turn_id": topic.ActiveTurnID, "generation": topic.WriterGeneration, "question": approval.Question}
 	for key, value := range extra {
 		payload[key] = value
 	}
@@ -234,7 +234,7 @@ func (s *Service) newAFCCallbackRoute(ctx context.Context, topic model.AFCTopic,
 	_ = s.store.PutCallbackRoute(ctx, route)
 	label := "Answer"
 	if value, ok := extra["decision"].(string); ok {
-		label = map[string]string{"accept": "Approve", "acceptForSession": "Approve session", "decline": "Deny", "cancel": "Cancel"}[value]
+		label = map[string]string{"accept": "Approve", "acceptForSession": "Allow command prefix", "decline": "Deny", "cancel": "Cancel"}[value]
 	}
 	if response, ok := extra["response"].(map[string]any); ok {
 		if value, ok := response["label"].(string); ok {
@@ -294,7 +294,35 @@ func (s *Service) handleAFCCallback(ctx context.Context, topicID, messageID int6
 		return &DirectResponse{CallbackText: "AFC response failed; button remains active."}, nil
 	}
 	_ = s.store.ExpireAFCCallbackRoutesByRequest(ctx, route.RequestID)
+	if route.Action == "afc_approval" {
+		lines := []string{afcApprovalHeader}
+		if question := strings.TrimSpace(afcPayloadString(payload, "question")); question != "" {
+			lines = append(lines, question)
+		}
+		lines = append(lines, "", afcApprovalResolution(afcPayloadString(payload, "decision")))
+		forum := s.getAFCForum()
+		if forum == nil {
+			return &DirectResponse{CallbackText: "AFC response sent; card update failed."}, nil
+		}
+		if err := forum.EditAFCMessage(ctx, topicID, messageID, model.RenderedMessage{Text: strings.Join(lines, "\n")}); err != nil {
+			s.setError(ctx, fmt.Errorf("edit AFC approval card: %w", err))
+			return &DirectResponse{CallbackText: "AFC response sent; card update failed."}, nil
+		}
+	}
 	return &DirectResponse{CallbackText: "AFC response sent."}, nil
+}
+
+func afcApprovalResolution(decision string) string {
+	switch decision {
+	case "accept", "acceptForSession":
+		return "Approved"
+	case "decline":
+		return "Denied"
+	case "cancel":
+		return "Cancelled"
+	default:
+		return "Resolved"
+	}
 }
 
 type afcInputChoice struct {

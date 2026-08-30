@@ -60,6 +60,13 @@ and starts the first turn in that cwd. `/newthread <prompt>` is the separate
 escape hatch for starting without project selection or Chat folder creation;
 App Server may still report the daemon default cwd for that thread.
 
+Direct Telegram starts pass `on-request`, `auto_review`, and `workspace-write`
+explicitly to both `thread/start` and `turn/start`; they do not inherit a
+read-only App Server default. When App Server still asks the operator, the
+approval card is edited to its resolved state after a choice. `Allow command
+prefix` means the App Server `acceptForSession` decision for the proposed
+command prefix; it does not approve every command in the Codex session.
+
 The Telegram bot does not accept arbitrary filesystem paths for this flow.
 Creating or editing project work directories is a separate future feature.
 

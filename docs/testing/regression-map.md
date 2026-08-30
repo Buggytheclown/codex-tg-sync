@@ -67,6 +67,10 @@ Planned primary tests:
   subscriptions without duplicate topics or prompt replay.
 - `internal/daemon/afc_test.go` proves active topic messages steer the expected
   turn and stale-active recovery does not create a parallel turn.
+- `internal/daemon/afc_test.go::TestAFCApprovalCallbackIsGuardedByTopicTurnAndGeneration`
+  proves approval callbacks remain ownership-guarded, name persistent approval
+  by its command-prefix scope, and replace the action card with its resolved
+  status without stale buttons.
 - `internal/daemon/afc_test.go::TestAFCSharedDaemonRestartUnknownReconcilesBeforeSteer`
   proves bridge restart recovery adopts the authoritative active turn without
   replaying the old receipt or starting a parallel turn.
