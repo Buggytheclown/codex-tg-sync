@@ -120,13 +120,13 @@ func runDaemon(cfg config.Config) error {
 		return err
 	}
 	service.SetSender(bot)
+	if err := bot.Start(ctx); err != nil {
+		return err
+	}
 	if err := service.Start(ctx); err != nil {
 		return err
 	}
 	if err := startControlAPI(ctx, cfg, service, logger); err != nil {
-		return err
-	}
-	if err := bot.Start(ctx); err != nil {
 		return err
 	}
 	for _, poller := range []struct {

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -22,6 +23,7 @@ type fakeSyncForum struct {
 	prepares         int
 	nextTopicID      int64
 	createErrAt      int
+	createErr        error
 	sendErrAt        int
 	sendErr          error
 	rejectOversize   bool
@@ -69,6 +71,17 @@ type syncWriterSession struct {
 
 func (s *syncWriterSession) Subscribe() <-chan appserver.Event { return s.events }
 
+type pagedThreadListSession struct {
+	*stubSession
+	pages   map[string]map[string]any
+	cursors []string
+}
+
+func (s *pagedThreadListSession) ThreadList(_ context.Context, _ int, cursor string) (map[string]any, error) {
+	s.cursors = append(s.cursors, cursor)
+	return s.pages[cursor], nil
+}
+
 func (f *fakeSyncForum) ValidateSyncGroup(context.Context, int64) error { return f.validateErr }
 func (f *fakeSyncForum) PrepareSyncControl(context.Context) error {
 	f.prepares++
@@ -80,10 +93,17 @@ func (f *fakeSyncForum) CreateSyncTopic(_ context.Context, title string) (int64,
 		f.onCreate(title)
 	}
 	if f.createErrAt > 0 && len(f.creates) == f.createErrAt {
+		if f.createErr != nil {
+			return 0, f.createErr
+		}
 		return 0, errors.New("create failed")
 	}
 	f.nextTopicID++
 	return f.nextTopicID, nil
+}
+
+func (f *fakeSyncForum) CreateLaunchTopic(ctx context.Context, title string) (int64, error) {
+	return f.CreateSyncTopic(ctx, title)
 }
 func (f *fakeSyncForum) RenameSyncTopic(_ context.Context, topicID int64, title string) error {
 	f.renames = append(f.renames, fakeSyncRename{topicID: topicID, title: title})
@@ -100,9 +120,9 @@ func (f *fakeSyncForum) DeleteSyncMessage(_ context.Context, topicID, messageID 
 	f.messageDeletes = append(f.messageDeletes, fakeSyncMessageDelete{topicID: topicID, messageID: messageID})
 	return f.messageDeleteErr
 }
-func (f *fakeSyncForum) SendSyncMessage(_ context.Context, topicID int64, message model.RenderedMessage, silent bool) (int64, error) {
+func (f *fakeSyncForum) SendSyncMessage(_ context.Context, topicID int64, message model.RenderedMessage, options model.SendOptions) (int64, error) {
 	id := int64(100 + len(f.sends))
-	f.sends = append(f.sends, fakeSyncSend{topicID: topicID, messageID: id, text: message.Text, message: message, silent: silent})
+	f.sends = append(f.sends, fakeSyncSend{topicID: topicID, messageID: id, text: message.Text, message: message, silent: options.Silent})
 	if f.rejectOversize && syncUTF16Len(message.Text) > tgformat.TelegramMessageLimit {
 		return 0, errors.New("message is too long")
 	}
@@ -114,7 +134,7 @@ func (f *fakeSyncForum) SendSyncMessage(_ context.Context, topicID int64, messag
 	}
 	return id, nil
 }
-func (f *fakeSyncForum) EditSyncMessage(_ context.Context, topicID, messageID int64, message model.RenderedMessage) error {
+func (f *fakeSyncForum) EditSyncMessage(_ context.Context, topicID, messageID int64, message model.RenderedMessage, options model.SendOptions) error {
 	f.edits = append(f.edits, fakeSyncEdit{topicID: topicID, messageID: messageID, text: message.Text, message: message})
 	return nil
 }
@@ -167,10 +187,15 @@ func TestSyncActivationUsesConfiguredInitialTopicLimit(t *testing.T) {
 	service.cfg.SyncGroupID = -1001
 	service.cfg.SyncInitialTopicLimit = 5
 	items := make([]any, 0, 7)
+	statuses := []string{"completed", "waitingOnApproval", "notLoaded", "notLoaded", "", "completed", "notLoaded"}
 	for i := 1; i <= 7; i++ {
-		items = append(items, map[string]any{
-			"id": fmt.Sprintf("thread-%d", i), "title": fmt.Sprintf("Thread %d", i), "updatedAt": float64(i),
-		})
+		item := map[string]any{
+			"id": fmt.Sprintf("thread-%d", i), "title": fmt.Sprintf("Thread %d", i), "updatedAt": float64(i), "status": statuses[i-1],
+		}
+		if turnStatus := map[int]string{3: "inProgress", 4: "failed", 7: "completed"}[i]; turnStatus != "" {
+			item["turns"] = []any{map[string]any{"id": "turn-" + turnStatus, "status": turnStatus}}
+		}
+		items = append(items, item)
 	}
 	service.poll = &stubSession{threadListResult: map[string]any{"data": items}}
 	service.pollConnected = true
@@ -184,8 +209,76 @@ func TestSyncActivationUsesConfiguredInitialTopicLimit(t *testing.T) {
 	if len(forum.creates) != 5 {
 		t.Fatalf("creates=%#v, want five", forum.creates)
 	}
-	if forum.creates[0] != "Thread 7" || forum.creates[4] != "Thread 3" {
-		t.Fatalf("creates=%#v, want five newest in order", forum.creates)
+	want := []string{"Thread 3", "Thread 2", "Thread 5", "Thread 4", "Thread 7"}
+	if !reflect.DeepEqual(forum.creates, want) {
+		t.Fatalf("creates=%#v, want importance-first limit %#v", forum.creates, want)
+	}
+}
+
+func TestSortSyncActivationThreadsByWorkPriorityAndRecency(t *testing.T) {
+	threads := []model.Thread{
+		{ID: "completed-new", Status: "completed", UpdatedAt: 900},
+		{ID: "failed-new", Status: "failed", UpdatedAt: 800},
+		{ID: "unknown-new", Status: "", UpdatedAt: 700},
+		{ID: "running-old", Status: "notLoaded", ActiveTurnID: "active-turn", UpdatedAt: 100},
+		{ID: "waiting-new", Status: "waitingOnApproval", UpdatedAt: 600},
+		{ID: "running-new", Status: "running", UpdatedAt: 500},
+		{ID: "completed-old", Status: "completed", UpdatedAt: 200},
+		{ID: "failed-old", Status: "interrupted", UpdatedAt: 300},
+		{ID: "same-b", Status: "completed", UpdatedAt: 50},
+		{ID: "same-a", Status: "completed", UpdatedAt: 50},
+	}
+
+	sortSyncActivationThreads(threads)
+
+	got := make([]string, 0, len(threads))
+	for _, thread := range threads {
+		got = append(got, thread.ID)
+	}
+	want := []string{
+		"waiting-new", "running-new", "running-old",
+		"unknown-new",
+		"failed-new", "failed-old",
+		"completed-new", "completed-old", "same-a", "same-b",
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("activation order = %#v, want %#v", got, want)
+	}
+}
+
+func TestSyncActivationFindsRunningThreadOnLaterListPage(t *testing.T) {
+	service := newTestService(t)
+	service.cfg.SyncGroupID = -1001
+	service.cfg.SyncInitialTopicLimit = 1
+	poll := &pagedThreadListSession{
+		stubSession: &stubSession{},
+		pages: map[string]map[string]any{
+			"": {
+				"data":       []any{map[string]any{"id": "completed-new", "title": "Completed New", "status": "completed", "updatedAt": float64(900)}},
+				"nextCursor": "page-2",
+			},
+			"page-2": {
+				"data": []any{map[string]any{
+					"id": "running-old", "title": "Running Old", "status": "notLoaded", "updatedAt": float64(100),
+					"turns": []any{map[string]any{"id": "active-turn", "status": "inProgress"}},
+				}},
+			},
+		},
+	}
+	service.poll = poll
+	service.pollConnected = true
+	forum := &fakeSyncForum{nextTopicID: 10}
+	service.SetSyncForum(forum)
+
+	response, err := service.HandleMessage(context.Background(), -1001, 1, 123456789, "/sync on", 0)
+	if err != nil || response == nil {
+		t.Fatalf("response=%#v err=%v", response, err)
+	}
+	if !reflect.DeepEqual(poll.cursors, []string{"", "page-2"}) {
+		t.Fatalf("thread/list cursors=%#v", poll.cursors)
+	}
+	if !reflect.DeepEqual(forum.creates, []string{"Running Old"}) {
+		t.Fatalf("creates=%#v, want running thread from later page", forum.creates)
 	}
 }
 

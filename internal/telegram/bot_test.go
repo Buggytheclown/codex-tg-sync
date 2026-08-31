@@ -3,6 +3,7 @@ package telegram
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -11,7 +12,9 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/mideco-tech/codex-tg/internal/config"
 	"github.com/mideco-tech/codex-tg/internal/daemon"
@@ -206,11 +209,11 @@ func TestBotSyncMessagePreservesRenderedEntitiesOnSendAndEdit(t *testing.T) {
 		Text:     "status\nbody",
 		Entities: []model.MessageEntity{{Type: "expandable_blockquote", Offset: 7, Length: 4}},
 	}
-	messageID, err := bot.SendSyncMessage(context.Background(), 11, rendered, true)
+	messageID, err := bot.SendSyncMessage(context.Background(), 11, rendered, model.SendOptions{Silent: true})
 	if err != nil || messageID != 81 {
 		t.Fatalf("SendSyncMessage id=%d err=%v", messageID, err)
 	}
-	if err := bot.EditSyncMessage(context.Background(), 11, messageID, rendered); err != nil {
+	if err := bot.EditSyncMessage(context.Background(), 11, messageID, rendered, model.SendOptions{}); err != nil {
 		t.Fatalf("EditSyncMessage failed: %v", err)
 	}
 
@@ -228,6 +231,121 @@ func TestBotSyncMessagePreservesRenderedEntitiesOnSendAndEdit(t *testing.T) {
 		if !ok || len(entities) != 1 || entities[0].(map[string]any)["type"] != "expandable_blockquote" {
 			t.Fatalf("payload[%d] entities=%#v", index, payload["entities"])
 		}
+	}
+}
+
+func TestCreateLaunchTopicReturnsRetryable429WithoutInternalReplay(t *testing.T) {
+	t.Parallel()
+
+	var attempts atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempts.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"ok":false,"error_code":429,"description":"Too Many Requests","parameters":{"retry_after":7}}`))
+	}))
+	defer server.Close()
+
+	client := NewClient("token")
+	client.baseURL = server.URL
+	governor := newEgressGovernor(0)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	governor.Start(ctx)
+	bot := &Bot{cfg: config.Config{SyncGroupID: -1001}, client: client, egress: governor}
+
+	_, err := bot.CreateLaunchTopic(ctx, "Launch request")
+	var failure *daemon.SyncForumFailure
+	if !errors.As(err, &failure) || failure.Kind != daemon.SyncForumFailureRetryable {
+		t.Fatalf("CreateLaunchTopic error = %#v, want retryable forum failure", err)
+	}
+	if attempts.Load() != 1 {
+		t.Fatalf("createForumTopic attempts = %d, want one launch-owned attempt", attempts.Load())
+	}
+}
+
+func TestBotGovernorPacesEveryRawTextChunk(t *testing.T) {
+	requests := make(chan struct{}, 2)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests <- struct{}{}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"ok":true,"result":{"message_id":81,"chat":{"id":-1001,"type":"supergroup"},"text":"ok"}}`))
+	}))
+	defer server.Close()
+
+	client := NewClient("token")
+	client.baseURL = server.URL
+	clock := newFakeEgressClock()
+	governor := newEgressGovernorWithClock(defaultTelegramGroupWriteInterval, clock)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	governor.Start(ctx)
+	bot := &Bot{client: client, egress: governor}
+	done := make(chan error, 1)
+	go func() {
+		_, err := bot.SendMessage(ctx, -1001, 77, strings.Repeat("x", telegramMessageLimit+1), nil, model.SendOptions{})
+		done <- err
+	}()
+
+	receiveSignal(t, requests)
+	waitForCondition(t, func() bool { return clock.timerCount() > 0 })
+	assertNoSignal(t, requests)
+	clock.Advance(defaultTelegramGroupWriteInterval)
+	receiveSignal(t, requests)
+	if err := receiveError(t, done); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestBotPreAcknowledgesWholeCallbackBatchDuringGroupCooldown(t *testing.T) {
+	requests := make(chan string, 2)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests <- r.URL.Path
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"ok":true,"result":true}`))
+	}))
+	defer server.Close()
+
+	client := NewClient("token")
+	client.baseURL = server.URL
+	root := t.TempDir()
+	service, err := daemon.New(config.Config{
+		SyncGroupID:    -1001,
+		AllowedUserIDs: []int64{123},
+		Paths: config.Paths{
+			Home: root, DataDir: filepath.Join(root, "data"), LogDir: filepath.Join(root, "logs"), DBPath: filepath.Join(root, "data", "state.sqlite"),
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = service.Close() })
+	clock := newFakeEgressClock()
+	governor := newEgressGovernorWithClock(defaultTelegramGroupWriteInterval, clock)
+	governor.noteCooldown(clock.Now().Add(time.Hour))
+	bot := &Bot{client: client, egress: governor, logger: log.New(io.Discard, "", 0), service: service}
+	allowedMessage := &Message{Chat: Chat{ID: -1001}}
+	bot.acknowledgeCallbacks(context.Background(), []Update{
+		{CallbackQuery: &CallbackQuery{ID: "callback-1", From: &User{ID: 123}, Message: allowedMessage}},
+		{Message: &Message{MessageID: 1}},
+		{CallbackQuery: &CallbackQuery{ID: "callback-2", From: &User{ID: 123}, Message: allowedMessage}},
+		{CallbackQuery: &CallbackQuery{ID: "wrong-user", From: &User{ID: 999}, Message: allowedMessage}},
+		{CallbackQuery: &CallbackQuery{ID: "wrong-group", From: &User{ID: 123}, Message: &Message{Chat: Chat{ID: -1002}}}},
+	})
+
+	for index := 0; index < 2; index++ {
+		select {
+		case path := <-requests:
+			if path != "/answerCallbackQuery" {
+				t.Fatalf("callback request path=%q", path)
+			}
+		case <-time.After(time.Second):
+			t.Fatal("callback acknowledgement waited for group cooldown")
+		}
+	}
+	select {
+	case path := <-requests:
+		t.Fatalf("unauthorized callback was acknowledged via %q", path)
+	case <-time.After(20 * time.Millisecond):
 	}
 }
 

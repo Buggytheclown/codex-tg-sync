@@ -76,16 +76,17 @@ func ThreadFromPayload(payload map[string]any) model.Thread {
 	raw, _ := json.Marshal(threadPayload)
 	updatedAt := int64Value(threadPayload["updatedAt"])
 	activeTurnID := stringValue(threadPayload["activeTurnId"], "")
-	if activeTurnID == "" {
-		if turns, ok := threadPayload["turns"].([]any); ok && len(turns) > 0 {
-			if lastTurn, ok := turns[len(turns)-1].(map[string]any); ok {
-				turnStatus := statusText(lastTurn["status"])
-				if strings.EqualFold(turnStatus, "inProgress") || statusHasFlag(turnStatus, "active") {
-					activeTurnID = stringValue(lastTurn["id"], "")
-				}
-				if preview == "" {
-					preview = previewFromTurn(lastTurn)
-				}
+	if turns, ok := threadPayload["turns"].([]any); ok && len(turns) > 0 {
+		if lastTurn, ok := turns[len(turns)-1].(map[string]any); ok {
+			turnStatus := statusText(lastTurn["status"])
+			if status == "" || strings.EqualFold(status, "notLoaded") {
+				status = turnStatus
+			}
+			if activeTurnID == "" && (strings.EqualFold(turnStatus, "inProgress") || statusHasFlag(turnStatus, "active")) {
+				activeTurnID = stringValue(lastTurn["id"], "")
+			}
+			if preview == "" {
+				preview = previewFromTurn(lastTurn)
 			}
 		}
 	}

@@ -71,6 +71,7 @@ type Service struct {
 	cancel                       context.CancelFunc
 	wg                           sync.WaitGroup
 	externalRequestMu            sync.Mutex
+	externalLaunchWake           chan struct{}
 	syncMu                       sync.Mutex
 	syncForum                    SyncForum
 	syncLeases                   map[string]appserver.WriterLease[Session]
@@ -122,13 +123,14 @@ func New(cfg config.Config) (*Service, error) {
 		return nil, err
 	}
 	service := &Service{
-		cfg:            cfg,
-		store:          store,
-		logger:         discardDiagnosticLogger(),
-		diagnosticBy:   map[string]int{},
-		diagnosticLast: map[string]time.Time{},
-		now:            time.Now,
-		phase:          "created",
+		cfg:                cfg,
+		store:              store,
+		externalLaunchWake: make(chan struct{}, 1),
+		logger:             discardDiagnosticLogger(),
+		diagnosticBy:       map[string]int{},
+		diagnosticLast:     map[string]time.Time{},
+		now:                time.Now,
+		phase:              "created",
 	}
 	transport := appserver.TransportConfig{
 		Mode:       appserver.TransportMode(cfg.AppServerMode),
@@ -266,7 +268,9 @@ func (s *Service) Start(ctx context.Context) error {
 	s.spawn(runCtx, s.ensureSessions)
 	s.spawn(runCtx, s.indexLoop)
 	s.spawn(runCtx, s.pollLoop)
-	s.spawn(runCtx, s.deliveryLoop)
+	s.spawn(runCtx, s.externalLaunchLoop)
+	s.spawn(runCtx, s.externalReplyLoop)
+	s.spawn(runCtx, s.telegramDeliveryLoop)
 	s.spawn(runCtx, s.controlLoop)
 	return nil
 }
@@ -665,18 +669,50 @@ func (s *Service) pollLoop(ctx context.Context) {
 	}
 }
 
-func (s *Service) deliveryLoop(ctx context.Context) {
+func (s *Service) externalLaunchLoop(ctx context.Context) {
 	ticker := time.NewTicker(1 * time.Second)
 	defer ticker.Stop()
 	for {
 		s.processExternalLaunchRequests(ctx)
+		select {
+		case <-ctx.Done():
+			return
+		case <-s.externalLaunchWake:
+		case <-ticker.C:
+		}
+	}
+}
+
+func (s *Service) externalReplyLoop(ctx context.Context) {
+	ticker := time.NewTicker(1 * time.Second)
+	defer ticker.Stop()
+	for {
 		s.processExternalReplyBatch(ctx)
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+	}
+}
+
+func (s *Service) telegramDeliveryLoop(ctx context.Context) {
+	ticker := time.NewTicker(1 * time.Second)
+	defer ticker.Stop()
+	for {
 		s.processDeliveryBatch(ctx)
 		select {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
 		}
+	}
+}
+
+func (s *Service) wakeExternalLaunchRenderer() {
+	select {
+	case s.externalLaunchWake <- struct{}{}:
+	default:
 	}
 }
 
@@ -892,7 +928,10 @@ func (s *Service) processDeliveryBatch(ctx context.Context) {
 		}
 		s.logTelegramRenderContainsNil(payload.ThreadID, payload.TurnID, "delivery", 0, payload.Text)
 		options := silentSendOptions()
-		if item.Kind == "health" || item.Kind == externalTerminalDeliveryKind {
+		if item.Kind == "health" {
+			options = notifySendOptions()
+			options.Background = true
+		} else if item.Kind == externalTerminalDeliveryKind {
 			options = notifySendOptions()
 		}
 		deliveryTopicID := item.TopicID

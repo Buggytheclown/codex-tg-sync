@@ -26,7 +26,7 @@ func (s *Service) dispatchExternalLaunchRequest(ctx context.Context, requestID s
 			summary = "Sync is inactive; the request will start automatically after Sync is enabled."
 		}
 		_, _ = s.store.ResetExternalLaunchRequestPending(ctx, request.ID, "sync_inactive", summary)
-		s.finishExternalLaunchDispatch(ctx, request.AutoStart)
+		s.finishExternalLaunchDispatch()
 		return
 	}
 	forum := s.getSyncForum()
@@ -36,16 +36,16 @@ func (s *Service) dispatchExternalLaunchRequest(ctx context.Context, requestID s
 			summary = "Telegram transport is unavailable; the request will retry automatically."
 		}
 		_, _ = s.store.ResetExternalLaunchRequestPending(ctx, request.ID, "telegram_unavailable", summary)
-		s.finishExternalLaunchDispatch(ctx, request.AutoStart)
+		s.finishExternalLaunchDispatch()
 		return
 	}
 
 	telegramPreview := externalLaunchTelegramPreview(*request)
 	title := syncPromptTopicTitle(telegramPreview)
-	topicID, err := forum.CreateSyncTopic(ctx, title)
+	topicID, err := forum.CreateLaunchTopic(ctx, title)
 	if err != nil {
 		_, _ = s.store.CompleteExternalLaunchRequest(ctx, request.ID, model.ExternalLaunchFailed, "", "", "telegram_topic", "Telegram could not create the session topic.")
-		s.finishExternalLaunchDispatch(ctx, request.AutoStart)
+		s.finishExternalLaunchDispatch()
 		return
 	}
 	topics, _ := s.store.ListSyncTopics(ctx, state.SessionID)
@@ -58,15 +58,15 @@ func (s *Service) dispatchExternalLaunchRequest(ctx context.Context, requestID s
 	if err := s.store.CreateSyncTopicDraft(ctx, draft); err != nil {
 		_ = forum.DeleteSyncTopic(ctx, topicID)
 		_, _ = s.store.CompleteExternalLaunchRequest(ctx, request.ID, model.ExternalLaunchFailed, "", "", "sync_draft", "Sync could not persist the new session topic.")
-		s.finishExternalLaunchDispatch(ctx, request.AutoStart)
+		s.finishExternalLaunchDispatch()
 		return
 	}
-	sourceMessageID, err := forum.SendSyncMessage(ctx, topicID, model.RenderedMessage{Text: syncUserHeader + "\n" + telegramPreview}, true)
+	sourceMessageID, err := forum.SendSyncMessage(ctx, topicID, model.RenderedMessage{Text: syncUserHeader + "\n" + telegramPreview}, model.SendOptions{Silent: true})
 	if err != nil {
 		_ = forum.DeleteSyncTopic(ctx, topicID)
 		_ = s.store.DeleteSyncTopic(ctx, state.SessionID, topicID)
 		_, _ = s.store.CompleteExternalLaunchRequest(ctx, request.ID, model.ExternalLaunchFailed, "", "", "telegram_prompt", "Telegram could not write the initial request into the session topic.")
-		s.finishExternalLaunchDispatch(ctx, request.AutoStart)
+		s.finishExternalLaunchDispatch()
 		return
 	}
 	claimed, receipt, created, err := s.store.ClaimSyncTopicDraftMessage(ctx, state.ChatID, topicID, sourceMessageID)
@@ -74,7 +74,7 @@ func (s *Service) dispatchExternalLaunchRequest(ctx context.Context, requestID s
 		_ = forum.DeleteSyncTopic(ctx, topicID)
 		_ = s.store.DeleteSyncTopic(ctx, state.SessionID, topicID)
 		_, _ = s.store.CompleteExternalLaunchRequest(ctx, request.ID, model.ExternalLaunchFailed, "", "", "sync_claim", "Sync could not claim the new session topic.")
-		s.finishExternalLaunchDispatch(ctx, request.AutoStart)
+		s.finishExternalLaunchDispatch()
 		return
 	}
 	permissions := appserver.ThreadStartOptions{
@@ -89,7 +89,7 @@ func (s *Service) dispatchExternalLaunchRequest(ctx context.Context, requestID s
 		_, _ = s.store.CompleteExternalLaunchRequest(ctx, request.ID, model.ExternalLaunchSessionStarted,
 			response.ThreadID, response.TurnID, "", "")
 		s.queueExternalReplyFromStoredSnapshot(ctx, response.ThreadID)
-		s.finishExternalLaunchDispatch(ctx, request.AutoStart)
+		s.finishExternalLaunchDispatch()
 		return
 	}
 
@@ -110,18 +110,9 @@ func (s *Service) dispatchExternalLaunchRequest(ctx context.Context, requestID s
 		_ = forum.DeleteSyncTopic(ctx, topicID)
 		_ = s.store.DeleteSyncTopic(ctx, state.SessionID, topicID)
 	}
-	s.finishExternalLaunchDispatch(ctx, request.AutoStart)
+	s.finishExternalLaunchDispatch()
 }
 
-func (s *Service) finishExternalLaunchDispatch(ctx context.Context, autoStart bool) {
-	if !autoStart {
-		s.processExternalLaunchRequests(ctx)
-		return
-	}
-	s.externalRequestMu.Lock()
-	s.mu.RLock()
-	sender := s.sender
-	s.mu.RUnlock()
-	s.renderExternalLaunchRequestsLocked(ctx, sender)
-	s.externalRequestMu.Unlock()
+func (s *Service) finishExternalLaunchDispatch() {
+	s.wakeExternalLaunchRenderer()
 }

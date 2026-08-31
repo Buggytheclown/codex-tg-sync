@@ -22,7 +22,7 @@ Required invariants:
 
 ## Sync activation, discovery, and transport
 
-ADRs: ADR-020 through ADR-027, ADR-029, and ADR-032.
+ADRs: ADR-020 through ADR-027, ADR-029, ADR-032, and ADR-033.
 
 Primary suites:
 
@@ -35,13 +35,14 @@ Primary suites:
 Coverage includes:
 
 - forum validation and Control preparation;
-- initial topic limit and continuous discovery;
+- paginated, importance-first `/sync on` topic selection (including `notLoaded` threads with running or terminal last turns), initial topic limit, and continuous discovery;
 - one topic per thread and receipt idempotency;
 - shared daemon/WebSocket reconnection without prompt replay;
 - startup reset to off and cleanup-only old topics/drafts;
 - generation-aware writer claims and fail-closed unknown dispatch;
 - poll/list/read behavior and non-blocking startup;
-- typed Telegram topic/retry failures.
+- typed Telegram topic/retry failures;
+- one 3.25-second group-write governor, bounded foreground preference, and shared `retry_after` cooldown.
 
 ## Prompt, steer, stop, and lifecycle
 
@@ -114,6 +115,9 @@ Required scenarios:
 - ingestion and cursor advancement are atomic/idempotent;
 - a `[Launch request]` card exists before manual or automatic start;
 - manual Start/Dismiss and Retry/Close edit the same durable card;
+- callback acknowledgement does not wait for launch-card Telegram I/O;
+- only admission-valid callbacks are pre-acknowledged, before business handling and regardless of group cooldown;
+- `createForumTopic` `429` performs one launch-owned attempt and leaves a failed card with Retry/Close;
 - auto-start author policy applies only to new Arcanum requests;
 - start claims once and ambiguous thread creation is not replayed;
 - terminal state closes the request and external reply delivery is retryable/idempotent;
@@ -165,6 +169,8 @@ For live Telegram QA, verify:
 2. a direct message produces no response or state change;
 3. `/status`, `/pollers`, and `/requests` work in Control;
 4. `/sync on` creates/updates topics;
+   running/waiting chats are created before unknown, failed/interrupted, and completed chats;
 5. a topic prompt starts with explicit writable/on-request permissions;
 6. an available approval edits the same card and removes buttons;
 7. restart resets Sync off without interrupting the authoritative Codex turn.
+8. during a Telegram `429`, callbacks are acknowledged while noncritical group writes wait for `retry_after`.

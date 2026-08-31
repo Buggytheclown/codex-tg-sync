@@ -38,7 +38,7 @@ func (s *Service) finishExternalRequestIngest(ctx context.Context, requests []mo
 				s.logLifecycle("external_context_missing", lifecycleFields{"request_id": request.ID, "source": request.Source, "context": "thread_root"})
 			}
 		}
-		s.processExternalLaunchRequests(ctx)
+		s.wakeExternalLaunchRenderer()
 	}
 	return created, err
 }
@@ -102,7 +102,7 @@ func (s *Service) queueExternalReplyFromSnapshot(ctx context.Context, snapshot a
 	}
 	if queued {
 		s.logLifecycle("external_reply_queued", lifecycleFields{"thread_id": snapshot.Thread.ID, "turn_id": snapshot.LatestTurnID})
-		s.processExternalLaunchRequests(ctx)
+		s.wakeExternalLaunchRenderer()
 	}
 }
 
@@ -474,7 +474,7 @@ func (s *Service) handleExternalLaunchCallback(ctx context.Context, chatID, topi
 		}
 		if state.State != model.SyncStateActive {
 			_ = s.store.NoteExternalLaunchRequestPendingError(ctx, request.ID, "sync_inactive", "Sync is inactive; enable Sync and press Start again.")
-			s.processExternalLaunchRequests(ctx)
+			s.wakeExternalLaunchRenderer()
 			return &DirectResponse{CallbackText: "Sync is inactive; request remains pending."}, nil
 		}
 		changed, err = s.store.ClaimExternalLaunchRequest(ctx, request.ID)
@@ -494,7 +494,7 @@ func (s *Service) handleExternalLaunchCallback(ctx context.Context, chatID, topi
 		return &DirectResponse{CallbackText: "This launch request button is stale."}, nil
 	}
 	_ = s.store.ExpireExternalLaunchCallbackRoutes(ctx, request.ID)
-	s.processExternalLaunchRequests(ctx)
+	s.wakeExternalLaunchRenderer()
 	if route.Action == "external_launch_dismiss" {
 		return &DirectResponse{CallbackText: "Dismissed."}, nil
 	}
@@ -537,7 +537,7 @@ func (s *Service) checkExternalLaunchOutcome(ctx context.Context, request model.
 	if isTerminalStatus(snapshot.LatestTurnStatus) {
 		s.queueExternalReplyFromSnapshot(ctx, snapshot)
 	} else {
-		s.processExternalLaunchRequests(ctx)
+		s.wakeExternalLaunchRenderer()
 	}
 	return &DirectResponse{CallbackText: "Codex session found; request status reconciled."}, nil
 }

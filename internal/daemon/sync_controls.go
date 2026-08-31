@@ -304,7 +304,7 @@ func (s *Service) handleSyncCallback(ctx context.Context, topicID, messageID int
 		if forum == nil {
 			return &DirectResponse{CallbackText: "Sync response sent; card update failed."}, nil
 		}
-		if err := forum.EditSyncMessage(ctx, topicID, messageID, model.RenderedMessage{Text: strings.Join(lines, "\n")}); err != nil {
+		if err := forum.EditSyncMessage(ctx, topicID, messageID, model.RenderedMessage{Text: strings.Join(lines, "\n")}, model.SendOptions{}); err != nil {
 			s.setError(ctx, fmt.Errorf("edit Sync approval card: %w", err))
 			return &DirectResponse{CallbackText: "Sync response sent; card update failed."}, nil
 		}

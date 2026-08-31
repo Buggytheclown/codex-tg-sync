@@ -68,12 +68,45 @@ func TestExternalLaunchApprovalRendersOnceAndDismissEditsSameMessage(t *testing.
 	if err != nil || response == nil || !strings.Contains(response.CallbackText, "Dismissed") {
 		t.Fatalf("dismiss response=%#v err=%v", response, err)
 	}
+	service.processExternalLaunchRequests(context.Background())
 	if len(sender.edits) != 1 || sender.edits[0].messageID != message.messageID || len(sender.edits[0].buttons) != 0 || !strings.Contains(sender.edits[0].text, "Dismissed") {
 		t.Fatalf("dismiss edits=%#v", sender.edits)
 	}
 	stored, _ := service.store.GetExternalLaunchRequest(context.Background(), request.ID)
 	if stored == nil || stored.Status != model.ExternalLaunchDismissed {
 		t.Fatalf("stored request=%#v", stored)
+	}
+}
+
+func TestExternalLaunchCallbackDoesNotWaitForTelegramRenderer(t *testing.T) {
+	t.Parallel()
+	service := newTestService(t)
+	service.cfg.SyncGroupID = -1001
+	service.cfg.ExternalRequestsTopicID = 77
+	sender := &recordingSender{}
+	service.SetSender(sender)
+	request := daemonExternalRequest("test:callback:nonblocking", "do work")
+	ctx := context.Background()
+	if _, err := service.IngestExternalRequests(ctx, "test", 1, []model.ExternalLaunchRequest{request}); err != nil {
+		t.Fatal(err)
+	}
+	service.processExternalLaunchRequests(ctx)
+	dismissToken := callbackTokenForButton(sender.messages[0].buttons, "Dismiss")
+
+	service.externalRequestMu.Lock()
+	defer service.externalRequestMu.Unlock()
+	done := make(chan error, 1)
+	go func() {
+		_, err := service.HandleCallback(ctx, -1001, 77, sender.messages[0].messageID, 123456789, dismissToken)
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("launch callback waited for the Telegram render owner")
 	}
 }
 
@@ -89,6 +122,7 @@ func TestExternalLaunchAutoStartRendersStatusWithoutApprovalButtonsAndClaimsDura
 	if _, err := service.IngestExternalRequests(context.Background(), "test", 1, []model.ExternalLaunchRequest{request}); err != nil {
 		t.Fatal(err)
 	}
+	service.processExternalLaunchRequests(context.Background())
 	stored, _ := service.store.GetExternalLaunchRequest(context.Background(), request.ID)
 	if stored == nil || stored.Status != model.ExternalLaunchPendingApproval || stored.TelegramMessageID == 0 {
 		t.Fatalf("stored=%#v, want visible pending auto-start before claim", stored)
@@ -119,6 +153,7 @@ func TestExternalTerminalEditsCardAndDeliversOneAudibleNotice(t *testing.T) {
 	if _, err := service.IngestExternalRequests(ctx, "test", 1, []model.ExternalLaunchRequest{request}); err != nil {
 		t.Fatal(err)
 	}
+	service.processExternalLaunchRequests(ctx)
 	if claimed, err := service.store.ClaimExternalLaunchRequest(ctx, request.ID); err != nil || !claimed {
 		t.Fatalf("claim=%t err=%v", claimed, err)
 	}
@@ -129,6 +164,7 @@ func TestExternalTerminalEditsCardAndDeliversOneAudibleNotice(t *testing.T) {
 	snapshot := appserver.SnapshotFromThreadRead(syncCompletedPayload("thread", "turn", "Full final must stay in the session topic."))
 	service.queueExternalReplyFromSnapshot(ctx, snapshot)
 	service.queueExternalReplyFromSnapshot(ctx, snapshot)
+	service.processExternalLaunchRequests(ctx)
 	service.processDeliveryBatch(ctx)
 	service.processDeliveryBatch(ctx)
 
@@ -185,6 +221,7 @@ func TestExternalLaunchAutoStartCardEditsToTerminalStatus(t *testing.T) {
 	if _, err := service.IngestExternalRequests(ctx, "test", 1, []model.ExternalLaunchRequest{request}); err != nil {
 		t.Fatal(err)
 	}
+	service.processExternalLaunchRequests(ctx)
 	if len(sender.messages) != 1 || len(sender.messages[0].buttons) != 0 {
 		t.Fatalf("initial auto-start card=%#v", sender.messages)
 	}
@@ -368,6 +405,7 @@ func TestExternalLaunchApprovalSendAndEditFailuresRemainRetryable(t *testing.T) 
 	if err != nil || response == nil {
 		t.Fatalf("dismiss response=%#v err=%v", response, err)
 	}
+	service.processExternalLaunchRequests(context.Background())
 	stored, _ = service.store.GetExternalLaunchRequest(context.Background(), request.ID)
 	if stored.TelegramRenderedStatus == stored.Status {
 		t.Fatalf("failed edit was marked rendered: %#v", stored)
@@ -391,6 +429,7 @@ func TestFailedExternalLaunchCardCanRetryOrClose(t *testing.T) {
 	if _, err := service.IngestExternalRequests(ctx, "test", 1, []model.ExternalLaunchRequest{retryRequest}); err != nil {
 		t.Fatal(err)
 	}
+	service.processExternalLaunchRequests(ctx)
 	if claimed, _ := service.store.ClaimExternalLaunchRequest(ctx, retryRequest.ID); !claimed {
 		t.Fatal("retry request was not claimed")
 	}
@@ -424,6 +463,7 @@ func TestFailedExternalLaunchCardCanRetryOrClose(t *testing.T) {
 	if _, err := service.IngestExternalRequests(ctx, "test", 2, []model.ExternalLaunchRequest{closeRequest}); err != nil {
 		t.Fatal(err)
 	}
+	service.processExternalLaunchRequests(ctx)
 	if claimed, _ := service.store.ClaimExternalLaunchRequest(ctx, closeRequest.ID); !claimed {
 		t.Fatal("close request was not claimed")
 	}
@@ -498,6 +538,7 @@ func TestExternalOutcomeCheckReconcilesStoredTerminalSnapshot(t *testing.T) {
 	if _, err := service.IngestExternalRequests(ctx, "test", 1, []model.ExternalLaunchRequest{request}); err != nil {
 		t.Fatal(err)
 	}
+	service.processExternalLaunchRequests(ctx)
 	if claimed, _ := service.store.ClaimExternalLaunchRequest(ctx, request.ID); !claimed {
 		t.Fatal("request was not claimed")
 	}
@@ -705,13 +746,22 @@ func TestDispatchExternalLaunchRequestTopicFailureCreatesNoCodexState(t *testing
 	service := activeSyncService(t)
 	writer := &stubSession{threadStartResult: map[string]any{"thread": map[string]any{"id": "must-not-start"}}}
 	service.liveFactory = func() Session { return writer }
-	service.SetSyncForum(&fakeSyncForum{createErrAt: 1})
+	sender := &recordingSender{}
+	service.SetSender(sender)
+	service.SetSyncForum(&fakeSyncForum{
+		createErrAt: 1,
+		createErr:   NewSyncForumFailure(SyncForumFailureRetryable, errors.New("telegram 429")),
+	})
 	request := prepareStartingExternalRequest(t, service, "test:dispatch:4", "topic failure")
 
 	service.dispatchExternalLaunchRequest(context.Background(), request.ID)
+	service.processExternalLaunchRequests(context.Background())
 	stored, _ := service.store.GetExternalLaunchRequest(context.Background(), request.ID)
 	if stored.Status != model.ExternalLaunchFailed || len(writer.threadStartCalls) != 0 {
 		t.Fatalf("topic failure request=%#v starts=%#v", stored, writer.threadStartCalls)
+	}
+	if len(sender.edits) != 1 || callbackTokenForButton(sender.edits[0].buttons, "Retry") == "" || callbackTokenForButton(sender.edits[0].buttons, "Close") == "" {
+		t.Fatalf("retryable topic failure card=%#v", sender.edits)
 	}
 }
 

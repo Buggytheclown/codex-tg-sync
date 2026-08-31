@@ -179,7 +179,8 @@ type ExternalLaunchRequest struct {
 }
 
 type SendOptions struct {
-	Silent bool
+	Silent     bool
+	Background bool
 }
 
 func NowString() TimeString {

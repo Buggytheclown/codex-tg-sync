@@ -33,8 +33,29 @@ func TestThreadFromPayloadMapsProjectAndActiveTurn(t *testing.T) {
 	if got, want := thread.ActiveTurnID, "turn-1"; got != want {
 		t.Fatalf("ActiveTurnID = %q, want %q", got, want)
 	}
+	if got, want := thread.Status, "inProgress"; got != want {
+		t.Fatalf("Status = %q, want last turn status %q", got, want)
+	}
 	if got, want := thread.LastPreview, "Проверь какая у меня сейчас стоит node"; got != want {
 		t.Fatalf("LastPreview = %q, want %q", got, want)
+	}
+}
+
+func TestThreadFromPayloadUsesTerminalTurnStatusWhenThreadIsNotLoaded(t *testing.T) {
+	t.Parallel()
+
+	for _, status := range []string{"completed", "failed", "interrupted"} {
+		status := status
+		t.Run(status, func(t *testing.T) {
+			t.Parallel()
+			thread := appserver.ThreadFromPayload(map[string]any{
+				"id": "thread-" + status, "status": "notLoaded",
+				"turns": []any{map[string]any{"id": "turn-" + status, "status": status}},
+			})
+			if thread.Status != status || thread.ActiveTurnID != "" {
+				t.Fatalf("normalized thread=%#v", thread)
+			}
+		})
 	}
 }
 

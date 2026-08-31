@@ -31,12 +31,13 @@ type SyncForum interface {
 	ValidateSyncGroup(ctx context.Context, allowedUserID int64) error
 	PrepareSyncControl(ctx context.Context) error
 	CreateSyncTopic(ctx context.Context, title string) (int64, error)
+	CreateLaunchTopic(ctx context.Context, title string) (int64, error)
 	RenameSyncTopic(ctx context.Context, topicID int64, title string) error
 	DeleteSyncTopic(ctx context.Context, topicID int64) error
 	DeleteSyncMessage(ctx context.Context, topicID, messageID int64) error
-	SendSyncMessage(ctx context.Context, topicID int64, message model.RenderedMessage, silent bool) (int64, error)
+	SendSyncMessage(ctx context.Context, topicID int64, message model.RenderedMessage, options model.SendOptions) (int64, error)
 	SendSyncActionMessage(ctx context.Context, topicID int64, text string, buttons [][]model.ButtonSpec) (int64, error)
-	EditSyncMessage(ctx context.Context, topicID, messageID int64, message model.RenderedMessage) error
+	EditSyncMessage(ctx context.Context, topicID, messageID int64, message model.RenderedMessage, options model.SendOptions) error
 }
 
 const (
@@ -51,6 +52,7 @@ type SyncForumFailureKind string
 
 const (
 	SyncForumFailureDefinitive SyncForumFailureKind = "definitive"
+	SyncForumFailureRetryable  SyncForumFailureKind = "retryable"
 	SyncForumFailureUnknown    SyncForumFailureKind = "unknown"
 )
 
@@ -469,23 +471,17 @@ func (s *Service) activateSync(ctx context.Context, userID int64) (*DirectRespon
 	if err != nil {
 		return nil, err
 	}
-	result, err := poll.ThreadList(ctx, 50, "")
+	threads, err := listSyncActivationThreads(ctx, poll)
 	if err != nil {
 		return nil, fmt.Errorf("Sync activation thread/list: %w", err)
 	}
-	threads := appserver.ThreadsFromList(result)
 	filtered := threads[:0]
 	for _, thread := range threads {
 		if thread.ID != "" && !thread.Archived && !thread.IsInternal() {
 			filtered = append(filtered, thread)
 		}
 	}
-	sort.Slice(filtered, func(i, j int) bool {
-		if filtered[i].UpdatedAt == filtered[j].UpdatedAt {
-			return filtered[i].ID < filtered[j].ID
-		}
-		return filtered[i].UpdatedAt > filtered[j].UpdatedAt
-	})
+	sortSyncActivationThreads(filtered)
 	limit := syncInitialTopicLimit(s.cfg.SyncInitialTopicLimit)
 	if len(filtered) > limit {
 		filtered = filtered[:limit]
@@ -1008,9 +1004,9 @@ func (s *Service) persistAndDeliverSyncSnapshotLocked(ctx context.Context, forum
 	newObservedTurn := statusTurnID != "" && currentTurnID != "" && statusTurnID != currentTurnID
 	var deliveryErr error
 	if statusID == 0 || newObservedTurn {
-		statusID, deliveryErr = forum.SendSyncMessage(ctx, topic.TopicID, statusMessage, true)
+		statusID, deliveryErr = forum.SendSyncMessage(ctx, topic.TopicID, statusMessage, model.SendOptions{Silent: true, Background: true})
 	} else if renderFP != topic.LastRenderFP {
-		deliveryErr = forum.EditSyncMessage(ctx, topic.TopicID, statusID, statusMessage)
+		deliveryErr = forum.EditSyncMessage(ctx, topic.TopicID, statusID, statusMessage, model.SendOptions{Background: true})
 	}
 	if deliveryErr != nil {
 		return
@@ -1022,7 +1018,7 @@ func (s *Service) persistAndDeliverSyncSnapshotLocked(ctx context.Context, forum
 	if strings.TrimSpace(current.LatestFinalFP) != "" && current.LatestFinalFP != topic.LastFinalFP {
 		finalMessages := renderSyncFinal(current.LatestFinalText)
 		for index, message := range finalMessages {
-			if _, deliveryErr = forum.SendSyncMessage(ctx, topic.TopicID, message, false); deliveryErr != nil {
+			if _, deliveryErr = forum.SendSyncMessage(ctx, topic.TopicID, message, model.SendOptions{}); deliveryErr != nil {
 				logKey := strings.Join([]string{"sync_final_delivery_failed", topic.ThreadID, current.LatestTurnID, current.LatestFinalFP}, ":")
 				if s.allowDiagnosticRepeat(logKey, diagnosticRepeatWindow) {
 					s.logLifecycle("sync_final_delivery_failed", lifecycleFields{
@@ -1103,7 +1099,7 @@ func (s *Service) deliverSyncUserMessageLocked(ctx context.Context, forum SyncFo
 		topic.StatusTurnID = ""
 		topic.LastRenderFP = ""
 	}
-	if _, err := forum.SendSyncMessage(ctx, topic.TopicID, model.RenderedMessage{Text: syncUserHeader + "\n" + userText}, true); err != nil {
+	if _, err := forum.SendSyncMessage(ctx, topic.TopicID, model.RenderedMessage{Text: syncUserHeader + "\n" + userText}, model.SendOptions{Silent: true}); err != nil {
 		return topic, false
 	}
 	if err := s.store.UpdateSyncTopicUserDelivery(ctx, topic.SessionID, topic.TopicID, userFP, "", ""); err != nil {
@@ -1216,7 +1212,7 @@ func (s *Service) finishStartup(ctx context.Context, cleanupSessionID string) {
 	}
 
 	message := model.RenderedMessage{Text: s.sharedAppServerStartupWarning()}
-	if _, err := forum.SendSyncMessage(ctx, syncGeneralSendTopicID, message, false); err != nil {
+	if _, err := forum.SendSyncMessage(ctx, syncGeneralSendTopicID, message, model.SendOptions{}); err != nil {
 		s.logLifecycle("sync_startup_warning_failed", lifecycleFields{"error": err})
 		return
 	}
@@ -1264,6 +1260,9 @@ func renderSyncActivationSummary(summary syncActivationSummary) string {
 }
 
 func syncCodexStatus(thread model.Thread) string {
+	if strings.TrimSpace(thread.ActiveTurnID) != "" {
+		return "running"
+	}
 	status := strings.ToLower(strings.TrimSpace(thread.Status))
 	switch {
 	case strings.Contains(status, "waiting"):
@@ -1276,6 +1275,59 @@ func syncCodexStatus(thread model.Thread) string {
 		return "interrupted"
 	default:
 		return "unknown"
+	}
+}
+
+func listSyncActivationThreads(ctx context.Context, poll Session) ([]model.Thread, error) {
+	const pageSize = 100
+	threads := make([]model.Thread, 0, pageSize)
+	cursor := ""
+	seenCursors := make(map[string]struct{})
+	for {
+		result, err := poll.ThreadList(ctx, pageSize, cursor)
+		if err != nil {
+			return nil, err
+		}
+		threads = append(threads, appserver.ThreadsFromList(result)...)
+		nextCursor, _ := result["nextCursor"].(string)
+		nextCursor = strings.TrimSpace(nextCursor)
+		if nextCursor == "" {
+			return threads, nil
+		}
+		if _, exists := seenCursors[nextCursor]; exists {
+			return nil, errors.New("thread/list returned a repeated cursor")
+		}
+		seenCursors[nextCursor] = struct{}{}
+		cursor = nextCursor
+	}
+}
+
+func sortSyncActivationThreads(threads []model.Thread) {
+	sort.Slice(threads, func(i, j int) bool {
+		leftPriority := syncActivationThreadPriority(threads[i])
+		rightPriority := syncActivationThreadPriority(threads[j])
+		if leftPriority != rightPriority {
+			return leftPriority < rightPriority
+		}
+		if threads[i].UpdatedAt != threads[j].UpdatedAt {
+			return threads[i].UpdatedAt > threads[j].UpdatedAt
+		}
+		return threads[i].ID < threads[j].ID
+	})
+}
+
+func syncActivationThreadPriority(thread model.Thread) int {
+	switch syncCodexStatus(thread) {
+	case "waiting", "running":
+		return 0
+	case "unknown":
+		return 1
+	case "interrupted":
+		return 2
+	case "completed":
+		return 3
+	default:
+		return 1
 	}
 }
 

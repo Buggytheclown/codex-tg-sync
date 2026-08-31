@@ -34,6 +34,7 @@ The Bot API chat-scoped menu contains exactly:
 
 - Control is the General topic and is never deleted.
 - `/sync on` creates topics for the configured number of recent eligible Codex chats.
+- `/sync on` paginates the candidate list and selects waiting/running chats first, then unknown nonterminal, failed/interrupted, and completed chats; recency orders each class.
 - Active synchronization discovers later chats without replaying earlier prompts.
 - One durable Codex `threadId` maps to one managed topic per Sync session.
 - A restart resets Sync to off, cleans old managed topics, and preserves Codex work.
@@ -68,6 +69,8 @@ Retired SQLite keys such as `codex.model` and `codex.reasoning_effort` do not af
 
 No direct-message observer cards, progress trios, Details pages, Plan cards, settings menus, or automatic log/tool exports exist in the active product.
 
+All raw Sync-group Bot API writes share one in-memory egress governor. It permits one attempt every 3.25 seconds, gives foreground traffic bounded preference over background maintenance, and pauses noncritical writes for Telegram `retry_after`. Admission-valid callbacks from each received batch get one neutral acknowledgement before business handling and bypass the group gate; out-of-scope callbacks get no response. The cooldown is not persisted across restart.
+
 ## Approval decisions
 
 | Button | App Server decision | Meaning |
@@ -86,6 +89,7 @@ Cron, Yandex Messenger, and Arcanum review pollers insert requests through the s
 - A visible `[Launch request]` card is created before either manual or automatic start.
 - `/requests` shows active requests by default.
 - Failed starts may be retried or closed.
+- A launch `createForumTopic` `429` is returned after one attempt and rendered as a retryable failed card; it is not hidden by an internal retry loop.
 - Ambiguous thread creation is never replayed automatically.
 - Terminal Codex state closes the request and queues a short terminal reply when the source supports replies.
 - Arcanum authors in `CTR_GO_ARCANUM_REVIEW_AUTO_START_AUTHORS` auto-start after card creation; other authors require approval.
