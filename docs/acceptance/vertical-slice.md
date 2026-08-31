@@ -12,7 +12,7 @@ The supported Telegram vertical slice is one configured private forum group and 
 - Approval and structured-input callbacks are ownership-guarded and edit the same card to terminal state.
 - `/pollers` and `/requests` work through public Control routing.
 - Fresh SQLite databases contain no retired Telegram tables; existing databases open non-destructively.
-- Startup retires queued out-of-group and observer deliveries while preserving current in-group health/terminal deliveries.
+- Startup retires queued out-of-group and observer deliveries while preserving current in-group health, terminal, and Sync activation deliveries.
 
 ## Live acceptance
 

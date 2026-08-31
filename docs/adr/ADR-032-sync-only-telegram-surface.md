@@ -17,8 +17,10 @@ The daemon admits exactly one configured user in that exact group and rejects
 all other updates before route lookup or App Server work.
 
 Telegram commands are removed from the default Bot API scope and registered
-only for the Sync chat. Startup enforces a delivery allowlist: only `health` and
-`external_terminal` deliveries addressed to the Sync group remain active.
+only for the Sync chat. Startup enforces a delivery allowlist: `health`,
+`external_terminal`, and `sync_activation` deliveries addressed to the Sync
+group remain active. Supported deliveries interrupted in `processing` are
+returned to `retry` during startup.
 
 Legacy writer, observer, panel, Details, Plan, settings, binding, and DM routing
 code is removed. Fresh databases stop creating their legacy-only tables.

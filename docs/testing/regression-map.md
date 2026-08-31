@@ -96,7 +96,9 @@ Required invariants:
 - old DB tables are left untouched;
 - startup supersedes pending/retry/processing deliveries outside the Sync group and retired observer delivery kinds;
 - historical delivered/dead rows remain historical;
-- current health and external terminal deliveries to the Sync group remain eligible.
+- current health, external terminal, and Sync activation deliveries to the Sync group remain eligible;
+- startup returns supported in-group deliveries interrupted in `processing` to `retry`;
+- `/sync on` stops after the first ambiguous topic-creation outcome, marks later candidates skipped, and queues its Control summary durably with the activation state.
 
 ## Launch requests
 

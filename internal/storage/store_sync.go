@@ -428,6 +428,14 @@ func (s *Store) ConvertEmptySyncTopicToDraft(ctx context.Context, topic model.Sy
 }
 
 func (s *Store) FinishSyncActivation(ctx context.Context, sessionID, summaryJSON string, active bool) error {
+	return s.finishSyncActivation(ctx, sessionID, summaryJSON, active, nil)
+}
+
+func (s *Store) FinishSyncActivationWithDelivery(ctx context.Context, sessionID, summaryJSON string, active bool, delivery model.DeliveryQueueItem) error {
+	return s.finishSyncActivation(ctx, sessionID, summaryJSON, active, &delivery)
+}
+
+func (s *Store) finishSyncActivation(ctx context.Context, sessionID, summaryJSON string, active bool, delivery *model.DeliveryQueueItem) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -446,6 +454,11 @@ func (s *Store) FinishSyncActivation(ctx context.Context, sessionID, summaryJSON
 	changed, _ := result.RowsAffected()
 	if changed != 1 {
 		return errors.New("sync activation generation is stale")
+	}
+	if delivery != nil {
+		if err := enqueueDelivery(ctx, tx, *delivery); err != nil {
+			return err
+		}
 	}
 	return tx.Commit()
 }

@@ -23,8 +23,8 @@ working without a compatibility router.
   `/sync`, `/status`, `/pollers`, `/requests`, `/refresh`, `/projects`,
   `/newchat`, and `/stop`; `/repair` remains an unadvertised Control command.
 - Startup supersedes undelivered observer traffic and any undelivered Telegram
-  traffic addressed outside the Sync group. Current health and external terminal
-  notifications addressed to the group remain deliverable.
+  traffic addressed outside the Sync group. Current health, external terminal,
+  and Sync activation notifications addressed to the group remain deliverable.
 - Normal Sync turns use the thread-preferred model or App Server defaults and do
   not read retired Telegram model/reasoning settings. Explicit request-local
   execution options remain supported for external launch requests.

@@ -20,8 +20,9 @@ import (
 )
 
 const (
-	syncControlTopicID     = int64(1)
-	syncGeneralSendTopicID = int64(0)
+	syncControlTopicID         = int64(1)
+	syncGeneralSendTopicID     = int64(0)
+	syncActivationDeliveryKind = "sync_activation"
 )
 
 // SyncForum is deliberately scoped to the configured Sync group. Its
@@ -77,6 +78,7 @@ type syncActivationSummary struct {
 	Created    int                  `json:"created"`
 	Failed     []string             `json:"failed,omitempty"`
 	Unknown    []string             `json:"unknown,omitempty"`
+	Skipped    []string             `json:"skipped,omitempty"`
 	Items      []syncActivationItem `json:"items"`
 }
 
@@ -504,12 +506,17 @@ func (s *Service) activateSync(ctx context.Context, userID int64) (*DirectRespon
 			if errors.As(createErr, &failure) && failure.Kind == SyncForumFailureDefinitive {
 				summary.Failed = append(summary.Failed, entry)
 				summary.Items[rank].Telegram = "create failed"
-			} else {
-				summary.Unknown = append(summary.Unknown, entry)
-				summary.Items[rank].Telegram = "create outcome unknown"
+				summary.Items[rank].Error = sanitizeDiagnosticString(createErr.Error())
+				continue
 			}
+			summary.Unknown = append(summary.Unknown, entry)
+			summary.Items[rank].Telegram = "create outcome unknown"
 			summary.Items[rank].Error = sanitizeDiagnosticString(createErr.Error())
-			continue
+			for skippedRank := rank + 1; skippedRank < len(filtered); skippedRank++ {
+				summary.Skipped = append(summary.Skipped, filtered[skippedRank].ID)
+				summary.Items[skippedRank].Telegram = "skipped after unknown outcome"
+			}
+			break
 		}
 		if err := s.store.UpsertSyncTopic(ctx, model.SyncTopic{SessionID: sessionID, ChatID: s.cfg.SyncGroupID,
 			TopicID: topicID, ThreadID: thread.ID, Rank: rank + 1, Title: title, TelegramState: model.SyncTopicConnected}); err != nil {
@@ -523,13 +530,21 @@ func (s *Service) activateSync(ctx context.Context, userID int64) (*DirectRespon
 		_ = s.store.UpsertThread(ctx, thread)
 	}
 	summaryJSON, _ := json.Marshal(summary)
-	if err := s.store.FinishSyncActivation(ctx, sessionID, string(summaryJSON), summary.Created > 0); err != nil {
+	eventID := "sync-activation:" + sessionID
+	payloadJSON, _ := json.Marshal(model.DeliveryPayload{Text: renderSyncActivationSummary(summary), EventID: eventID})
+	delivery := model.DeliveryQueueItem{
+		EventID: eventID, ChatKey: model.ChatKey(s.cfg.SyncGroupID, syncGeneralSendTopicID),
+		ChatID: s.cfg.SyncGroupID, TopicID: syncGeneralSendTopicID, Kind: syncActivationDeliveryKind,
+		Status: model.DeliveryStatusPending, AvailableAt: model.NowString(), PayloadJSON: string(payloadJSON),
+		CreatedAt: model.NowString(), UpdatedAt: model.NowString(),
+	}
+	if err := s.store.FinishSyncActivationWithDelivery(ctx, sessionID, string(summaryJSON), summary.Created > 0, delivery); err != nil {
 		return nil, err
 	}
 	if summary.Created > 0 {
 		_ = s.syncWriter.AcceptNewWork()
 	}
-	return &DirectResponse{Text: renderSyncActivationSummary(summary)}, nil
+	return nil, nil
 }
 
 func (s *Service) deactivateSync(ctx context.Context) (*DirectResponse, error) {
@@ -1249,7 +1264,7 @@ func syncTopicTitle(thread model.Thread) string {
 }
 
 func renderSyncActivationSummary(summary syncActivationSummary) string {
-	text := fmt.Sprintf("Sync activation snapshot %s\nselected: %d\nactive: %d\nfailed: %d\nunknown: %d", summary.SnapshotAt, summary.Selected, summary.Created, len(summary.Failed), len(summary.Unknown))
+	text := fmt.Sprintf("Sync activation snapshot %s\nselected: %d\nactive: %d\nfailed: %d\nunknown: %d\nskipped: %d", summary.SnapshotAt, summary.Selected, summary.Created, len(summary.Failed), len(summary.Unknown), len(summary.Skipped))
 	for _, item := range summary.Items {
 		text += fmt.Sprintf("\n\n%d. %s\nTelegram: %s\nCodex: %s", item.Rank, item.Title, item.Telegram, item.Codex)
 		if item.Error != "" {

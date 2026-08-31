@@ -102,6 +102,31 @@ func TestSyncActivationPersistsCurrentState(t *testing.T) {
 	}
 }
 
+func TestSyncActivationPersistsStateAndControlDeliveryTogether(t *testing.T) {
+	t.Parallel()
+	store := openTestStore(t)
+	ctx := context.Background()
+	if err := store.BeginSyncActivation(ctx, "session-1", -1001); err != nil {
+		t.Fatal(err)
+	}
+	delivery := model.DeliveryQueueItem{
+		EventID: "sync-activation:session-1", ChatKey: model.ChatKey(-1001, 0),
+		ChatID: -1001, Kind: "sync_activation", Status: model.DeliveryStatusPending,
+		PayloadJSON: `{"text":"Sync complete"}`,
+	}
+	if err := store.FinishSyncActivationWithDelivery(ctx, "session-1", `{"created":1}`, true, delivery); err != nil {
+		t.Fatal(err)
+	}
+	state, err := store.GetSyncState(ctx)
+	if err != nil || state.State != model.SyncStateActive || state.ActivationSummaryJSON != `{"created":1}` {
+		t.Fatalf("state=%#v err=%v", state, err)
+	}
+	status, err := store.DeliveryStatusForEvent(ctx, delivery.EventID, delivery.ChatKey)
+	if err != nil || status != model.DeliveryStatusPending {
+		t.Fatalf("delivery status=%q err=%v", status, err)
+	}
+}
+
 func TestSyncOffIsLogicalBeforeCleanup(t *testing.T) {
 	t.Parallel()
 	store := openTestStore(t)

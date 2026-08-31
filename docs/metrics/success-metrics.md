@@ -10,7 +10,7 @@
 ## Reliability
 
 - Topic-to-thread routing remains stable across sync cycles.
-- Current health and external terminal deliveries retry durably inside the Sync group.
+- Current health, external terminal, and Sync activation deliveries retry durably inside the Sync group.
 - Poller status reports enabled state, current work, last attempt/success, and consecutive failures.
 - Requests remain retryable/closable after a failed start.
 - Shared App Server reconnect never replays an accepted prompt.

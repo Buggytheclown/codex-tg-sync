@@ -8,7 +8,7 @@ ADR-032 defines the active Telegram product contract. Historical direct-message 
 | --- | --- | --- | --- |
 | Message | exact `CTR_GO_SYNC_GROUP_ID` | the single `CTR_GO_ALLOWED_USER_IDS` value | silently ignore before SQLite/App Server |
 | Callback | exact Sync group | the single allowed user | silently ignore before route lookup |
-| Delivery | exact Sync group | n/a | supersede unless kind is `health` or `external_terminal` |
+| Delivery | exact Sync group | n/a | supersede unless kind is `health`, `external_terminal`, or `sync_activation` |
 | Bot command menu | exact Sync group scope | Telegram handles visibility | default scope is deleted |
 
 Startup fails when the Sync group is missing or the allowed-user list does not contain exactly one id.
@@ -19,7 +19,7 @@ The Bot API chat-scoped menu contains exactly:
 
 | Command | Scope | Contract |
 | --- | --- | --- |
-| `/sync on|off` | Control | enable synchronization or clean managed topics |
+| `/sync on|off` | Control | enable synchronization or clean managed topics; activation stops after an ambiguous topic-create result and reports durably |
 | `/status` | Control | Sync, App Server, delivery, request, and health summary |
 | `/pollers` | Control | configured pollers, current activity, last attempt/success, failures |
 | `/requests` | Control | active non-closed launch requests |

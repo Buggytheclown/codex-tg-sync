@@ -158,11 +158,8 @@ func TestSyncPartialActivationOwnsGroupAndDisablesLegacyObserver(t *testing.T) {
 	service.SetSyncForum(forum)
 	ctx := context.Background()
 	response, err := service.HandleMessage(ctx, -1001, 1, 123456789, "/sync on", 0)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if response == nil || !strings.Contains(response.Text, "active: 1") {
-		t.Fatalf("response = %#v", response)
+	if err != nil || response != nil {
+		t.Fatalf("response=%#v err=%v, want durable response only", response, err)
 	}
 	if forum.prepares != 1 {
 		t.Fatalf("Control prepare calls = %d, want 1", forum.prepares)
@@ -170,15 +167,100 @@ func TestSyncPartialActivationOwnsGroupAndDisablesLegacyObserver(t *testing.T) {
 	if len(forum.creates) != 2 || forum.creates[0] != "New" || forum.creates[1] != "Old" {
 		t.Fatalf("creates = %v", forum.creates)
 	}
-	if !strings.Contains(response.Text, "1. New\nTelegram: connected") || !strings.Contains(response.Text, "2. Old\nTelegram: create outcome unknown") || strings.Index(response.Text, "1. New") > strings.Index(response.Text, "2. Old") {
-		t.Fatalf("ordered activation summary = %q", response.Text)
-	}
 	state, _ := service.store.GetSyncState(ctx)
 	if state.State != model.SyncStateActive {
 		t.Fatalf("state = %#v", state)
 	}
+	var summary syncActivationSummary
+	if err := json.Unmarshal([]byte(state.ActivationSummaryJSON), &summary); err != nil ||
+		len(summary.Items) != 2 || summary.Items[0].Telegram != "connected" || summary.Items[1].Telegram != "create outcome unknown" {
+		t.Fatalf("ordered activation summary=%#v err=%v", summary, err)
+	}
 	if poll.threadResumeCalls != nil || poll.turnStartCalls != nil {
 		t.Fatalf("passive activation mutated app-server: %#v %#v", poll.threadResumeCalls, poll.turnStartCalls)
+	}
+}
+
+func TestSyncActivationStopsAfterUnknownTopicOutcomeAndQueuesControlSummary(t *testing.T) {
+	service := newTestService(t)
+	service.cfg.SyncGroupID = -1001
+	service.poll = &stubSession{threadListResult: map[string]any{"data": []any{
+		map[string]any{"id": "thread-first", "title": "First", "updatedAt": float64(30)},
+		map[string]any{"id": "thread-unknown", "title": "Unknown", "updatedAt": float64(20)},
+		map[string]any{"id": "thread-skipped", "title": "Skipped", "updatedAt": float64(10)},
+	}}}
+	service.pollConnected = true
+	forum := &fakeSyncForum{
+		nextTopicID: 10,
+		createErrAt: 2,
+		createErr:   NewSyncForumFailure(SyncForumFailureUnknown, context.DeadlineExceeded),
+	}
+	service.SetSyncForum(forum)
+	sender := &recordingSender{}
+	service.SetSender(sender)
+	ctx := context.Background()
+
+	response, err := service.HandleMessage(ctx, -1001, 1, 123456789, "/sync on", 0)
+	if err != nil || response != nil {
+		t.Fatalf("response=%#v err=%v, want durable response only", response, err)
+	}
+	if !reflect.DeepEqual(forum.creates, []string{"First", "Unknown"}) {
+		t.Fatalf("creates=%#v, want stop after unknown outcome", forum.creates)
+	}
+	state, err := service.store.GetSyncState(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var summary syncActivationSummary
+	if err := json.Unmarshal([]byte(state.ActivationSummaryJSON), &summary); err != nil {
+		t.Fatalf("activation summary=%q: %v", state.ActivationSummaryJSON, err)
+	}
+	if summary.Created != 1 || len(summary.Unknown) != 1 || len(summary.Skipped) != 1 || summary.Items[2].Telegram != "skipped after unknown outcome" {
+		t.Fatalf("summary=%#v, want one connected, unknown, and skipped", summary)
+	}
+
+	service.processDeliveryBatch(ctx)
+	if len(sender.messages) != 1 {
+		t.Fatalf("Control deliveries=%#v, want one durable summary", sender.messages)
+	}
+	message := sender.messages[0]
+	if message.chatID != -1001 || message.topicID != syncGeneralSendTopicID ||
+		!strings.Contains(message.text, "active: 1") || !strings.Contains(message.text, "unknown: 1") || !strings.Contains(message.text, "skipped: 1") {
+		t.Fatalf("Control summary=%#v", message)
+	}
+}
+
+func TestSyncActivationContinuesAfterDefinitiveTopicFailure(t *testing.T) {
+	service := newTestService(t)
+	service.poll = &stubSession{threadListResult: map[string]any{"data": []any{
+		map[string]any{"id": "thread-first", "title": "First", "updatedAt": float64(30)},
+		map[string]any{"id": "thread-failed", "title": "Failed", "updatedAt": float64(20)},
+		map[string]any{"id": "thread-third", "title": "Third", "updatedAt": float64(10)},
+	}}}
+	service.pollConnected = true
+	forum := &fakeSyncForum{
+		nextTopicID: 10,
+		createErrAt: 2,
+		createErr:   NewSyncForumFailure(SyncForumFailureDefinitive, errors.New("bad topic title")),
+	}
+	service.SetSyncForum(forum)
+	ctx := context.Background()
+
+	response, err := service.HandleMessage(ctx, -1001, 1, 123456789, "/sync on", 0)
+	if err != nil || response != nil {
+		t.Fatalf("response=%#v err=%v, want durable response only", response, err)
+	}
+	if !reflect.DeepEqual(forum.creates, []string{"First", "Failed", "Third"}) {
+		t.Fatalf("creates=%#v, want definitive failure not to stop activation", forum.creates)
+	}
+	state, err := service.store.GetSyncState(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var summary syncActivationSummary
+	if err := json.Unmarshal([]byte(state.ActivationSummaryJSON), &summary); err != nil ||
+		summary.Created != 2 || len(summary.Failed) != 1 || len(summary.Unknown) != 0 || len(summary.Skipped) != 0 {
+		t.Fatalf("summary=%#v err=%v", summary, err)
 	}
 }
 
@@ -203,8 +285,8 @@ func TestSyncActivationUsesConfiguredInitialTopicLimit(t *testing.T) {
 	service.SetSyncForum(forum)
 
 	response, err := service.HandleMessage(context.Background(), -1001, 1, 123456789, "/sync on", 0)
-	if err != nil || response == nil {
-		t.Fatalf("response=%#v err=%v", response, err)
+	if err != nil || response != nil {
+		t.Fatalf("response=%#v err=%v, want durable response only", response, err)
 	}
 	if len(forum.creates) != 5 {
 		t.Fatalf("creates=%#v, want five", forum.creates)
@@ -271,8 +353,8 @@ func TestSyncActivationFindsRunningThreadOnLaterListPage(t *testing.T) {
 	service.SetSyncForum(forum)
 
 	response, err := service.HandleMessage(context.Background(), -1001, 1, 123456789, "/sync on", 0)
-	if err != nil || response == nil {
-		t.Fatalf("response=%#v err=%v", response, err)
+	if err != nil || response != nil {
+		t.Fatalf("response=%#v err=%v, want durable response only", response, err)
 	}
 	if !reflect.DeepEqual(poll.cursors, []string{"", "page-2"}) {
 		t.Fatalf("thread/list cursors=%#v", poll.cursors)
@@ -403,10 +485,16 @@ func TestSyncZeroTopicActivationReturnsToOff(t *testing.T) {
 	service.poll = &stubSession{threadListResult: map[string]any{"data": []any{map[string]any{"id": "thread-1", "title": "One", "updatedAt": float64(10)}}}}
 	service.pollConnected = true
 	service.SetSyncForum(&fakeSyncForum{createErrAt: 1})
+	sender := &recordingSender{}
+	service.SetSender(sender)
 	ctx := context.Background()
 	response, err := service.HandleMessage(ctx, -1001, 1, 123456789, "/sync on", 0)
-	if err != nil || response == nil || !strings.Contains(response.Text, "active: 0") {
-		t.Fatalf("response=%#v err=%v", response, err)
+	if err != nil || response != nil {
+		t.Fatalf("response=%#v err=%v, want durable response only", response, err)
+	}
+	service.processDeliveryBatch(ctx)
+	if len(sender.messages) != 1 || !strings.Contains(sender.messages[0].text, "active: 0") {
+		t.Fatalf("Control deliveries=%#v", sender.messages)
 	}
 	state, _ := service.store.GetSyncState(ctx)
 	if state.State != model.SyncStateOff {

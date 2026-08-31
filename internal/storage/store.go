@@ -583,6 +583,14 @@ func (s *Store) ExpireSyncCallbackRoutesByRequest(ctx context.Context, requestID
 }
 
 func (s *Store) EnqueueDelivery(ctx context.Context, item model.DeliveryQueueItem) error {
+	return enqueueDelivery(ctx, s.db, item)
+}
+
+type deliveryExecer interface {
+	ExecContext(context.Context, string, ...any) (sql.Result, error)
+}
+
+func enqueueDelivery(ctx context.Context, execer deliveryExecer, item model.DeliveryQueueItem) error {
 	now := string(model.NowString())
 	if item.AvailableAt == "" {
 		item.AvailableAt = model.TimeString(now)
@@ -593,7 +601,7 @@ func (s *Store) EnqueueDelivery(ctx context.Context, item model.DeliveryQueueIte
 	if item.UpdatedAt == "" {
 		item.UpdatedAt = model.TimeString(now)
 	}
-	_, err := s.db.ExecContext(ctx, `
+	_, err := execer.ExecContext(ctx, `
 	INSERT INTO delivery_queue(event_id, chat_key, chat_id, topic_id, thread_id, kind, status, retry_count, available_at, last_error, payload_json, created_at, updated_at)
 	VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	ON CONFLICT(event_id, chat_key) DO NOTHING`,
@@ -653,13 +661,26 @@ func (s *Store) SupersedeDelivery(ctx context.Context, queueID int64) error {
 }
 
 func (s *Store) RetireUnsupportedTelegramDeliveries(ctx context.Context, syncGroupID int64) (int64, error) {
-	result, err := s.db.ExecContext(ctx, `
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, err
+	}
+	defer rollback(tx)
+	now := string(model.NowString())
+	if _, err := tx.ExecContext(ctx, `
+	UPDATE delivery_queue
+	SET status = ?, available_at = ?, updated_at = ?
+	WHERE status = ? AND chat_id = ? AND kind IN ('health', 'external_terminal', 'sync_activation')`,
+		model.DeliveryStatusRetry, now, now, model.DeliveryStatusProcessing, syncGroupID); err != nil {
+		return 0, err
+	}
+	result, err := tx.ExecContext(ctx, `
 	UPDATE delivery_queue
 	SET status = ?, updated_at = ?
 	WHERE status IN (?, ?, ?)
-	  AND (chat_id <> ? OR kind NOT IN ('health', 'external_terminal'))`,
+	  AND (chat_id <> ? OR kind NOT IN ('health', 'external_terminal', 'sync_activation'))`,
 		model.DeliveryStatusSuperseded,
-		string(model.NowString()),
+		now,
 		model.DeliveryStatusPending,
 		model.DeliveryStatusRetry,
 		model.DeliveryStatusProcessing,
@@ -668,7 +689,14 @@ func (s *Store) RetireUnsupportedTelegramDeliveries(ctx context.Context, syncGro
 	if err != nil {
 		return 0, err
 	}
-	return result.RowsAffected()
+	retired, err := result.RowsAffected()
+	if err != nil {
+		return 0, err
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
+	return retired, nil
 }
 
 func (s *Store) DeliveryStatusForEvent(ctx context.Context, eventID, chatKey string) (string, error) {

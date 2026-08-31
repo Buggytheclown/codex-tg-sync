@@ -73,8 +73,10 @@ func TestRetireUnsupportedTelegramDeliveries(t *testing.T) {
 		{"dm-pending", 42, "observer", model.DeliveryStatusPending, model.DeliveryStatusSuperseded},
 		{"dm-retry", 42, "health", model.DeliveryStatusRetry, model.DeliveryStatusSuperseded},
 		{"group-processing-observer", -1001, "observer", model.DeliveryStatusProcessing, model.DeliveryStatusSuperseded},
+		{"group-processing-health", -1001, "health", model.DeliveryStatusProcessing, model.DeliveryStatusRetry},
 		{"group-health", -1001, "health", model.DeliveryStatusPending, model.DeliveryStatusPending},
 		{"group-terminal", -1001, "external_terminal", model.DeliveryStatusRetry, model.DeliveryStatusRetry},
+		{"group-sync-activation", -1001, "sync_activation", model.DeliveryStatusProcessing, model.DeliveryStatusRetry},
 		{"historical-delivered", 42, "observer", model.DeliveryStatusDelivered, model.DeliveryStatusDelivered},
 		{"historical-dead", 42, "observer", model.DeliveryStatusDead, model.DeliveryStatusDead},
 	}
