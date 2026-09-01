@@ -10,7 +10,7 @@ Sync reconciliation, launch-card rendering, terminal delivery, and operator call
 
 The process owns one in-memory Telegram egress governor for every Sync-group write. Each raw Bot API attempt, including every text chunk and entity-free fallback, enters the governor separately.
 
-- Group writes are paced at one attempt every 3.25 seconds with burst one. This is about 18.5 attempts per minute, below the operational 20 writes/minute target.
+- Group writes are paced at no more than one attempt per second and no more than 20 attempts in any rolling 60.25-second window. The extra 250 milliseconds avoids relying on an exact server-window boundary while sustaining about 19.9 attempts per minute under continuous load. A fresh governor can send its first 20 attempts one second apart, then waits until the oldest attempt leaves the rolling window.
 - Foreground and background are the only queued priority classes. After four foreground attempts, one ready background attempt is selected so maintenance cannot starve.
 - `answerCallbackQuery` is critical control traffic. Admission-valid callbacks in each received update batch are acknowledged once with neutral text before sequential business handling. It bypasses group pacing and cooldown, but any `429` it observes still extends the shared cooldown. Out-of-scope callbacks remain unanswered.
 - A Telegram `retry_after` pauses every noncritical write until that time. The cooldown is intentionally not persisted across process restart.
@@ -27,7 +27,7 @@ Topic creation stops after the first ambiguous outcome, such as a timeout or tra
 
 - Telegram group traffic has one rate and cooldown authority without new configuration, dependencies, or database schema.
 - Important launches and user-visible results can pass background status/health maintenance, while background work still progresses.
-- A process restart forgets Telegram's previous `retry_after`; a subsequent `429` immediately rebuilds the cooldown.
+- A process restart forgets both the local rolling-window history and Telegram's previous `retry_after`; a subsequent `429` immediately rebuilds the cooldown.
 - A launch topic `429` becomes a durable failed request with Retry/Close controls rather than an invisible in-memory wait.
 - An ambiguous Sync topic creation can leave at most one new untracked topic per activation; later candidates are not attempted.
 - The operator receives the activation result through durable Control delivery even if the original Telegram update can no longer send a direct response.
@@ -36,7 +36,7 @@ Topic creation stops after the first ambiguous outcome, such as a timeout or tra
 
 ## Verification
 
-- Governor tests cover raw-attempt spacing, bounded foreground preference, shared `retry_after`, critical callback bypass, and return-on-429 behavior.
+- Governor tests cover one-second raw-attempt spacing, the rolling 20-attempt limit, bounded foreground preference, shared `retry_after`, critical callback bypass, and return-on-429 behavior.
 - Bot tests cover multi-chunk pacing and retryable single-attempt launch topic creation.
 - Daemon tests cover activation ordering, retryable launch cards, and callbacks that do not wait for the launch renderer.
 - Sync activation tests cover fail-fast ambiguous creation, skipped candidates, atomic summary enqueue, and durable Control delivery.

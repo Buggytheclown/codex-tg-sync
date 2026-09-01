@@ -95,6 +95,48 @@ func TestEgressGovernorSpacesEveryRawGroupWrite(t *testing.T) {
 	}
 }
 
+func TestEgressGovernorLimitsRawGroupWritesPerRollingMinute(t *testing.T) {
+	clock := newFakeEgressClock()
+	governor := newEgressGovernorWithClock(defaultTelegramGroupWriteInterval, clock)
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	governor.Start(ctx)
+
+	for index := 0; index < defaultTelegramGroupWriteLimit; index++ {
+		started := make(chan struct{}, 1)
+		done := runEgressOperation(governor, ctx, egressOperation{priority: egressForeground, retry429: true}, func() error {
+			started <- struct{}{}
+			return nil
+		})
+		if index > 0 {
+			waitForCondition(t, func() bool { return clock.timerCount() > 0 })
+			assertNoSignal(t, started)
+			clock.Advance(defaultTelegramGroupWriteInterval)
+		}
+		receiveSignal(t, started)
+		if err := receiveError(t, done); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	twentyFirstStarted := make(chan struct{}, 1)
+	twentyFirstDone := runEgressOperation(governor, ctx, egressOperation{priority: egressForeground, retry429: true}, func() error {
+		twentyFirstStarted <- struct{}{}
+		return nil
+	})
+	waitForCondition(t, func() bool { return clock.timerCount() > 0 })
+	assertNoSignal(t, twentyFirstStarted)
+
+	waitRemaining := defaultTelegramGroupWriteWindow - time.Duration(defaultTelegramGroupWriteLimit-1)*defaultTelegramGroupWriteInterval
+	clock.Advance(waitRemaining - time.Millisecond)
+	assertNoSignal(t, twentyFirstStarted)
+	clock.Advance(time.Millisecond)
+	receiveSignal(t, twentyFirstStarted)
+	if err := receiveError(t, twentyFirstDone); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestEgressGovernorBoundsForegroundPriority(t *testing.T) {
 	governor := newEgressGovernor(0)
 	ctx, cancel := context.WithCancel(context.Background())

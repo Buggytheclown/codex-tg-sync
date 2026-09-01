@@ -9,7 +9,9 @@ import (
 )
 
 const (
-	defaultTelegramGroupWriteInterval = 3250 * time.Millisecond
+	defaultTelegramGroupWriteInterval = time.Second
+	defaultTelegramGroupWriteLimit    = 20
+	defaultTelegramGroupWriteWindow   = 60*time.Second + 250*time.Millisecond
 	defaultTelegramRetryAfter         = 5 * time.Second
 	foregroundWriteBurst              = 4
 )
@@ -130,6 +132,7 @@ func (g *egressGovernor) run(ctx context.Context) {
 	background := make([]*egressRequest, 0)
 	foregroundStreak := 0
 	nextWriteAt := time.Time{}
+	writeAttempts := make([]time.Time, 0, defaultTelegramGroupWriteLimit)
 
 	finishPending := func(err error) {
 		for _, queue := range [][]*egressRequest{foreground, background} {
@@ -164,7 +167,9 @@ func (g *egressGovernor) run(ctx context.Context) {
 		foreground = pruneCanceledEgressRequests(foreground)
 		background = pruneCanceledEgressRequests(background)
 		now := g.clock.Now()
-		gate := latestTime(nextWriteAt, g.cooldownUntil())
+		writeAttempts = pruneEgressAttempts(writeAttempts, now, defaultTelegramGroupWriteWindow)
+		windowGate := nextEgressWindowAt(writeAttempts, defaultTelegramGroupWriteLimit, defaultTelegramGroupWriteWindow)
+		gate := latestTime(latestTime(nextWriteAt, windowGate), g.cooldownUntil())
 		request, fromBackground := selectEgressRequest(now, gate, foreground, background, foregroundStreak)
 		if request != nil {
 			if fromBackground {
@@ -176,6 +181,7 @@ func (g *egressGovernor) run(ctx context.Context) {
 			}
 			attemptAt := g.clock.Now()
 			nextWriteAt = attemptAt.Add(g.interval)
+			writeAttempts = append(writeAttempts, attemptAt)
 			err := request.attempt()
 			if delay, ok := telegramRetryAfter(err); ok {
 				retryAt := g.clock.Now().Add(delay)
@@ -229,6 +235,21 @@ func (g *egressGovernor) run(ctx context.Context) {
 		case <-g.wake:
 		}
 	}
+}
+
+func pruneEgressAttempts(attempts []time.Time, now time.Time, window time.Duration) []time.Time {
+	firstActive := 0
+	for firstActive < len(attempts) && !attempts[firstActive].Add(window).After(now) {
+		firstActive++
+	}
+	return attempts[firstActive:]
+}
+
+func nextEgressWindowAt(attempts []time.Time, limit int, window time.Duration) time.Time {
+	if limit <= 0 || len(attempts) < limit {
+		return time.Time{}
+	}
+	return attempts[len(attempts)-limit].Add(window)
 }
 
 func selectEgressRequest(now, gate time.Time, foreground, background []*egressRequest, foregroundStreak int) (*egressRequest, bool) {

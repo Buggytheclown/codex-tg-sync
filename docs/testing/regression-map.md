@@ -42,7 +42,7 @@ Coverage includes:
 - generation-aware writer claims and fail-closed unknown dispatch;
 - poll/list/read behavior and non-blocking startup;
 - typed Telegram topic/retry failures;
-- one 3.25-second group-write governor, bounded foreground preference, and shared `retry_after` cooldown.
+- one-second group-write pacing with no more than 20 raw attempts per rolling 60.25 seconds, bounded foreground preference, and shared `retry_after` cooldown.
 
 ## Prompt, steer, stop, and lifecycle
 

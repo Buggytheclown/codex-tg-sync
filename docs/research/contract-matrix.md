@@ -69,7 +69,7 @@ Retired SQLite keys such as `codex.model` and `codex.reasoning_effort` do not af
 
 No direct-message observer cards, progress trios, Details pages, Plan cards, settings menus, or automatic log/tool exports exist in the active product.
 
-All raw Sync-group Bot API writes share one in-memory egress governor. It permits one attempt every 3.25 seconds, gives foreground traffic bounded preference over background maintenance, and pauses noncritical writes for Telegram `retry_after`. Admission-valid callbacks from each received batch get one neutral acknowledgement before business handling and bypass the group gate; out-of-scope callbacks get no response. The cooldown is not persisted across restart.
+All raw Sync-group Bot API writes share one in-memory egress governor. It permits at most one attempt per second and 20 attempts per rolling 60.25 seconds, gives foreground traffic bounded preference over background maintenance, and pauses noncritical writes for Telegram `retry_after`. Admission-valid callbacks from each received batch get one neutral acknowledgement before business handling and bypass the group gate; out-of-scope callbacks get no response. The rolling history and cooldown are not persisted across restart.
 
 ## Approval decisions
 
