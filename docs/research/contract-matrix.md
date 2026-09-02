@@ -61,7 +61,7 @@ Retired SQLite keys such as `codex.model` and `codex.reasoning_effort` do not af
 | Card | Creation | Update |
 | --- | --- | --- |
 | `[User]` | accepted topic prompt/steer | not used as routing authority |
-| `[Status]` | active turn | edited from current App Server state |
+| `[Status]` | active turn | edited from current App Server state; live timers advance in ten-second buckets while content/state changes remain immediate |
 | `[Approval]` | actionable daemon-owned server request | same card becomes Approved, Denied, or Cancelled; buttons disappear |
 | `[Input]` | actionable structured input | same card becomes terminal after answer |
 | `[Final]` | authoritative terminal result | long results split safely; each chunk keeps the Final header |

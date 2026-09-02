@@ -42,11 +42,12 @@ type SyncForum interface {
 }
 
 const (
-	syncUserHeader     = "👤 [User]"
-	syncStatusHeader   = "⏱ [Status]"
-	syncFinalHeader    = "✅ [Final]"
-	syncApprovalHeader = "🔐 [Approval]"
-	syncInputHeader    = "❓ [Input]"
+	syncUserHeader      = "👤 [User]"
+	syncStatusHeader    = "⏱ [Status]"
+	syncFinalHeader     = "✅ [Final]"
+	syncApprovalHeader  = "🔐 [Approval]"
+	syncInputHeader     = "❓ [Input]"
+	syncStatusTimerTick = 10 * time.Second
 )
 
 type SyncForumFailureKind string
@@ -1347,6 +1348,7 @@ func syncActivationThreadPriority(thread model.Thread) int {
 }
 
 func renderSyncStatusAt(snapshot appserver.ThreadReadSnapshot, now time.Time) model.RenderedMessage {
+	now = syncStatusRenderTime(snapshot, now)
 	status := strings.TrimSpace(snapshot.LatestTurnStatus)
 	if snapshot.WaitingOnApproval || snapshot.WaitingOnReply {
 		status = "waiting"
@@ -1377,6 +1379,26 @@ func renderSyncStatusAt(snapshot appserver.ThreadReadSnapshot, now time.Time) mo
 		}}
 	}
 	return message
+}
+
+func syncStatusRenderTime(snapshot appserver.ThreadReadSnapshot, now time.Time) time.Time {
+	if now.IsZero() {
+		now = time.Now().UTC()
+	} else {
+		now = now.UTC()
+	}
+	if isTerminalStatus(snapshot.LatestTurnStatus) {
+		return now
+	}
+	startedAt := parseTime(model.TimeString(snapshot.LatestTurnStartedAt))
+	if startedAt.IsZero() {
+		return now.Truncate(syncStatusTimerTick)
+	}
+	elapsed := now.Sub(startedAt)
+	if elapsed <= 0 {
+		return startedAt
+	}
+	return startedAt.Add(elapsed.Truncate(syncStatusTimerTick))
 }
 
 func syncStatusBlocks(items []model.DetailItem) []model.DetailItem {

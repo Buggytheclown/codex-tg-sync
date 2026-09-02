@@ -29,10 +29,13 @@ created only some topics.
   This mirrors the legacy per-run presentation lifecycle without creating a
   legacy binding, panel, observer target, or writer. Passive sync never resumes
   a thread, starts a turn, or creates a writer.
-- Sync reuses the legacy observed-turn timing and bounded active-turn refresh
-  lifecycle without reusing legacy delivery state. Status renders from the
-  compacted snapshot, includes the shared `Run active for` / `Run duration`
-  footer, and may edit solely because elapsed time advanced.
+- Sync reuses the observed-turn timing and bounded active-turn refresh lifecycle
+  without reusing legacy delivery state. Status renders from the compacted
+  snapshot. While a turn is active, the header timer and open-block durations
+  advance in ten-second buckets, so elapsed-only snapshots inside the same
+  bucket do not cause Telegram edits. Content and state changes may still edit
+  immediately. Terminal durations use the authoritative timestamps without
+  bucketing and remain stable on later polls.
 - After a successful Sync topic prompt or steer acknowledgement, the current
   same-turn live status is best-effort deleted and recreated at the bottom of
   the topic. Later progress edits that tail message. Status history from older

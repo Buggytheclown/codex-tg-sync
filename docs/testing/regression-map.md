@@ -57,6 +57,9 @@ Required scenarios:
 - authoritative newer turns release stale local ownership;
 - Stop checks current topic/thread/turn/generation;
 - terminal events and terminal poll evidence close writer leases;
+- active status timers and open-block durations advance in ten-second buckets,
+  while content/state changes can still edit immediately and terminal duration
+  stays exact and stable;
 - restart/reconnect does not duplicate user receipts or finals;
 - long finals preserve UTF-16 limits and the Final header on every chunk.
 

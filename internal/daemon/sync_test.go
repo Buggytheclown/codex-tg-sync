@@ -1039,8 +1039,11 @@ func TestSyncStatusUsesCompactTimingInHeader(t *testing.T) {
 		LatestTurnStatus:    "inProgress",
 		LatestTurnStartedAt: startedAt.Format(time.RFC3339Nano),
 	}
-	if got := renderSyncStatusAt(active, startedAt.Add(8*time.Second)).Text; got != "⏱ [Status] inProgress · 8s" {
-		t.Fatalf("active status = %q, want compact elapsed header", got)
+	if got := renderSyncStatusAt(active, startedAt.Add(8*time.Second)).Text; got != "⏱ [Status] inProgress · 0s" {
+		t.Fatalf("active status = %q, want elapsed timer held in its 10-second bucket", got)
+	}
+	if got := renderSyncStatusAt(active, startedAt.Add(10*time.Second)).Text; got != "⏱ [Status] inProgress · 10s" {
+		t.Fatalf("active status = %q, want elapsed timer advanced at 10 seconds", got)
 	}
 
 	active.LatestTurnStatus = "completed"
@@ -1137,6 +1140,30 @@ func TestSyncStatusBlockDurationsPartitionOverallDuration(t *testing.T) {
 	}
 }
 
+func TestSyncStatusOpenBlockTimerUsesSameTenSecondBucketAsHeader(t *testing.T) {
+	t.Parallel()
+
+	startedAt := time.Date(2026, time.August, 17, 12, 0, 0, 0, time.UTC)
+	snapshot := appserver.ThreadReadSnapshot{
+		Thread:              model.Thread{Status: "inProgress"},
+		LatestTurnID:        "turn-1",
+		LatestTurnStatus:    "inProgress",
+		LatestTurnStartedAt: startedAt.Format(time.RFC3339Nano),
+		DetailItems: []model.DetailItem{
+			{ID: "block-1", Kind: model.DetailItemCommentary, Text: "working", StartedAt: model.TimeString(startedAt.Format(time.RFC3339Nano))},
+		},
+	}
+
+	insideBucket := renderSyncStatusAt(snapshot, startedAt.Add(5*time.Second)).Text
+	if laterInsideBucket := renderSyncStatusAt(snapshot, startedAt.Add(9*time.Second)).Text; laterInsideBucket != insideBucket {
+		t.Fatalf("status changed inside one timer bucket:\n5s: %q\n9s: %q", insideBucket, laterInsideBucket)
+	}
+	atBoundary := renderSyncStatusAt(snapshot, startedAt.Add(10*time.Second)).Text
+	if atBoundary == insideBucket || !strings.Contains(atBoundary, "inProgress · 10s") || !strings.Contains(atBoundary, "Блок 1 · 10s") {
+		t.Fatalf("status did not advance both timers at boundary: %q", atBoundary)
+	}
+}
+
 func TestSyncCompletedStatusCollapsesBodyAndKeepsHeaderVisible(t *testing.T) {
 	t.Parallel()
 
@@ -1179,7 +1206,7 @@ func TestSyncStatusTrimsOldLinesAndPreservesLatestTail(t *testing.T) {
 	}
 
 	message := renderSyncStatusAt(snapshot, startedAt.Add(2*time.Second))
-	if syncUTF16Len(message.Text) > 4096 || !strings.HasPrefix(message.Text, "⏱ [Status] inProgress · 2s\n") ||
+	if syncUTF16Len(message.Text) > 4096 || !strings.HasPrefix(message.Text, "⏱ [Status] inProgress · 0s\n") ||
 		!strings.Contains(message.Text, "… удалено строк:") || !strings.HasSuffix(message.Text, "LATEST STATUS TAIL") {
 		t.Fatalf("trimmed status length=%d text tail=%q", syncUTF16Len(message.Text), syncUTF16Suffix(message.Text, 200))
 	}
@@ -1206,8 +1233,14 @@ func TestSyncPassiveSyncTicksElapsedFromStableTurnStart(t *testing.T) {
 
 	now = now.Add(5 * time.Second)
 	service.reconcileSync(ctx)
-	if len(forum.edits) != 1 || !strings.HasPrefix(forum.edits[0].text, syncStatusHeader+" inProgress · 5s") {
-		t.Fatalf("elapsed edits=%#v, want elapsed-only edit from stable start", forum.edits)
+	if len(forum.edits) != 0 {
+		t.Fatalf("elapsed edits=%#v, want no edit inside the same 10-second bucket", forum.edits)
+	}
+
+	now = now.Add(5 * time.Second)
+	service.reconcileSync(ctx)
+	if len(forum.edits) != 1 || !strings.HasPrefix(forum.edits[0].text, syncStatusHeader+" inProgress · 10s") {
+		t.Fatalf("elapsed edits=%#v, want elapsed-only edit at the 10-second boundary", forum.edits)
 	}
 }
 
