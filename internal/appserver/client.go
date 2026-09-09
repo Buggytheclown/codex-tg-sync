@@ -464,16 +464,75 @@ func (c *Client) ThreadRead(ctx context.Context, threadID string, includeTurns b
 	return asMap(result), nil
 }
 
+// ThreadReadLatest returns thread metadata plus only the newest turn. Sync uses
+// this bounded read when it must reconcile after a reconnect or event gap.
+func (c *Client) ThreadReadLatest(ctx context.Context, threadID string) (map[string]any, error) {
+	return c.threadReadLatest(ctx, threadID, "full")
+}
+
+// ThreadReadLatestSummary is the cheap safety-reconciliation view. It avoids
+// transferring persisted command output for already observed idle turns.
+func (c *Client) ThreadReadLatestSummary(ctx context.Context, threadID string) (map[string]any, error) {
+	return c.threadReadLatest(ctx, threadID, "summary")
+}
+
+func (c *Client) threadReadLatest(ctx context.Context, threadID, itemsView string) (map[string]any, error) {
+	metadata, err := c.ThreadRead(ctx, threadID, false)
+	if err != nil {
+		return nil, err
+	}
+	result, err := c.Request(ctx, "thread/turns/list", map[string]any{
+		"threadId":      threadID,
+		"limit":         1,
+		"sortDirection": "desc",
+		"itemsView":     itemsView,
+	})
+	if err != nil {
+		// Older App Server builds do not expose thread/turns/list. Keep the
+		// bridge functional, while current builds stay on the bounded path.
+		return c.ThreadRead(ctx, threadID, true)
+	}
+	thread := asMap(metadata["thread"])
+	if len(thread) == 0 {
+		thread = metadata
+	}
+	turnPage := asMap(result)
+	turns, _ := turnPage["data"].([]any)
+	if turns == nil {
+		turns, _ = turnPage["turns"].([]any)
+	}
+	composed := make(map[string]any, len(thread)+1)
+	for key, value := range thread {
+		composed[key] = value
+	}
+	if len(turns) > 1 {
+		turns = turns[:1]
+	}
+	composed["turns"] = turns
+	return map[string]any{"thread": composed}, nil
+}
+
 func (c *Client) ThreadResume(ctx context.Context, threadID, _ string) (map[string]any, error) {
 	result, err := c.Request(ctx, "thread/resume", threadResumeParams(threadID))
 	if err != nil {
-		return nil, err
+		result, err = c.Request(ctx, "thread/resume", map[string]any{"threadId": threadID})
+		if err != nil {
+			return nil, err
+		}
 	}
 	return asMap(result), nil
 }
 
 func threadResumeParams(threadID string) map[string]any {
-	return map[string]any{"threadId": threadID}
+	return map[string]any{
+		"threadId":     threadID,
+		"excludeTurns": true,
+		"initialTurnsPage": map[string]any{
+			"limit":         1,
+			"sortDirection": "desc",
+			"itemsView":     "summary",
+		},
+	}
 }
 
 func (c *Client) TurnStart(ctx context.Context, threadID, message, cwd string, options TurnStartOptions) (map[string]any, error) {
@@ -1242,6 +1301,16 @@ func (c *Client) broadcast(event Event) {
 		select {
 		case subscriber <- event:
 		default:
+			// Never hide a lossy subscription. Replace one stale queued event
+			// with an explicit gap marker so consumers can reconcile once.
+			select {
+			case <-subscriber:
+			default:
+			}
+			select {
+			case subscriber <- Event{Channel: "event_gap"}:
+			default:
+			}
 		}
 	}
 }

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/mideco-tech/codex-tg/internal/model"
 )
@@ -73,7 +74,16 @@ func ThreadFromPayload(payload map[string]any) model.Thread {
 	preview := stringValue(threadPayload["preview"], "")
 	status := statusText(threadPayload["status"])
 	preferredModel := stringValue(threadPayload["model"], stringValue(payload["model"], ""))
-	raw, _ := json.Marshal(threadPayload)
+	// turns can contain the complete transcript and large tool outputs. The
+	// threads table is an index, not a second transcript store, so persist only
+	// the metadata needed by routing and visibility predicates.
+	compactPayload := make(map[string]any, len(threadPayload))
+	for key, value := range threadPayload {
+		if key != "turns" {
+			compactPayload[key] = value
+		}
+	}
+	raw, _ := json.Marshal(compactPayload)
 	updatedAt := int64Value(threadPayload["updatedAt"])
 	activeTurnID := stringValue(threadPayload["activeTurnId"], "")
 	if turns, ok := threadPayload["turns"].([]any); ok && len(turns) > 0 {
@@ -321,6 +331,7 @@ func CompactSnapshot(previous *model.ThreadSnapshotState, current ThreadReadSnap
 	applyLatestTurnTiming(previous, &current, polledAt)
 	applyStatusBlockTiming(previous, &current, polledAt)
 	applyLatestToolTiming(previous, &current, polledAt)
+	boundCompactSnapshot(&current)
 	out := model.ThreadSnapshotState{
 		ThreadUpdatedAt:      current.Thread.UpdatedAt,
 		LastSeenThreadStatus: current.Thread.Status,
@@ -352,6 +363,41 @@ func CompactSnapshot(previous *model.ThreadSnapshotState, current ThreadReadSnap
 	raw, _ := json.Marshal(current)
 	out.CompactJSON = raw
 	return out
+}
+
+const compactSnapshotFieldLimit = 64 * 1024
+const compactSnapshotDetailLimit = 64
+
+func boundCompactSnapshot(snapshot *ThreadReadSnapshot) {
+	if snapshot == nil {
+		return
+	}
+	snapshot.LatestProgressText = truncateSnapshotText(snapshot.LatestProgressText, compactSnapshotFieldLimit)
+	snapshot.LatestToolOutput = truncateSnapshotText(snapshot.LatestToolOutput, compactSnapshotFieldLimit)
+	for index := range snapshot.DetailItems {
+		snapshot.DetailItems[index].Text = truncateSnapshotText(snapshot.DetailItems[index].Text, compactSnapshotFieldLimit)
+		snapshot.DetailItems[index].Output = truncateSnapshotText(snapshot.DetailItems[index].Output, compactSnapshotFieldLimit)
+	}
+	if len(snapshot.DetailItems) > compactSnapshotDetailLimit {
+		snapshot.DetailItems = snapshot.DetailItems[len(snapshot.DetailItems)-compactSnapshotDetailLimit:]
+	}
+	for index := range snapshot.LatestAgentMessages {
+		snapshot.LatestAgentMessages[index] = truncateSnapshotText(snapshot.LatestAgentMessages[index], compactSnapshotFieldLimit)
+	}
+	for index := range snapshot.LatestAgentMessageEntries {
+		snapshot.LatestAgentMessageEntries[index].Text = truncateSnapshotText(snapshot.LatestAgentMessageEntries[index].Text, compactSnapshotFieldLimit)
+	}
+}
+
+func truncateSnapshotText(value string, limit int) string {
+	if limit <= 0 || len(value) <= limit {
+		return value
+	}
+	end := limit
+	for end > 0 && !utf8.RuneStart(value[end]) {
+		end--
+	}
+	return value[:end] + "\n[…truncated in local projection…]"
 }
 
 func applyStatusBlockTiming(previous *model.ThreadSnapshotState, current *ThreadReadSnapshot, observedAt time.Time) {

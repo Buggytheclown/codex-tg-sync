@@ -195,7 +195,7 @@ func (s *Service) decideTelegramOriginEmptyInterruptedTerminal(ctx context.Conte
 	decision := terminalGateDecision{
 		Action: terminalGateAccept,
 		Reason: "not_deferrable_interrupted",
-		Grace:  terminalGateGraceDuration(s.cfg.SyncPollInterval),
+		Grace:  terminalGateGraceDuration(syncTerminalPollInterval(s.cfg.SyncPollInterval)),
 	}
 	threadID, turnID := terminalGateSnapshotIDs(snapshot)
 	decision.ThreadID = threadID
@@ -231,7 +231,7 @@ func (s *Service) decideTelegramOriginEmptyInterruptedTerminal(ctx context.Conte
 			decision.ExpiresAt = parseTime(existing.ExpiresAt)
 			if terminalGateSnapshotNeedsHotPolling(snapshot) {
 				decision.HotPoll = true
-				decision.NextPollAfter = terminalGateNextPollAfter(now, s.cfg.SyncPollInterval)
+				decision.NextPollAfter = terminalGateNextPollAfter(now, syncTerminalPollInterval(s.cfg.SyncPollInterval))
 			}
 			return decision, nil
 		}
@@ -293,9 +293,9 @@ func (s *Service) decideTelegramOriginEmptyInterruptedTerminal(ctx context.Conte
 	decision.Action = terminalGateDefer
 	decision.Reason = interruptedDeferReason(snapshot)
 	decision.HotPoll = true
-	decision.NextPollAfter = terminalGateNextPollAfter(now, s.cfg.SyncPollInterval)
+	decision.NextPollAfter = terminalGateNextPollAfter(now, syncTerminalPollInterval(s.cfg.SyncPollInterval))
 	state.NextPollAfter = decision.NextPollAfter
-	state.HotPollIntervalMillis = terminalGateHotPollInterval(s.cfg.SyncPollInterval).Milliseconds()
+	state.HotPollIntervalMillis = terminalGateHotPollInterval(syncTerminalPollInterval(s.cfg.SyncPollInterval)).Milliseconds()
 	state.LastDecision = string(decision.Action)
 	state.LastReason = decision.Reason
 	if err := s.saveTelegramOriginEmptyInterruptedDefer(ctx, threadID, turnID, state); err != nil {
@@ -445,7 +445,7 @@ func (s *Service) loadTelegramOriginEmptyInterruptedDefer(ctx context.Context, t
 		ThreadID:     strings.TrimSpace(threadID),
 		TurnID:       strings.TrimSpace(turnID),
 		FirstSeenAt:  model.TimeString(firstSeenAt.Format(time.RFC3339Nano)),
-		ExpiresAt:    model.TimeString(firstSeenAt.Add(terminalGateGraceDuration(s.cfg.SyncPollInterval)).Format(time.RFC3339Nano)),
+		ExpiresAt:    model.TimeString(firstSeenAt.Add(terminalGateGraceDuration(syncTerminalPollInterval(s.cfg.SyncPollInterval))).Format(time.RFC3339Nano)),
 		LastDecision: string(terminalGateDefer),
 		LastReason:   "pre_gate_state",
 	}, true, nil
@@ -497,6 +497,13 @@ func terminalGateHotPollInterval(syncPollInterval time.Duration) time.Duration {
 		return syncPollInterval
 	}
 	return terminalGateDefaultHotPollInterval
+}
+
+func syncTerminalPollInterval(configured time.Duration) time.Duration {
+	if configured <= 0 || configured > terminalGateDefaultHotPollInterval {
+		return terminalGateDefaultHotPollInterval
+	}
+	return configured
 }
 
 func terminalGateNextPollAfter(now time.Time, syncPollInterval time.Duration) model.TimeString {

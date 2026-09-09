@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
 	"regexp"
 	"strings"
 	"time"
@@ -384,6 +385,11 @@ func (s *Store) UpsertThread(ctx context.Context, thread model.Thread) error {
 		raw = []byte("{}")
 	}
 	raw = redactTelegramBotCredentials(raw)
+	if existing, err := s.GetThread(ctx, thread.ID); err == nil && existing != nil && threadIndexEqual(*existing, thread, raw) {
+		return nil
+	} else if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return err
+	}
 	_, err := s.db.ExecContext(ctx, `
 	INSERT INTO threads(thread_id, title, cwd, project_name, directory_name, updated_at, status, last_preview, active_turn_id, preferred_model, permissions_mode, archived, raw_json)
 	VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -405,6 +411,22 @@ func (s *Store) UpsertThread(ctx context.Context, thread model.Thread) error {
 		nullable(thread.PermissionsMode), boolToInt(thread.Archived), string(raw),
 	)
 	return err
+}
+
+func threadIndexEqual(existing, current model.Thread, redactedRaw []byte) bool {
+	return existing.ID == current.ID &&
+		existing.Title == current.Title &&
+		existing.CWD == current.CWD &&
+		existing.ProjectName == current.ProjectName &&
+		existing.DirectoryName == current.DirectoryName &&
+		existing.UpdatedAt == current.UpdatedAt &&
+		existing.Status == current.Status &&
+		existing.LastPreview == current.LastPreview &&
+		existing.ActiveTurnID == current.ActiveTurnID &&
+		existing.PreferredModel == current.PreferredModel &&
+		existing.PermissionsMode == current.PermissionsMode &&
+		existing.Archived == current.Archived &&
+		string(existing.Raw) == string(redactedRaw)
 }
 
 func (s *Store) GetThread(ctx context.Context, threadID string) (*model.Thread, error) {
@@ -469,6 +491,18 @@ func (s *Store) ListProjectGroups(ctx context.Context) (map[string][]model.Threa
 }
 
 func (s *Store) UpsertSnapshot(ctx context.Context, threadID string, snapshot model.ThreadSnapshotState) error {
+	var existingPayload string
+	if err := s.db.QueryRowContext(ctx, `SELECT snapshot_json FROM thread_snapshots WHERE thread_id = ?`, threadID).Scan(&existingPayload); err == nil {
+		var existing model.ThreadSnapshotState
+		if json.Unmarshal([]byte(existingPayload), &existing) == nil && snapshotsEqualIgnoringPoll(existing, snapshot) {
+			_, updateErr := s.db.ExecContext(ctx, `
+			UPDATE thread_snapshots SET last_poll_at = ?, updated_at = ? WHERE thread_id = ?`,
+				nullable(string(snapshot.LastPollAt)), string(model.NowString()), threadID)
+			return updateErr
+		}
+	} else if !errors.Is(err, sql.ErrNoRows) {
+		return err
+	}
 	payload, err := json.Marshal(snapshot)
 	if err != nil {
 		return err
@@ -513,10 +547,17 @@ func (s *Store) UpsertSnapshot(ctx context.Context, threadID string, snapshot mo
 	return err
 }
 
+func snapshotsEqualIgnoringPoll(left, right model.ThreadSnapshotState) bool {
+	left.LastPollAt = ""
+	right.LastPollAt = ""
+	return reflect.DeepEqual(left, right)
+}
+
 func (s *Store) GetSnapshot(ctx context.Context, threadID string) (*model.ThreadSnapshotState, error) {
-	row := s.db.QueryRowContext(ctx, `SELECT snapshot_json FROM thread_snapshots WHERE thread_id = ?`, threadID)
+	row := s.db.QueryRowContext(ctx, `SELECT snapshot_json, last_poll_at FROM thread_snapshots WHERE thread_id = ?`, threadID)
 	var payload string
-	if err := row.Scan(&payload); err != nil {
+	var lastPollAt sql.NullString
+	if err := row.Scan(&payload, &lastPollAt); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, nil
 		}
@@ -526,6 +567,7 @@ func (s *Store) GetSnapshot(ctx context.Context, threadID string) (*model.Thread
 	if err := json.Unmarshal([]byte(payload), &snapshot); err != nil {
 		return nil, err
 	}
+	snapshot.LastPollAt = model.TimeString(lastPollAt.String)
 	return &snapshot, nil
 }
 

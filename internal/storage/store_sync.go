@@ -763,6 +763,18 @@ func (s *Store) UpdateSyncTopicDelivery(ctx context.Context, sessionID string, t
 	return err
 }
 
+func (s *Store) UpdateSyncTopicStatusDelivery(ctx context.Context, sessionID string, topicID, statusMessageID int64, statusTurnID, renderFP string) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE sync_topics SET status_message_id=?, status_turn_id=?, last_render_fp=?, updated_at=? WHERE session_id=? AND topic_id=?`,
+		statusMessageID, nullable(statusTurnID), nullable(renderFP), string(model.NowString()), sessionID, topicID)
+	return err
+}
+
+func (s *Store) UpdateSyncTopicFinalDelivery(ctx context.Context, sessionID string, topicID int64, finalFP string) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE sync_topics SET last_final_fp=?, updated_at=? WHERE session_id=? AND topic_id=?`,
+		nullable(finalFP), string(model.NowString()), sessionID, topicID)
+	return err
+}
+
 func (s *Store) ResetSyncTopicStatusDelivery(ctx context.Context, sessionID string, topicID, statusMessageID int64, statusTurnID string) (bool, error) {
 	result, err := s.db.ExecContext(ctx, `UPDATE sync_topics SET status_message_id=0, status_turn_id=NULL, last_render_fp=NULL, updated_at=?
 		WHERE session_id=? AND topic_id=? AND telegram_state=? AND status_message_id=? AND coalesce(status_turn_id,'')=?`,

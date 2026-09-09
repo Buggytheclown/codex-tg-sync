@@ -77,6 +77,24 @@ type pagedThreadListSession struct {
 	cursors []string
 }
 
+type latestReadSession struct {
+	*stubSession
+	summary      map[string]any
+	full         map[string]any
+	summaryCalls int
+	fullCalls    int
+}
+
+func (s *latestReadSession) ThreadReadLatestSummary(context.Context, string) (map[string]any, error) {
+	s.summaryCalls++
+	return s.summary, nil
+}
+
+func (s *latestReadSession) ThreadReadLatest(context.Context, string) (map[string]any, error) {
+	s.fullCalls++
+	return s.full, nil
+}
+
 func (s *pagedThreadListSession) ThreadList(_ context.Context, _ int, cursor string) (map[string]any, error) {
 	s.cursors = append(s.cursors, cursor)
 	return s.pages[cursor], nil
@@ -530,14 +548,46 @@ func TestSyncPassiveSyncSendsSilentStatusAndNotifyingFinal(t *testing.T) {
 	forum := &fakeSyncForum{}
 	service.SetSyncForum(forum)
 	service.reconcileSync(ctx)
-	if len(forum.sends) != 2 || !forum.sends[0].silent || forum.sends[1].silent {
+	if len(forum.sends) != 2 || forum.sends[0].silent || !forum.sends[1].silent {
 		t.Fatalf("sends = %#v", forum.sends)
 	}
-	if !strings.HasPrefix(forum.sends[1].text, syncFinalHeader+"\n") || !strings.Contains(forum.sends[1].text, "done") {
-		t.Fatalf("final = %q", forum.sends[1].text)
+	if !strings.HasPrefix(forum.sends[0].text, syncFinalHeader+"\n") || !strings.Contains(forum.sends[0].text, "done") {
+		t.Fatalf("final = %q", forum.sends[0].text)
 	}
 	if len(poll.threadResumeCalls) != 0 || len(poll.turnStartCalls) != 0 {
 		t.Fatal("passive sync attempted a mutation")
+	}
+}
+
+func TestSyncSafetyReconcileSkipsFullReadForStableTerminalTurn(t *testing.T) {
+	service := newTestService(t)
+	service.cfg.SyncGroupID = -1001
+	ctx := context.Background()
+	if err := service.store.BeginSyncActivation(ctx, "s", -1001); err != nil {
+		t.Fatal(err)
+	}
+	topic := model.SyncTopic{SessionID: "s", ChatID: -1001, TopicID: 11, ThreadID: "thread-1", Title: "One", TelegramState: model.SyncTopicConnected}
+	if err := service.store.UpsertSyncTopic(ctx, topic); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.store.FinishSyncActivation(ctx, "s", `{}`, true); err != nil {
+		t.Fatal(err)
+	}
+	payload := syncCompletedPayload("thread-1", "turn-1", "done")
+	current := appserver.SnapshotFromThreadRead(payload)
+	if err := service.store.UpsertSnapshot(ctx, "thread-1", appserver.CompactSnapshot(nil, current, time.Now())); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.store.UpdateSyncTopicDelivery(ctx, "s", 11, 100, "turn-1", "status-fp", current.LatestFinalFP); err != nil {
+		t.Fatal(err)
+	}
+	poll := &latestReadSession{stubSession: &stubSession{}, summary: payload, full: payload}
+	service.poll, service.pollConnected = poll, true
+	service.SetSyncForum(&fakeSyncForum{})
+
+	service.reconcileSync(ctx)
+	if poll.summaryCalls != 1 || poll.fullCalls != 0 {
+		t.Fatalf("summary calls=%d full calls=%d, want 1/0", poll.summaryCalls, poll.fullCalls)
 	}
 }
 
@@ -558,7 +608,7 @@ func TestSyncLongFinalKeepsFinalHeaderOnEveryChunk(t *testing.T) {
 	if len(forum.sends) < 3 {
 		t.Fatalf("sends=%d, want status and multiple Final chunks", len(forum.sends))
 	}
-	finalSends := forum.sends[1:]
+	finalSends := forum.sends[:len(forum.sends)-1]
 	var delivered strings.Builder
 	for index, send := range finalSends {
 		if got := syncUTF16Len(send.text); got > tgformat.TelegramMessageLimit {
@@ -594,7 +644,7 @@ func TestSyncLongFinalFailureKeepsFingerprintPending(t *testing.T) {
 	service.mu.Lock()
 	service.poll, service.pollConnected = poll, true
 	service.mu.Unlock()
-	forum := &fakeSyncForum{sendErrAt: 3, sendErr: errors.New("temporary Telegram failure")}
+	forum := &fakeSyncForum{sendErrAt: 2, sendErr: errors.New("temporary Telegram failure")}
 	service.SetSyncForum(forum)
 	var logs bytes.Buffer
 	service.SetLogger(log.New(&logs, "", 0))
@@ -609,6 +659,55 @@ func TestSyncLongFinalFailureKeepsFingerprintPending(t *testing.T) {
 	}
 	if got := logs.String(); !strings.Contains(got, "sync_final_delivery_failed") || !strings.Contains(got, `"chunk_index":2`) {
 		t.Fatalf("logs=%q, want chunk delivery diagnostic", got)
+	}
+	forum.sendErrAt = 0
+	forum.sendErr = nil
+	service.reconcileSync(ctx)
+	if len(forum.sends) != 4 {
+		t.Fatalf("sends=%d, want first chunk, failed second chunk, resumed second chunk, and status", len(forum.sends))
+	}
+	if forum.sends[2].text != forum.sends[1].text {
+		t.Fatal("retry did not resume at the failed final chunk")
+	}
+	if topic, err = service.store.GetActiveSyncTopic(ctx, -1001, 11); err != nil || topic == nil || topic.LastFinalFP == "" {
+		t.Fatalf("topic=%#v err=%v, want final committed after chunk resume", topic, err)
+	}
+}
+
+func TestSyncDeliveryCoalescesOnlyNonTerminalStatus(t *testing.T) {
+	service := newTestService(t)
+	topic := model.SyncTopic{SessionID: "s", ThreadID: "thread-1", TopicID: 11}
+	service.enqueueSyncDelivery(syncDeliveryJob{SessionID: "s", Topic: topic, Snapshot: appserver.ThreadReadSnapshot{LatestTurnID: "turn-1", LatestProgressText: "old"}})
+	service.enqueueSyncDelivery(syncDeliveryJob{SessionID: "s", Topic: topic, Snapshot: appserver.ThreadReadSnapshot{LatestTurnID: "turn-1", LatestProgressText: "new"}})
+	service.enqueueSyncDelivery(syncDeliveryJob{SessionID: "s", Topic: topic, Snapshot: appserver.ThreadReadSnapshot{LatestTurnID: "turn-1", LatestTurnStatus: "completed", LatestFinalFP: "final"}})
+
+	service.syncDeliveryMu.Lock()
+	queue := append([]syncDeliveryJob(nil), service.syncDeliveryPending["thread-1"]...)
+	service.syncDeliveryMu.Unlock()
+	if len(queue) != 2 {
+		t.Fatalf("pending jobs=%d, want one coalesced status plus terminal", len(queue))
+	}
+	if queue[0].Snapshot.LatestProgressText != "new" || queue[1].Snapshot.LatestFinalFP != "final" {
+		t.Fatalf("pending jobs=%#v", queue)
+	}
+}
+
+func TestApplySyncLiveToolEventUpdatesProjectionWithoutThreadRead(t *testing.T) {
+	previousSnapshot := appserver.ThreadReadSnapshot{
+		Thread:           model.Thread{ID: "thread-1", Title: "One", Status: "inProgress"},
+		LatestTurnID:     "turn-1",
+		LatestTurnStatus: "inProgress",
+	}
+	previous := appserver.CompactSnapshot(nil, previousSnapshot, time.Now())
+	current, ok := applySyncLiveEvent(&previous, appserver.Event{Channel: "notification", Method: "item/updated", Params: map[string]any{
+		"threadId": "thread-1",
+		"turnId":   "turn-1",
+		"item": map[string]any{
+			"id": "tool-1", "type": "commandExecution", "command": "go test ./...", "status": "running", "aggregatedOutput": "ok",
+		},
+	}}, "One", time.Now())
+	if !ok || current.LatestToolID != "tool-1" || current.LatestToolOutput != "ok" {
+		t.Fatalf("current=%#v ok=%t", current, ok)
 	}
 }
 

@@ -187,7 +187,7 @@ func fromSource(source envSource) Config {
 		CodexChatsRoot:            source.path("CTR_GO_CODEX_CHATS_ROOT", DefaultCodexChatsRoot()),
 		LogEnabled:                source.bool("CTR_GO_LOG_ENABLED", true),
 		DiagnosticLogs:            source.bool("CTR_GO_DIAGNOSTIC_LOGS", true),
-		SyncPollInterval:          source.durationSeconds("CTR_GO_SYNC_POLL_SECONDS", 5*time.Second),
+		SyncPollInterval:          source.durationSeconds("CTR_GO_SYNC_POLL_SECONDS", 60*time.Second),
 		RequestTimeout:            source.durationSeconds("CTR_GO_REQUEST_TIMEOUT_SECONDS", 30*time.Second),
 		IndexRefreshInterval:      source.durationSeconds("CTR_GO_INDEX_REFRESH_SECONDS", 45*time.Second),
 		DeliveryRetryBase:         source.durationSeconds("CTR_GO_DELIVERY_RETRY_SECONDS", 5*time.Second),

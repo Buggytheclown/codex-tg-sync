@@ -37,13 +37,13 @@ func TestTelegramEmptyInterruptedGateDefersAndKeepsHotPollingMetadata(t *testing
 	if !decision.EmptyInterrupted || !decision.HotPoll {
 		t.Fatalf("decision flags = empty:%t hot:%t, want true/true", decision.EmptyInterrupted, decision.HotPoll)
 	}
-	if decision.Grace != 120*time.Second {
-		t.Fatalf("Grace = %v, want 120s", decision.Grace)
+	if decision.Grace != 90*time.Second {
+		t.Fatalf("Grace = %v, want 90s", decision.Grace)
 	}
-	if got, want := string(decision.NextPollAfter), now.Add(10*time.Second).Format(time.RFC3339Nano); got != want {
+	if got, want := string(decision.NextPollAfter), now.Add(5*time.Second).Format(time.RFC3339Nano); got != want {
 		t.Fatalf("NextPollAfter = %q, want %q", got, want)
 	}
-	if got, want := decision.ExpiresAt, now.Add(120*time.Second); !got.Equal(want) {
+	if got, want := decision.ExpiresAt, now.Add(90*time.Second); !got.Equal(want) {
 		t.Fatalf("ExpiresAt = %s, want %s", got, want)
 	}
 
@@ -51,8 +51,8 @@ func TestTelegramEmptyInterruptedGateDefersAndKeepsHotPollingMetadata(t *testing
 	if state.EmptyInterruptedSeenCount != 1 {
 		t.Fatalf("EmptyInterruptedSeenCount = %d, want 1", state.EmptyInterruptedSeenCount)
 	}
-	if state.HotPollIntervalMillis != int64((10 * time.Second).Milliseconds()) {
-		t.Fatalf("HotPollIntervalMillis = %d, want 10000", state.HotPollIntervalMillis)
+	if state.HotPollIntervalMillis != int64((5 * time.Second).Milliseconds()) {
+		t.Fatalf("HotPollIntervalMillis = %d, want 5000", state.HotPollIntervalMillis)
 	}
 	if state.NextPollAfter != decision.NextPollAfter {
 		t.Fatalf("state NextPollAfter = %q, want decision value %q", state.NextPollAfter, decision.NextPollAfter)

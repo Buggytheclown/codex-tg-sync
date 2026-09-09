@@ -80,6 +80,15 @@ type Service struct {
 	syncEventCancel              context.CancelFunc
 	syncSubscribedPollGeneration uint64
 	syncSubscribedThreads        map[string]struct{}
+	syncPollEventProcess         Session
+	syncPollEventGeneration      uint64
+	syncPollEventCancel          context.CancelFunc
+	syncReconcileWake            chan struct{}
+	syncDeliveryMu               sync.Mutex
+	syncDeliveryJobs             chan string
+	syncFinalJobs                chan syncDeliveryJob
+	syncDeliveryPending          map[string][]syncDeliveryJob
+	syncDeliveryQueued           map[string]bool
 	sender                       Sender
 	externalReplySender          ExternalReplySender
 	logger                       *log.Logger
@@ -123,14 +132,19 @@ func New(cfg config.Config) (*Service, error) {
 		return nil, err
 	}
 	service := &Service{
-		cfg:                cfg,
-		store:              store,
-		externalLaunchWake: make(chan struct{}, 1),
-		logger:             discardDiagnosticLogger(),
-		diagnosticBy:       map[string]int{},
-		diagnosticLast:     map[string]time.Time{},
-		now:                time.Now,
-		phase:              "created",
+		cfg:                 cfg,
+		store:               store,
+		externalLaunchWake:  make(chan struct{}, 1),
+		syncReconcileWake:   make(chan struct{}, 1),
+		syncDeliveryJobs:    make(chan string, 256),
+		syncFinalJobs:       make(chan syncDeliveryJob, 256),
+		syncDeliveryPending: map[string][]syncDeliveryJob{},
+		syncDeliveryQueued:  map[string]bool{},
+		logger:              discardDiagnosticLogger(),
+		diagnosticBy:        map[string]int{},
+		diagnosticLast:      map[string]time.Time{},
+		now:                 time.Now,
+		phase:               "created",
 	}
 	transport := appserver.TransportConfig{
 		Mode:       appserver.TransportMode(cfg.AppServerMode),
@@ -170,10 +184,15 @@ func (s *Service) Close() error {
 	s.wg.Wait()
 	s.syncMu.Lock()
 	syncEventCancel := s.syncEventCancel
+	syncPollEventCancel := s.syncPollEventCancel
 	s.syncEventCancel = nil
+	s.syncPollEventCancel = nil
 	s.syncMu.Unlock()
 	if syncEventCancel != nil {
 		syncEventCancel()
+	}
+	if syncPollEventCancel != nil {
+		syncPollEventCancel()
 	}
 	var syncCloseErr error
 	if s.syncWriter != nil {
@@ -271,6 +290,9 @@ func (s *Service) Start(ctx context.Context) error {
 	s.spawn(runCtx, s.externalLaunchLoop)
 	s.spawn(runCtx, s.externalReplyLoop)
 	s.spawn(runCtx, s.telegramDeliveryLoop)
+	s.spawn(runCtx, s.syncDeliveryLoop)
+	s.spawn(runCtx, s.syncDeliveryLoop)
+	s.spawn(runCtx, s.syncFinalDeliveryLoop)
 	s.spawn(runCtx, s.controlLoop)
 	return nil
 }
@@ -427,6 +449,7 @@ func (s *Service) ensurePollSessionLocked(ctx context.Context) {
 		"generation":  generation,
 		"duration_ms": time.Since(started).Milliseconds(),
 	})
+	s.installSyncPollEvents(client, generation)
 }
 
 func mergeLiveToolSnapshot(current *appserver.ThreadReadSnapshot, liveTool appserver.ThreadReadSnapshot) bool {
@@ -655,7 +678,7 @@ func (s *Service) indexLoop(ctx context.Context) {
 func (s *Service) pollLoop(ctx context.Context) {
 	interval := s.cfg.SyncPollInterval
 	if interval <= 0 {
-		interval = 5 * time.Second
+		interval = time.Minute
 	}
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
@@ -664,8 +687,16 @@ func (s *Service) pollLoop(ctx context.Context) {
 		select {
 		case <-ctx.Done():
 			return
+		case <-s.syncReconcileWake:
 		case <-ticker.C:
 		}
+	}
+}
+
+func (s *Service) wakeSyncReconcile() {
+	select {
+	case s.syncReconcileWake <- struct{}{}:
+	default:
 	}
 }
 
@@ -853,6 +884,7 @@ func (s *Service) repairSessions(ctx context.Context, reason string) {
 	s.ensurePollSessionLocked(ctx)
 	s.sessionMu.Unlock()
 	s.bootstrapTrackedState(ctx)
+	s.wakeSyncReconcile()
 }
 
 func (s *Service) bootstrapTrackedState(ctx context.Context) {
@@ -1044,7 +1076,7 @@ func (s *Service) ensureStartedTurnSnapshot(ctx context.Context, thread *model.T
 		LatestTurnStatus: "inProgress",
 	}
 	nextSnapshot := appserver.CompactSnapshot(previous, current, time.Now().UTC())
-	nextSnapshot.NextPollAfter = model.TimeString(time.Now().UTC().Add(s.cfg.SyncPollInterval).Format(time.RFC3339Nano))
+	nextSnapshot.NextPollAfter = model.TimeString(time.Now().UTC().Add(syncTerminalPollInterval(s.cfg.SyncPollInterval)).Format(time.RFC3339Nano))
 	_ = s.store.UpsertThread(ctx, startedThread)
 	_ = s.store.UpsertSnapshot(ctx, startedThread.ID, nextSnapshot)
 	s.logLifecycle("telegram_started_turn_snapshot_seeded", lifecycleFields{

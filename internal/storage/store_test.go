@@ -213,6 +213,64 @@ func TestThreadAndSnapshotPersistenceRedactsTelegramBotCredentials(t *testing.T)
 	}
 }
 
+func TestUpsertSnapshotOnlyTouchesPollMetadataWhenContentIsUnchanged(t *testing.T) {
+	store := openTestStore(t)
+	ctx := context.Background()
+	first := model.ThreadSnapshotState{
+		LastSeenTurnID: "turn-1",
+		LastPollAt:     "2026-01-01T00:00:00Z",
+		CompactJSON:    json.RawMessage(`{"LatestTurnID":"turn-1"}`),
+	}
+	if err := store.UpsertSnapshot(ctx, "thread-1", first); err != nil {
+		t.Fatal(err)
+	}
+	var originalPayload string
+	if err := store.db.QueryRowContext(ctx, `SELECT snapshot_json FROM thread_snapshots WHERE thread_id = ?`, "thread-1").Scan(&originalPayload); err != nil {
+		t.Fatal(err)
+	}
+	second := first
+	second.LastPollAt = "2026-01-01T00:01:00Z"
+	if err := store.UpsertSnapshot(ctx, "thread-1", second); err != nil {
+		t.Fatal(err)
+	}
+	var currentPayload string
+	if err := store.db.QueryRowContext(ctx, `SELECT snapshot_json FROM thread_snapshots WHERE thread_id = ?`, "thread-1").Scan(&currentPayload); err != nil {
+		t.Fatal(err)
+	}
+	if currentPayload != originalPayload {
+		t.Fatal("unchanged snapshot rewrote the JSON payload")
+	}
+	loaded, err := store.GetSnapshot(ctx, "thread-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.LastPollAt != second.LastPollAt {
+		t.Fatalf("LastPollAt = %q, want %q", loaded.LastPollAt, second.LastPollAt)
+	}
+}
+
+func TestUpsertThreadSkipsUnchangedRow(t *testing.T) {
+	store := openTestStore(t)
+	ctx := context.Background()
+	thread := model.Thread{ID: "thread-1", Title: "One", ProjectName: "project", UpdatedAt: 1, Raw: json.RawMessage(`{"id":"thread-1"}`)}
+	if err := store.UpsertThread(ctx, thread); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.db.ExecContext(ctx, `CREATE TABLE thread_update_audit(count INTEGER NOT NULL); INSERT INTO thread_update_audit VALUES(0); CREATE TRIGGER audit_thread_update AFTER UPDATE ON threads BEGIN UPDATE thread_update_audit SET count=count+1; END`); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.UpsertThread(ctx, thread); err != nil {
+		t.Fatal(err)
+	}
+	var count int
+	if err := store.db.QueryRowContext(ctx, `SELECT count FROM thread_update_audit`).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 0 {
+		t.Fatalf("unchanged thread caused %d updates", count)
+	}
+}
+
 func TestDeliveryQueueClaimRetryAndComplete(t *testing.T) {
 	t.Parallel()
 

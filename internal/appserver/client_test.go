@@ -316,11 +316,39 @@ func TestBuildCommandRejectsUnknownTransportMode(t *testing.T) {
 	}
 }
 
-func TestThreadResumeParamsContainOnlyThreadID(t *testing.T) {
+func TestThreadResumeParamsRequestOnlyLatestTurn(t *testing.T) {
 	params := threadResumeParams("thread-1")
-	want := map[string]any{"threadId": "thread-1"}
+	want := map[string]any{
+		"threadId":     "thread-1",
+		"excludeTurns": true,
+		"initialTurnsPage": map[string]any{
+			"limit":         1,
+			"sortDirection": "desc",
+			"itemsView":     "summary",
+		},
+	}
 	if !reflect.DeepEqual(params, want) {
 		t.Fatalf("threadResumeParams = %#v, want %#v", params, want)
+	}
+}
+
+func TestBroadcastSignalsSubscriberOverflow(t *testing.T) {
+	client := NewClient("codex", "stdio://", t.TempDir(), time.Second)
+	events := client.Subscribe()
+	for index := 0; index < cap(events); index++ {
+		client.broadcast(Event{Channel: "notification", Method: "item/updated"})
+	}
+	client.broadcast(Event{Channel: "notification", Method: "turn/completed"})
+
+	foundGap := false
+	for index := 0; index < cap(events); index++ {
+		event := <-events
+		if event.Channel == "event_gap" {
+			foundGap = true
+		}
+	}
+	if !foundGap {
+		t.Fatal("subscriber overflow was silently dropped")
 	}
 }
 

@@ -54,6 +54,49 @@ func TestThreadsFromListSkipsInternalSubAgentThreads(t *testing.T) {
 	}
 }
 
+func TestThreadFromPayloadDoesNotPersistTurnsInRawIndexJSON(t *testing.T) {
+	thread := ThreadFromPayload(map[string]any{
+		"thread": map[string]any{
+			"id":        "thread-1",
+			"ephemeral": false,
+			"source":    map[string]any{"kind": "user"},
+			"turns": []any{map[string]any{
+				"id":    "turn-1",
+				"items": []any{map[string]any{"output": strings.Repeat("x", 1024)}},
+			}},
+		},
+	})
+	var raw map[string]any
+	if err := json.Unmarshal(thread.Raw, &raw); err != nil {
+		t.Fatalf("unmarshal raw: %v", err)
+	}
+	if _, ok := raw["turns"]; ok {
+		t.Fatalf("raw thread index contains turns: %#v", raw)
+	}
+	if _, ok := raw["source"]; !ok {
+		t.Fatalf("raw thread index lost routing metadata: %#v", raw)
+	}
+}
+
+func TestCompactSnapshotBoundsToolOutputButKeepsFinal(t *testing.T) {
+	large := strings.Repeat("x", compactSnapshotFieldLimit*2)
+	compact := CompactSnapshot(nil, ThreadReadSnapshot{
+		LatestToolOutput: large,
+		LatestFinalText:  large,
+		DetailItems:      []model.DetailItem{{Kind: "tool", Output: large}},
+	}, time.Now())
+	var snapshot ThreadReadSnapshot
+	if err := json.Unmarshal(compact.CompactJSON, &snapshot); err != nil {
+		t.Fatal(err)
+	}
+	if len(snapshot.LatestToolOutput) >= len(large) || len(snapshot.DetailItems[0].Output) >= len(large) {
+		t.Fatal("compact snapshot retained an unbounded tool output")
+	}
+	if snapshot.LatestFinalText != large {
+		t.Fatal("final response was truncated")
+	}
+}
+
 func TestDiffSnapshotEmitsCompletionForNewTerminalTurn(t *testing.T) {
 	previous := &model.ThreadSnapshotState{
 		LastSeenTurnID:     "old-turn",

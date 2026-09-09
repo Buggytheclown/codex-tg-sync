@@ -44,6 +44,33 @@ func TestSyncStatusTurnMigrationAdoptsExistingRenderedTurn(t *testing.T) {
 	}
 }
 
+func TestSyncStatusUpdateDoesNotOverwriteConcurrentFinalFingerprint(t *testing.T) {
+	store := openTestStore(t)
+	ctx := context.Background()
+	if err := store.BeginSyncActivation(ctx, "session-1", -1001); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.UpsertSyncTopic(ctx, model.SyncTopic{SessionID: "session-1", ChatID: -1001, TopicID: 11, ThreadID: "thread-1", TelegramState: model.SyncTopicConnected}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.FinishSyncActivation(ctx, "session-1", `{}`, true); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.UpdateSyncTopicFinalDelivery(ctx, "session-1", 11, "final-new"); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.UpdateSyncTopicStatusDelivery(ctx, "session-1", 11, 100, "turn-1", "render-new"); err != nil {
+		t.Fatal(err)
+	}
+	topic, err := store.GetActiveSyncTopic(ctx, -1001, 11)
+	if err != nil || topic == nil {
+		t.Fatalf("topic=%#v err=%v", topic, err)
+	}
+	if topic.LastFinalFP != "final-new" || topic.LastRenderFP != "render-new" {
+		t.Fatalf("topic=%#v", topic)
+	}
+}
+
 func TestSyncDispatchPersistsPendingTelegramUserFingerprint(t *testing.T) {
 	t.Parallel()
 	store := openTestStore(t)
