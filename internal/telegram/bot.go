@@ -137,10 +137,6 @@ func (b *Bot) DeleteSyncTopic(ctx context.Context, topicID int64) error {
 	return err
 }
 
-func (b *Bot) DeleteSyncMessage(ctx context.Context, topicID, messageID int64) error {
-	return b.DeleteMessage(ctx, b.cfg.SyncGroupID, topicID, messageID)
-}
-
 func (b *Bot) SendSyncMessage(ctx context.Context, topicID int64, rendered model.RenderedMessage, options model.SendOptions) (int64, error) {
 	var message *Message
 	err := b.groupWrite(ctx, options, true, func() error {

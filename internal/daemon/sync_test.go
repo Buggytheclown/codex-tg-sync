@@ -18,26 +18,25 @@ import (
 )
 
 type fakeSyncForum struct {
-	validateErr      error
-	prepareErr       error
-	prepares         int
-	nextTopicID      int64
-	createErrAt      int
-	createErr        error
-	sendErrAt        int
-	sendErr          error
-	rejectOversize   bool
-	renameErr        error
-	messageDeleteErr error
-	creates          []string
-	renames          []fakeSyncRename
-	deletes          []int64
-	messageDeletes   []fakeSyncMessageDelete
-	sends            []fakeSyncSend
-	edits            []fakeSyncEdit
-	actions          []fakeSyncAction
-	onDelete         func()
-	onCreate         func(string)
+	validateErr    error
+	prepareErr     error
+	prepares       int
+	nextTopicID    int64
+	createErrAt    int
+	createErr      error
+	sendErrAt      int
+	sendErr        error
+	editErr        error
+	rejectOversize bool
+	renameErr      error
+	creates        []string
+	renames        []fakeSyncRename
+	deletes        []int64
+	sends          []fakeSyncSend
+	edits          []fakeSyncEdit
+	actions        []fakeSyncAction
+	onDelete       func()
+	onCreate       func(string)
 }
 
 type fakeSyncSend struct {
@@ -54,9 +53,6 @@ type fakeSyncEdit struct {
 	topicID, messageID int64
 	text               string
 	message            model.RenderedMessage
-}
-type fakeSyncMessageDelete struct {
-	topicID, messageID int64
 }
 type fakeSyncAction struct {
 	topicID, messageID int64
@@ -134,10 +130,6 @@ func (f *fakeSyncForum) DeleteSyncTopic(_ context.Context, topicID int64) error 
 	f.deletes = append(f.deletes, topicID)
 	return nil
 }
-func (f *fakeSyncForum) DeleteSyncMessage(_ context.Context, topicID, messageID int64) error {
-	f.messageDeletes = append(f.messageDeletes, fakeSyncMessageDelete{topicID: topicID, messageID: messageID})
-	return f.messageDeleteErr
-}
 func (f *fakeSyncForum) SendSyncMessage(_ context.Context, topicID int64, message model.RenderedMessage, options model.SendOptions) (int64, error) {
 	id := int64(100 + len(f.sends))
 	f.sends = append(f.sends, fakeSyncSend{topicID: topicID, messageID: id, text: message.Text, message: message, silent: options.Silent})
@@ -154,7 +146,7 @@ func (f *fakeSyncForum) SendSyncMessage(_ context.Context, topicID int64, messag
 }
 func (f *fakeSyncForum) EditSyncMessage(_ context.Context, topicID, messageID int64, message model.RenderedMessage, options model.SendOptions) error {
 	f.edits = append(f.edits, fakeSyncEdit{topicID: topicID, messageID: messageID, text: message.Text, message: message})
-	return nil
+	return f.editErr
 }
 func (f *fakeSyncForum) SendSyncActionMessage(_ context.Context, topicID int64, text string, buttons [][]model.ButtonSpec) (int64, error) {
 	id := int64(200 + len(f.actions))
@@ -548,11 +540,14 @@ func TestSyncPassiveSyncSendsSilentStatusAndNotifyingFinal(t *testing.T) {
 	forum := &fakeSyncForum{}
 	service.SetSyncForum(forum)
 	service.reconcileSync(ctx)
-	if len(forum.sends) != 2 || forum.sends[0].silent || !forum.sends[1].silent {
+	if len(forum.sends) != 2 || !forum.sends[0].silent || forum.sends[1].silent {
 		t.Fatalf("sends = %#v", forum.sends)
 	}
-	if !strings.HasPrefix(forum.sends[0].text, syncFinalHeader+"\n") || !strings.Contains(forum.sends[0].text, "done") {
-		t.Fatalf("final = %q", forum.sends[0].text)
+	if !strings.HasPrefix(forum.sends[0].text, syncStatusHeader+" completed") {
+		t.Fatalf("status = %q", forum.sends[0].text)
+	}
+	if !strings.HasPrefix(forum.sends[1].text, syncFinalHeader+"\n") || !strings.Contains(forum.sends[1].text, "done") {
+		t.Fatalf("final = %q", forum.sends[1].text)
 	}
 	if len(poll.threadResumeCalls) != 0 || len(poll.turnStartCalls) != 0 {
 		t.Fatal("passive sync attempted a mutation")
@@ -608,7 +603,10 @@ func TestSyncLongFinalKeepsFinalHeaderOnEveryChunk(t *testing.T) {
 	if len(forum.sends) < 3 {
 		t.Fatalf("sends=%d, want status and multiple Final chunks", len(forum.sends))
 	}
-	finalSends := forum.sends[:len(forum.sends)-1]
+	if !strings.HasPrefix(forum.sends[0].text, syncStatusHeader+" completed") {
+		t.Fatalf("first send=%q, want completed status before Final chunks", forum.sends[0].text)
+	}
+	finalSends := forum.sends[1:]
 	var delivered strings.Builder
 	for index, send := range finalSends {
 		if got := syncUTF16Len(send.text); got > tgformat.TelegramMessageLimit {
@@ -644,7 +642,7 @@ func TestSyncLongFinalFailureKeepsFingerprintPending(t *testing.T) {
 	service.mu.Lock()
 	service.poll, service.pollConnected = poll, true
 	service.mu.Unlock()
-	forum := &fakeSyncForum{sendErrAt: 2, sendErr: errors.New("temporary Telegram failure")}
+	forum := &fakeSyncForum{sendErrAt: 3, sendErr: errors.New("temporary Telegram failure")}
 	service.SetSyncForum(forum)
 	var logs bytes.Buffer
 	service.SetLogger(log.New(&logs, "", 0))
@@ -664,13 +662,48 @@ func TestSyncLongFinalFailureKeepsFingerprintPending(t *testing.T) {
 	forum.sendErr = nil
 	service.reconcileSync(ctx)
 	if len(forum.sends) != 4 {
-		t.Fatalf("sends=%d, want first chunk, failed second chunk, resumed second chunk, and status", len(forum.sends))
+		t.Fatalf("sends=%d, want status, first chunk, failed second chunk, and resumed second chunk", len(forum.sends))
 	}
-	if forum.sends[2].text != forum.sends[1].text {
+	if forum.sends[3].text != forum.sends[2].text {
 		t.Fatal("retry did not resume at the failed final chunk")
 	}
 	if topic, err = service.store.GetActiveSyncTopic(ctx, -1001, 11); err != nil || topic == nil || topic.LastFinalFP == "" {
 		t.Fatalf("topic=%#v err=%v, want final committed after chunk resume", topic, err)
+	}
+}
+
+func TestSyncTerminalStatusFailureDefersFinal(t *testing.T) {
+	service := activeSyncService(t)
+	ctx := context.Background()
+	poll := &stubSession{threadReads: map[string]map[string]any{
+		"thread-1": syncRunningPayloadWithCommentary("thread-1", "turn-1", "working"),
+	}}
+	service.mu.Lock()
+	service.poll, service.pollConnected = poll, true
+	service.mu.Unlock()
+	forum := &fakeSyncForum{}
+	service.SetSyncForum(forum)
+
+	service.reconcileSync(ctx)
+	statusID := forum.sends[0].messageID
+	forum.editErr = errors.New("temporary Telegram failure")
+	poll.threadReads["thread-1"] = syncCompletedPayload("thread-1", "turn-1", "done")
+	service.reconcileSync(ctx)
+	if len(forum.sends) != 1 {
+		t.Fatalf("sends=%#v, want no Final before completed status succeeds", forum.sends)
+	}
+	topic, err := service.store.GetActiveSyncTopic(ctx, -1001, 11)
+	if err != nil || topic == nil || topic.LastFinalFP != "" || topic.StatusMessageID != statusID {
+		t.Fatalf("topic=%#v err=%v, want pending Final and stable status %d", topic, err, statusID)
+	}
+
+	forum.editErr = nil
+	service.reconcileSync(ctx)
+	if len(forum.edits) != 2 || forum.edits[1].messageID != statusID || !strings.HasPrefix(forum.edits[1].text, syncStatusHeader+" completed") {
+		t.Fatalf("edits=%#v, want completed status retried in place", forum.edits)
+	}
+	if len(forum.sends) != 2 || forum.sends[1].text != syncFinalHeader+"\ndone" {
+		t.Fatalf("sends=%#v, want Final only after status retry", forum.sends)
 	}
 }
 
@@ -689,6 +722,9 @@ func TestSyncDeliveryCoalescesOnlyNonTerminalStatus(t *testing.T) {
 	}
 	if queue[0].Snapshot.LatestProgressText != "new" || queue[1].Snapshot.LatestFinalFP != "final" {
 		t.Fatalf("pending jobs=%#v", queue)
+	}
+	if got := len(service.syncDeliveryJobs); got != 1 {
+		t.Fatalf("runnable tokens=%d, want one serialized token for the topic", got)
 	}
 }
 
@@ -789,7 +825,7 @@ func TestSyncPassiveSyncMirrorsDesktopUserBeforeStatusExactlyOnce(t *testing.T) 
 	}
 }
 
-func TestSyncSameTurnDesktopUserReanchorsStatusAfterUser(t *testing.T) {
+func TestSyncSameTurnDesktopUserKeepsStatusAnchor(t *testing.T) {
 	service := activeSyncService(t)
 	ctx := context.Background()
 	poll := &stubSession{threadReads: map[string]map[string]any{
@@ -809,14 +845,14 @@ func TestSyncSameTurnDesktopUserReanchorsStatusAfterUser(t *testing.T) {
 	}, "updated progress")
 	service.reconcileSync(ctx)
 
-	if len(forum.sends) != 4 || forum.sends[2].text != syncUserHeader+"\nDesktop follow-up" || !strings.HasPrefix(forum.sends[3].text, syncStatusHeader+" ") {
-		t.Fatalf("sends=%#v, want follow-up user then reanchored status", forum.sends)
+	if len(forum.sends) != 3 || forum.sends[2].text != syncUserHeader+"\nDesktop follow-up" {
+		t.Fatalf("sends=%#v, want follow-up user without recreated status", forum.sends)
 	}
-	if len(forum.messageDeletes) != 1 || forum.messageDeletes[0].messageID != oldStatusID {
-		t.Fatalf("status deletes=%#v, want old status %d", forum.messageDeletes, oldStatusID)
+	if len(forum.edits) != 1 || forum.edits[0].messageID != oldStatusID || !strings.Contains(forum.edits[0].text, "updated progress") {
+		t.Fatalf("status edits=%#v, want existing status %d updated in place", forum.edits, oldStatusID)
 	}
 	topic, err := service.store.GetActiveSyncTopic(ctx, -1001, 11)
-	if err != nil || topic == nil || topic.StatusMessageID != forum.sends[3].messageID {
+	if err != nil || topic == nil || topic.StatusMessageID != oldStatusID {
 		t.Fatalf("topic=%#v err=%v", topic, err)
 	}
 }
@@ -877,7 +913,7 @@ func TestSyncPendingTelegramUserDefersStaleDesktopSnapshot(t *testing.T) {
 	}
 }
 
-func TestSyncDirectDeliveryReanchorsSameTurnStatusAtTopicTail(t *testing.T) {
+func TestSyncDirectDeliveryKeepsSameTurnStatusAnchor(t *testing.T) {
 	service := activeSyncService(t)
 	ctx := context.Background()
 	poll := &stubSession{threadReads: map[string]map[string]any{
@@ -901,19 +937,12 @@ func TestSyncDirectDeliveryReanchorsSameTurnStatusAtTopicTail(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("RegisterDirectDelivery failed: %v", err)
 	}
-	if len(forum.sends) != 2 {
-		t.Fatalf("sends=%#v, want fresh tail status after direct acknowledgement", forum.sends)
-	}
-	newStatusID := forum.sends[1].messageID
-	if newStatusID == oldStatusID || !strings.Contains(forum.sends[1].text, "progress") {
-		t.Fatalf("new status=%#v, want fresh progress message after %d", forum.sends[1], oldStatusID)
-	}
-	if len(forum.messageDeletes) != 1 || forum.messageDeletes[0].topicID != 11 || forum.messageDeletes[0].messageID != oldStatusID {
-		t.Fatalf("message deletes=%#v, want old live status %d deleted", forum.messageDeletes, oldStatusID)
+	if len(forum.sends) != 1 {
+		t.Fatalf("sends=%#v, want unchanged status anchor", forum.sends)
 	}
 	topic, err := service.store.GetActiveSyncTopic(ctx, -1001, 11)
-	if err != nil || topic == nil || topic.StatusMessageID != newStatusID || topic.StatusTurnID != "turn-1" {
-		t.Fatalf("topic=%#v err=%v, want new status anchor %d", topic, err, newStatusID)
+	if err != nil || topic == nil || topic.StatusMessageID != oldStatusID || topic.StatusTurnID != "turn-1" {
+		t.Fatalf("topic=%#v err=%v, want stable status anchor %d", topic, err, oldStatusID)
 	}
 }
 
@@ -937,34 +966,8 @@ func TestSyncDirectDeliveryKeepsPreviousTurnStatusHistory(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("RegisterDirectDelivery failed: %v", err)
 	}
-	if len(forum.messageDeletes) != 0 {
-		t.Fatalf("previous-turn status was deleted: %#v", forum.messageDeletes)
-	}
 	if len(forum.sends) != 2 || forum.sends[1].messageID == oldStatusID || !strings.Contains(forum.sends[1].text, "second progress") {
 		t.Fatalf("sends=%#v, want retained history and fresh turn-2 status", forum.sends)
-	}
-}
-
-func TestSyncDirectDeliveryDeleteFailureStillCreatesTailStatus(t *testing.T) {
-	service := activeSyncService(t)
-	ctx := context.Background()
-	poll := &stubSession{threadReads: map[string]map[string]any{
-		"thread-1": syncRunningPayloadWithCommentary("thread-1", "turn-1", "progress"),
-	}}
-	service.mu.Lock()
-	service.poll, service.pollConnected = poll, true
-	service.mu.Unlock()
-	forum := &fakeSyncForum{messageDeleteErr: errors.New("delete failed")}
-	service.SetSyncForum(forum)
-	service.reconcileSync(ctx)
-
-	if err := service.RegisterDirectDelivery(ctx, -1001, 11, 503, &DirectResponse{
-		Text: "Sync input steered to active turn: turn-1", ThreadID: "thread-1", TurnID: "turn-1",
-	}); err != nil {
-		t.Fatalf("RegisterDirectDelivery failed after best-effort delete: %v", err)
-	}
-	if len(forum.messageDeletes) != 1 || len(forum.sends) != 2 {
-		t.Fatalf("deletes=%#v sends=%#v, want attempted delete and fresh status", forum.messageDeletes, forum.sends)
 	}
 }
 
@@ -990,7 +993,7 @@ func TestSyncPassiveSyncReconcilesCodexThreadTitleToTopic(t *testing.T) {
 	}
 }
 
-func TestSyncTopicRenameReanchorsActiveStatusWithoutLosingAggregate(t *testing.T) {
+func TestSyncTopicRenameKeepsActiveStatusAnchorAndAggregate(t *testing.T) {
 	service := activeSyncService(t)
 	ctx := context.Background()
 	now := time.Date(2026, time.August, 24, 12, 0, 0, 0, time.UTC)
@@ -1024,18 +1027,15 @@ func TestSyncTopicRenameReanchorsActiveStatusWithoutLosingAggregate(t *testing.T
 	if len(forum.renames) != 1 || forum.renames[0].title != "Renamed task" {
 		t.Fatalf("renames=%#v", forum.renames)
 	}
-	if len(forum.messageDeletes) != 1 || forum.messageDeletes[0].messageID != oldStatus.messageID {
-		t.Fatalf("message deletes=%#v, want old status %d", forum.messageDeletes, oldStatus.messageID)
+	if len(forum.sends) != 1 {
+		t.Fatalf("sends=%#v, want no recreated status after rename", forum.sends)
 	}
-	if len(forum.sends) != 2 || forum.sends[1].messageID == oldStatus.messageID {
-		t.Fatalf("sends=%#v, want fresh status after rename", forum.sends)
-	}
-	if forum.sends[1].text != oldStatus.text {
-		t.Fatalf("reanchored status changed\nbefore: %q\nafter:  %q", oldStatus.text, forum.sends[1].text)
+	if forum.sends[0].text != oldStatus.text {
+		t.Fatalf("status changed\nbefore: %q\nafter:  %q", oldStatus.text, forum.sends[0].text)
 	}
 	for _, block := range []string{"first block", "second block", "third block"} {
-		if strings.Count(forum.sends[1].text, block) != 1 {
-			t.Fatalf("reanchored status=%q, want exactly one %q", forum.sends[1].text, block)
+		if strings.Count(forum.sends[0].text, block) != 1 {
+			t.Fatalf("status=%q, want exactly one %q", forum.sends[0].text, block)
 		}
 	}
 	after, err := service.store.GetSnapshot(ctx, "thread-1")
@@ -1057,8 +1057,8 @@ func TestSyncTopicRenameReanchorsActiveStatusWithoutLosingAggregate(t *testing.T
 		}
 	}
 	topic, err := service.store.GetActiveSyncTopic(ctx, -1001, 11)
-	if err != nil || topic == nil || topic.StatusMessageID != forum.sends[1].messageID || topic.StatusTurnID != "turn-1" {
-		t.Fatalf("topic=%#v err=%v, want reanchored turn-1 status", topic, err)
+	if err != nil || topic == nil || topic.StatusMessageID != oldStatus.messageID || topic.StatusTurnID != "turn-1" {
+		t.Fatalf("topic=%#v err=%v, want retained turn-1 status", topic, err)
 	}
 }
 
@@ -1081,8 +1081,8 @@ func TestSyncTopicRenameKeepsPreviousTurnStatusHistory(t *testing.T) {
 	poll.threadReads["thread-1"] = secondTurn
 	service.reconcileSync(ctx)
 
-	if len(forum.renames) != 1 || len(forum.messageDeletes) != 0 {
-		t.Fatalf("renames=%#v deletes=%#v, want rename without deleting previous turn", forum.renames, forum.messageDeletes)
+	if len(forum.renames) != 1 {
+		t.Fatalf("renames=%#v, want rename without replacing previous turn status", forum.renames)
 	}
 	if len(forum.sends) != 2 || forum.sends[1].messageID == oldStatusID || !strings.Contains(forum.sends[1].text, "second turn") {
 		t.Fatalf("sends=%#v, want retained turn-1 status and fresh turn-2 status", forum.sends)

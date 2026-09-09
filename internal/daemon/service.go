@@ -86,7 +86,6 @@ type Service struct {
 	syncReconcileWake            chan struct{}
 	syncDeliveryMu               sync.Mutex
 	syncDeliveryJobs             chan string
-	syncFinalJobs                chan syncDeliveryJob
 	syncDeliveryPending          map[string][]syncDeliveryJob
 	syncDeliveryQueued           map[string]bool
 	sender                       Sender
@@ -137,7 +136,6 @@ func New(cfg config.Config) (*Service, error) {
 		externalLaunchWake:  make(chan struct{}, 1),
 		syncReconcileWake:   make(chan struct{}, 1),
 		syncDeliveryJobs:    make(chan string, 256),
-		syncFinalJobs:       make(chan syncDeliveryJob, 256),
 		syncDeliveryPending: map[string][]syncDeliveryJob{},
 		syncDeliveryQueued:  map[string]bool{},
 		logger:              discardDiagnosticLogger(),
@@ -292,7 +290,6 @@ func (s *Service) Start(ctx context.Context) error {
 	s.spawn(runCtx, s.telegramDeliveryLoop)
 	s.spawn(runCtx, s.syncDeliveryLoop)
 	s.spawn(runCtx, s.syncDeliveryLoop)
-	s.spawn(runCtx, s.syncFinalDeliveryLoop)
 	s.spawn(runCtx, s.controlLoop)
 	return nil
 }
@@ -370,7 +367,7 @@ func (s *Service) HandleCallback(ctx context.Context, chatID, topicID, messageID
 
 func (s *Service) RegisterDirectDelivery(ctx context.Context, chatID, topicID, messageID int64, response *DirectResponse) error {
 	if response != nil {
-		s.reanchorSyncDirectDelivery(ctx, chatID, topicID, response)
+		s.refreshSyncDirectDelivery(ctx, chatID, topicID, response)
 	}
 	return nil
 }

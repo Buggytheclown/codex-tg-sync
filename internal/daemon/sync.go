@@ -36,7 +36,6 @@ type SyncForum interface {
 	CreateLaunchTopic(ctx context.Context, title string) (int64, error)
 	RenameSyncTopic(ctx context.Context, topicID int64, title string) error
 	DeleteSyncTopic(ctx context.Context, topicID int64) error
-	DeleteSyncMessage(ctx context.Context, topicID, messageID int64) error
 	SendSyncMessage(ctx context.Context, topicID int64, message model.RenderedMessage, options model.SendOptions) (int64, error)
 	SendSyncActionMessage(ctx context.Context, topicID int64, text string, buttons [][]model.ButtonSpec) (int64, error)
 	EditSyncMessage(ctx context.Context, topicID, messageID int64, message model.RenderedMessage, options model.SendOptions) error
@@ -1214,11 +1213,6 @@ func (s *Service) processSyncSnapshotLocked(ctx context.Context, state model.Syn
 		if started {
 			observed, _ := s.persistSyncSnapshot(ctx, topic, current)
 			job := syncDeliveryJob{SessionID: state.SessionID, Topic: topic, Snapshot: observed}
-			if strings.TrimSpace(observed.LatestFinalFP) != "" {
-				s.enqueueSyncFinalDelivery(job)
-				job.Snapshot.LatestFinalFP = ""
-				job.Snapshot.LatestFinalText = ""
-			}
 			s.enqueueSyncDelivery(job)
 		} else {
 			s.persistAndDeliverSyncSnapshotLocked(ctx, forum, topic, current)
@@ -1276,20 +1270,6 @@ func (s *Service) deliverSyncSnapshot(ctx context.Context, forum SyncForum, topi
 	if desiredTitle != "" && desiredTitle != current.Thread.ID {
 		desiredTitle = syncTopicTitle(current.Thread)
 		if desiredTitle != topic.Title && forum.RenameSyncTopic(ctx, topic.TopicID, desiredTitle) == nil {
-			if currentTurnID != "" &&
-				topic.StatusMessageID != 0 &&
-				strings.TrimSpace(topic.StatusTurnID) == currentTurnID &&
-				!isTerminalStatus(current.LatestTurnStatus) {
-				oldStatusID := topic.StatusMessageID
-				reset, err := s.store.ResetSyncTopicStatusDelivery(ctx, topic.SessionID, topic.TopicID, oldStatusID, currentTurnID)
-				if err != nil || !reset {
-					return
-				}
-				_ = forum.DeleteSyncMessage(ctx, topic.TopicID, oldStatusID)
-				topic.StatusMessageID = 0
-				topic.StatusTurnID = ""
-				topic.LastRenderFP = ""
-			}
 			_ = s.store.UpdateSyncTopicTitle(ctx, topic.SessionID, topic.TopicID, desiredTitle)
 		}
 	}
@@ -1298,15 +1278,12 @@ func (s *Service) deliverSyncSnapshot(ctx context.Context, forum SyncForum, topi
 	if !userDeliveryOK {
 		return
 	}
-	_, deliveryErr := s.deliverSyncFinal(ctx, forum, topic, current)
-	if deliveryErr != nil {
-		return
-	}
 	statusMessage := renderSyncStatusAt(current, observedAt)
 	renderFP := syncFingerprint(tgformat.HashRendered(statusMessage))
 	statusID := topic.StatusMessageID
 	statusTurnID := strings.TrimSpace(topic.StatusTurnID)
 	newObservedTurn := statusTurnID != "" && currentTurnID != "" && statusTurnID != currentTurnID
+	var deliveryErr error
 	if statusID == 0 || newObservedTurn {
 		statusID, deliveryErr = forum.SendSyncMessage(ctx, topic.TopicID, statusMessage, model.SendOptions{Silent: true, Background: true})
 	} else if renderFP != topic.LastRenderFP {
@@ -1318,7 +1295,13 @@ func (s *Service) deliverSyncSnapshot(ctx context.Context, forum SyncForum, topi
 	if currentTurnID != "" {
 		statusTurnID = currentTurnID
 	}
-	_ = s.store.UpdateSyncTopicStatusDelivery(ctx, topic.SessionID, topic.TopicID, statusID, statusTurnID, renderFP)
+	if err := s.store.UpdateSyncTopicStatusDelivery(ctx, topic.SessionID, topic.TopicID, statusID, statusTurnID, renderFP); err != nil {
+		return
+	}
+	topic.StatusMessageID = statusID
+	topic.StatusTurnID = statusTurnID
+	topic.LastRenderFP = renderFP
+	_, _ = s.deliverSyncFinal(ctx, forum, topic, current)
 }
 
 func (s *Service) deliverSyncFinal(ctx context.Context, forum SyncForum, topic model.SyncTopic, current appserver.ThreadReadSnapshot) (string, error) {
@@ -1378,6 +1361,8 @@ func (s *Service) enqueueSyncDelivery(job syncDeliveryJob) {
 		}
 	}
 	s.syncDeliveryPending[threadID] = append(queue, job)
+	// Keep only one runnable token per thread. Multiple workers may deliver
+	// different topics, but status and Final for one topic stay ordered.
 	if s.syncDeliveryQueued[threadID] {
 		s.syncDeliveryMu.Unlock()
 		return
@@ -1406,43 +1391,6 @@ func (s *Service) syncDeliveryLoop(ctx context.Context) {
 			}
 			s.finishSyncDelivery(threadID)
 		}
-	}
-}
-
-func (s *Service) enqueueSyncFinalDelivery(job syncDeliveryJob) {
-	select {
-	case s.syncFinalJobs <- job:
-	default:
-		s.wakeSyncReconcile()
-	}
-}
-
-func (s *Service) syncFinalDeliveryLoop(ctx context.Context) {
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case job := <-s.syncFinalJobs:
-			s.runSyncFinalDelivery(ctx, job)
-		}
-	}
-}
-
-func (s *Service) runSyncFinalDelivery(ctx context.Context, job syncDeliveryJob) {
-	state, err := s.store.GetSyncState(ctx)
-	if err != nil || state.SessionID != job.SessionID || (state.State != model.SyncStateActive && state.State != model.SyncStateDraining) {
-		return
-	}
-	topic, err := s.store.GetActiveSyncTopicByThread(ctx, state.SessionID, job.Topic.ThreadID)
-	if err != nil || topic == nil || topic.TopicID != job.Topic.TopicID {
-		return
-	}
-	forum := s.getSyncForum()
-	if forum == nil {
-		return
-	}
-	if _, err := s.deliverSyncFinal(ctx, forum, *topic, job.Snapshot); err != nil {
-		s.wakeSyncReconcile()
 	}
 }
 
@@ -1541,17 +1489,6 @@ func (s *Service) deliverSyncUserMessageLocked(ctx context.Context, forum SyncFo
 		topic.PendingTelegramTurnID = ""
 		topic.PendingTelegramUserFP = ""
 	}
-	if topic.StatusMessageID != 0 && strings.TrimSpace(topic.StatusTurnID) == turnID {
-		oldStatusID := topic.StatusMessageID
-		reset, err := s.store.ResetSyncTopicStatusDelivery(ctx, topic.SessionID, topic.TopicID, oldStatusID, turnID)
-		if err != nil || !reset {
-			return topic, false
-		}
-		_ = forum.DeleteSyncMessage(ctx, topic.TopicID, oldStatusID)
-		topic.StatusMessageID = 0
-		topic.StatusTurnID = ""
-		topic.LastRenderFP = ""
-	}
 	if _, err := forum.SendSyncMessage(ctx, topic.TopicID, model.RenderedMessage{Text: syncUserHeader + "\n" + userText}, model.SendOptions{Silent: true}); err != nil {
 		return topic, false
 	}
@@ -1562,7 +1499,7 @@ func (s *Service) deliverSyncUserMessageLocked(ctx context.Context, forum SyncFo
 	return topic, true
 }
 
-func (s *Service) reanchorSyncDirectDelivery(ctx context.Context, chatID, topicID int64, response *DirectResponse) {
+func (s *Service) refreshSyncDirectDelivery(ctx context.Context, chatID, topicID int64, response *DirectResponse) {
 	if response == nil || !s.isSyncGroup(chatID) || isSyncControlTopic(topicID) {
 		return
 	}
@@ -1584,18 +1521,6 @@ func (s *Service) reanchorSyncDirectDelivery(ctx context.Context, chatID, topicI
 	forum := s.getSyncForum()
 	if forum == nil {
 		return
-	}
-	if topic.StatusMessageID != 0 && strings.TrimSpace(topic.StatusTurnID) == turnID {
-		oldStatusID := topic.StatusMessageID
-		reset, resetErr := s.store.ResetSyncTopicStatusDelivery(ctx, topic.SessionID, topic.TopicID, oldStatusID, turnID)
-		if resetErr != nil || !reset {
-			return
-		}
-		_ = forum.DeleteSyncMessage(ctx, topic.TopicID, oldStatusID)
-		topic, err = s.store.GetActiveSyncTopic(ctx, chatID, topicID)
-		if err != nil || topic == nil {
-			return
-		}
 	}
 	s.mu.RLock()
 	poll, connected := s.poll, s.pollConnected

@@ -60,6 +60,10 @@ Required scenarios:
 - active status timers and open-block durations advance in ten-second buckets,
   while content/state changes can still edit immediately and terminal duration
   stays exact and stable;
+- one status message is created per turn and then edited in place across title
+  changes, mirrored user messages, and direct-delivery refreshes;
+- terminal status is delivered before Final in the same per-topic sequence, so
+  no queued status update can move behind that turn's Final;
 - restart/reconnect does not duplicate user receipts or finals;
 - long finals preserve UTF-16 limits and the Final header on every chunk.
 

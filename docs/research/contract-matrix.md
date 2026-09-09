@@ -61,11 +61,13 @@ Retired SQLite keys such as `codex.model` and `codex.reasoning_effort` do not af
 | Card | Creation | Update |
 | --- | --- | --- |
 | `[User]` | accepted topic prompt/steer | not used as routing authority |
-| `[Status]` | active turn | edited from current App Server state; live timers advance in ten-second buckets while content/state changes remain immediate |
+| `[Status]` | active turn | one stable message per turn, edited from current App Server state; live timers advance in ten-second buckets while content/state changes remain immediate |
 | `[Approval]` | actionable daemon-owned server request | same card becomes Approved, Denied, or Cancelled; buttons disappear |
 | `[Input]` | actionable structured input | same card becomes terminal after answer |
 | `[Final]` | authoritative terminal result | long results split safely; each chunk keeps the Final header |
 | `[Launch request]` | durable request ingestion | edited across pending, starting, active, failed, closed |
+
+A terminal delivery updates the turn's existing `[Status]` card before sending `[Final]`. Both operations use the same per-topic sequence, so `[Final]` remains the last message for that turn even when Telegram background traffic is queued.
 
 No direct-message observer cards, progress trios, Details pages, Plan cards, settings menus, or automatic log/tool exports exist in the active product.
 
