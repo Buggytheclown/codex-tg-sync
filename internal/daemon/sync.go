@@ -1396,12 +1396,15 @@ func (s *Service) deliverSyncSnapshot(ctx context.Context, forum SyncForum, topi
 			_ = s.store.UpdateSyncTopicTitle(ctx, topic.SessionID, topic.TopicID, desiredTitle)
 		}
 	}
+	if !syncTurnUserPresentationReady(topic, current) {
+		return
+	}
 	var userDeliveryOK bool
 	topic, userDeliveryOK = s.deliverSyncUserMessageLocked(ctx, forum, topic, current)
 	statusNeedsCreate := topic.StatusMessageID == 0 ||
 		(strings.TrimSpace(topic.StatusTurnID) != "" && currentTurnID != "" && strings.TrimSpace(topic.StatusTurnID) != currentTurnID)
 	terminal := isTerminalStatus(current.LatestTurnStatus)
-	if !userDeliveryOK && !terminal {
+	if !userDeliveryOK {
 		return
 	}
 	if terminal && statusNeedsCreate {
@@ -1418,6 +1421,20 @@ func (s *Service) deliverSyncSnapshot(ctx context.Context, forum SyncForum, topi
 	}
 	topic, _ = s.deliverSyncStatus(ctx, forum, topic, current, observedAt, freshness)
 	_, _ = s.deliverSyncFinal(ctx, forum, topic, current)
+}
+
+func syncTurnUserPresentationReady(topic model.SyncTopic, current appserver.ThreadReadSnapshot) bool {
+	turnID := strings.TrimSpace(current.LatestTurnID)
+	if turnID == "" {
+		return true
+	}
+	if strings.TrimSpace(topic.StatusTurnID) == turnID && topic.StatusMessageID != 0 {
+		return true
+	}
+	if strings.TrimSpace(current.LatestUserMessageFP) != "" && strings.TrimSpace(current.LatestUserMessageText) != "" {
+		return true
+	}
+	return strings.TrimSpace(topic.PendingTelegramTurnID) == turnID && strings.TrimSpace(topic.PendingTelegramUserFP) != ""
 }
 
 func (s *Service) deliverSyncStatus(ctx context.Context, forum SyncForum, topic model.SyncTopic, current appserver.ThreadReadSnapshot, observedAt time.Time, freshness syncStatusFreshness) (model.SyncTopic, bool) {

@@ -69,6 +69,12 @@ Retired SQLite keys such as `codex.model` and `codex.reasoning_effort` do not af
 
 Important App Server events invalidate a thread and coalesce into one bounded latest-turn read. A rare summary sweep covers startup, reconnects, event gaps, and missed notifications. Telegram delivery resolves the latest persisted projection at execution time. Final delivery does not wait for a terminal Status edit; editing the existing Status does not move it behind Final.
 
+A newly observed Codex-origin turn is presented only after its authoritative
+User item is available: `[User]` is delivered before a new `[Status]` and any
+`[Final]`. A Telegram-origin turn uses the original Telegram prompt as that
+ordering barrier. Foreground/background egress priority affects latency only;
+it cannot authorize a later lifecycle card to overtake User.
+
 No direct-message observer cards, progress trios, Details pages, Plan cards, settings menus, or automatic log/tool exports exist in the active product.
 
 All raw Sync-group Bot API writes share one in-memory egress governor. It permits at most one attempt per second and 20 attempts per rolling 60.25 seconds, gives foreground traffic bounded preference over background maintenance, and pauses noncritical writes for Telegram `retry_after`. Admission-valid callbacks from each received batch get one neutral acknowledgement before business handling and bypass the group gate; out-of-scope callbacks get no response. The rolling history and cooldown are not persisted across restart.

@@ -40,10 +40,15 @@ detail items are upserted rather than erased by an incomplete read.
 The in-memory Telegram delivery queue contains only a coalesced thread key.
 Workers load the latest persisted projection immediately before rendering, so a
 queued active snapshot cannot overtake terminal state. User, Status, and Final
-attempts keep independent fingerprints. For an existing Status anchor, Final is
-sent before the terminal Status edit; the edit does not change topic ordering.
-When a terminal Status must be created, it is attempted before Final, and a
-failed creation is not appended after an already delivered Final.
+attempts keep independent fingerprints. A new Codex-origin turn is not presented
+until its authoritative User item is available and successfully delivered;
+Telegram-origin turns may proceed immediately because their original Telegram
+message is already visible. This semantic barrier runs before transport priority,
+so the visible order starts with User even when `turn/started` is readable before
+the user item. For an existing Status anchor, Final is sent before the terminal
+Status edit; the edit does not change topic ordering. When a terminal Status must
+be created, it is attempted before Final, and a failed creation is not appended
+after an already delivered Final.
 
 Status keeps commentary-block duration and renders only the authoritative tool
 count in each owning commentary-block header. Individual tool labels and tool
@@ -77,6 +82,8 @@ frozen.
   and Final are current or intentionally absent.
 - A terminal projection cannot regress to active.
 - Telegram delivery reads the latest persisted projection.
+- A `turn/started` snapshot without its Codex-origin User item produces no turn
+  presentation; the later complete snapshot produces User before Status and Final.
 - Final delivery proceeds when terminal Status editing fails and remains
   idempotent on retry.
 - Each commentary block shows its complete monotonic tool count without labels

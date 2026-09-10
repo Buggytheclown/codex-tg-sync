@@ -531,7 +531,7 @@ func TestSyncPassiveSyncSendsSilentStatusAndNotifyingFinal(t *testing.T) {
 				"id": "thread-1", "title": "One", "status": "completed",
 				"turns": []any{map[string]any{
 					"id": "turn-1", "status": "completed",
-					"items": []any{map[string]any{"id": "final-1", "type": "agentMessage", "phase": "final_answer", "text": "done"}},
+					"items": []any{syncPresentedUserItem(), map[string]any{"id": "final-1", "type": "agentMessage", "phase": "final_answer", "text": "done"}},
 				}},
 			},
 		},
@@ -540,14 +540,17 @@ func TestSyncPassiveSyncSendsSilentStatusAndNotifyingFinal(t *testing.T) {
 	forum := &fakeSyncForum{}
 	service.SetSyncForum(forum)
 	service.reconcileSync(ctx)
-	if len(forum.sends) != 2 || !forum.sends[0].silent || forum.sends[1].silent {
+	if len(forum.sends) != 3 || !forum.sends[0].silent || !forum.sends[1].silent || forum.sends[2].silent {
 		t.Fatalf("sends = %#v", forum.sends)
 	}
-	if !strings.HasPrefix(forum.sends[0].text, syncStatusHeader+" completed") {
-		t.Fatalf("status = %q", forum.sends[0].text)
+	if forum.sends[0].text != syncUserHeader+"\nAlready presented prompt" {
+		t.Fatalf("user = %q", forum.sends[0].text)
 	}
-	if !strings.HasPrefix(forum.sends[1].text, syncFinalHeader+"\n") || !strings.Contains(forum.sends[1].text, "done") {
-		t.Fatalf("final = %q", forum.sends[1].text)
+	if !strings.HasPrefix(forum.sends[1].text, syncStatusHeader+" completed") {
+		t.Fatalf("status = %q", forum.sends[1].text)
+	}
+	if !strings.HasPrefix(forum.sends[2].text, syncFinalHeader+"\n") || !strings.Contains(forum.sends[2].text, "done") {
+		t.Fatalf("final = %q", forum.sends[2].text)
 	}
 	if len(poll.threadResumeCalls) != 0 || len(poll.turnStartCalls) != 0 {
 		t.Fatal("passive sync attempted a mutation")
@@ -580,6 +583,9 @@ func TestSyncSafetyReconcileSkipsFullReadForStableTerminalTurn(t *testing.T) {
 	}
 	statusFP := syncFingerprint(tgformat.HashRendered(renderSyncStatusAt(observed, time.Time{})))
 	if err := service.store.UpdateSyncTopicDelivery(ctx, "s", 11, 100, "turn-1", statusFP, current.LatestFinalFP); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.store.UpdateSyncTopicUserDelivery(ctx, "s", 11, current.LatestUserMessageFP, "", ""); err != nil {
 		t.Fatal(err)
 	}
 	poll := &latestReadSession{stubSession: &stubSession{}, summary: payload, full: payload}
@@ -713,15 +719,16 @@ func TestSyncTerminalStatusFailureDoesNotDeferFinal(t *testing.T) {
 	}
 }
 
-func TestSyncTerminalUserFailureRetriesAfterFinal(t *testing.T) {
+func TestSyncTerminalUserFailureDefersPresentationAndRetriesInOrder(t *testing.T) {
 	service := activeSyncService(t)
 	ctx := context.Background()
 	payload := syncCompletedPayload("thread-1", "turn-1", "done")
 	thread := payload["thread"].(map[string]any)
 	turn := thread["turns"].([]any)[0].(map[string]any)
-	turn["items"] = append([]any{map[string]any{
+	items := turn["items"].([]any)
+	turn["items"] = append([]any{items[0], map[string]any{
 		"id": "user-1", "type": "userMessage", "content": []any{map[string]any{"type": "text", "text": "Desktop request"}},
-	}}, turn["items"].([]any)...)
+	}}, items[1:]...)
 	poll := &stubSession{threadReads: map[string]map[string]any{"thread-1": payload}}
 	service.mu.Lock()
 	service.poll, service.pollConnected = poll, true
@@ -731,17 +738,18 @@ func TestSyncTerminalUserFailureRetriesAfterFinal(t *testing.T) {
 
 	service.reconcileSync(ctx)
 	topic, err := service.store.GetActiveSyncTopic(ctx, -1001, 11)
-	if err != nil || topic == nil || topic.LastUserFP != "" || topic.LastFinalFP == "" {
-		t.Fatalf("topic=%#v err=%v, want pending User and delivered Final", topic, err)
+	if err != nil || topic == nil || topic.LastUserFP == appserver.SnapshotFromThreadRead(payload).LatestUserMessageFP || topic.LastFinalFP != "" || topic.StatusMessageID != 0 {
+		t.Fatalf("topic=%#v err=%v, want the failed User to defer Status and Final", topic, err)
 	}
 	forum.sendErrAt, forum.sendErr = 0, nil
 	service.reconcileSync(ctx)
 	topic, err = service.store.GetActiveSyncTopic(ctx, -1001, 11)
-	if err != nil || topic == nil || topic.LastUserFP == "" {
-		t.Fatalf("topic=%#v err=%v, want User retry committed", topic, err)
+	if err != nil || topic == nil || topic.LastUserFP == "" || topic.LastFinalFP == "" || topic.StatusMessageID == 0 {
+		t.Fatalf("topic=%#v err=%v, want User, Status, and Final committed after retry", topic, err)
 	}
-	if got := forum.sends[len(forum.sends)-1].text; got != syncUserHeader+"\nDesktop request" {
-		t.Fatalf("last retry=%q, want User", got)
+	if len(forum.sends) != 4 || forum.sends[1].text != syncUserHeader+"\nDesktop request" ||
+		!strings.HasPrefix(forum.sends[2].text, syncStatusHeader+" completed") || forum.sends[3].text != syncFinalHeader+"\ndone" {
+		t.Fatalf("retry sends=%#v, want failed User then User, Status, Final", forum.sends)
 	}
 }
 
@@ -921,6 +929,53 @@ func TestSyncPassiveSyncMirrorsDesktopUserBeforeStatusExactlyOnce(t *testing.T) 
 	service.reconcileSync(ctx)
 	if len(forum.sends) != 2 {
 		t.Fatalf("repeat poll duplicated user/status: %#v", forum.sends)
+	}
+}
+
+func TestSyncPassiveSyncWaitsForDesktopUserBeforeCreatingTurnPresentation(t *testing.T) {
+	service := activeSyncService(t)
+	ctx := context.Background()
+	poll := &stubSession{threadReads: map[string]map[string]any{
+		"thread-1": syncRunningPayloadWithoutUser("thread-1", "turn-1", "early progress"),
+	}}
+	service.mu.Lock()
+	service.poll, service.pollConnected = poll, true
+	service.mu.Unlock()
+	forum := &fakeSyncForum{}
+	service.SetSyncForum(forum)
+
+	service.reconcileSync(ctx)
+	if len(forum.sends) != 0 {
+		t.Fatalf("early snapshot sends=%#v, want no turn presentation before its Desktop user item", forum.sends)
+	}
+
+	poll.threadReads["thread-1"] = syncRunningPayloadWithUser("thread-1", "turn-1", "user-1", "Desktop prompt", "working")
+	service.reconcileSync(ctx)
+	if len(forum.sends) != 2 || forum.sends[0].text != syncUserHeader+"\nDesktop prompt" ||
+		!strings.HasPrefix(forum.sends[1].text, syncStatusHeader+" ") {
+		t.Fatalf("complete snapshot sends=%#v, want user then status", forum.sends)
+	}
+}
+
+func TestSyncPassiveSyncMayCreateStatusAfterOriginalTelegramUser(t *testing.T) {
+	service := activeSyncService(t)
+	ctx := context.Background()
+	pending := syncUserTextFingerprint("turn-1", "Telegram prompt")
+	if err := service.store.UpdateSyncTopicUserDelivery(ctx, "s", 11, "", "turn-1", pending); err != nil {
+		t.Fatal(err)
+	}
+	service.mu.Lock()
+	service.poll = &stubSession{threadReads: map[string]map[string]any{
+		"thread-1": syncRunningPayloadWithoutUser("thread-1", "turn-1", "early progress"),
+	}}
+	service.pollConnected = true
+	service.mu.Unlock()
+	forum := &fakeSyncForum{}
+	service.SetSyncForum(forum)
+
+	service.reconcileSync(ctx)
+	if len(forum.sends) != 1 || !strings.HasPrefix(forum.sends[0].text, syncStatusHeader+" ") {
+		t.Fatalf("sends=%#v, want Status after the already-visible Telegram prompt", forum.sends)
 	}
 }
 
@@ -1679,8 +1734,8 @@ func TestSyncEventReadCountsToolAndMonotonicProjectionPreservesIt(t *testing.T) 
 		t.Fatalf("stored snapshot=%#v err=%v", stored, err)
 	}
 	var compact appserver.ThreadReadSnapshot
-	if err := json.Unmarshal(stored.CompactJSON, &compact); err != nil || len(compact.DetailItems) != 2 {
-		t.Fatalf("compact snapshot=%#v err=%v, want commentary and tool from authoritative read", compact, err)
+	if err := json.Unmarshal(stored.CompactJSON, &compact); err != nil || len(compact.DetailItems) != 3 {
+		t.Fatalf("compact snapshot=%#v err=%v, want user, commentary, and tool from authoritative read", compact, err)
 	}
 
 	lagging := syncRunningPayloadWithCommentary("thread-1", "started-turn", "Checking the implementation")
@@ -2856,7 +2911,9 @@ func TestSyncProjectCallbackFromOldSessionFailsBeforeThreadStart(t *testing.T) {
 }
 
 func syncRunningPayload(threadID, turnID string) map[string]any {
-	return map[string]any{"thread": map[string]any{"id": threadID, "status": "inProgress", "turns": []any{map[string]any{"id": turnID, "status": "inProgress", "items": []any{}}}}}
+	return map[string]any{"thread": map[string]any{"id": threadID, "status": "inProgress", "turns": []any{map[string]any{
+		"id": turnID, "status": "inProgress", "items": []any{syncPresentedUserItem()},
+	}}}}
 }
 
 func syncRunningPayloadWithCommentary(threadID, turnID, commentary string) map[string]any {
@@ -2864,10 +2921,22 @@ func syncRunningPayloadWithCommentary(threadID, turnID, commentary string) map[s
 }
 
 func syncRunningPayloadWithCommentaries(threadID, turnID string, commentaries ...string) map[string]any {
-	items := make([]any, 0, len(commentaries))
+	items := []any{syncPresentedUserItem()}
 	for index, commentary := range commentaries {
 		items = append(items, map[string]any{
 			"id": fmt.Sprintf("%s-commentary-%d", turnID, index+1), "type": "agentMessage", "phase": "commentary", "text": commentary,
+		})
+	}
+	return map[string]any{"thread": map[string]any{"id": threadID, "status": "inProgress", "turns": []any{map[string]any{
+		"id": turnID, "status": "inProgress", "items": items,
+	}}}}
+}
+
+func syncRunningPayloadWithoutUser(threadID, turnID, commentary string) map[string]any {
+	items := []any{}
+	if commentary != "" {
+		items = append(items, map[string]any{
+			"id": turnID + "-commentary", "type": "agentMessage", "phase": "commentary", "text": commentary,
 		})
 	}
 	return map[string]any{"thread": map[string]any{"id": threadID, "status": "inProgress", "turns": []any{map[string]any{
@@ -2898,17 +2967,19 @@ func syncRunningPayloadWithUsers(threadID, turnID string, users []syncTestUser, 
 }
 
 func syncInterruptedPayload(threadID, turnID string) map[string]any {
-	return map[string]any{"thread": map[string]any{"id": threadID, "status": "interrupted", "turns": []any{map[string]any{"id": turnID, "status": "interrupted", "items": []any{}}}}}
+	return map[string]any{"thread": map[string]any{"id": threadID, "status": "interrupted", "turns": []any{map[string]any{
+		"id": turnID, "status": "interrupted", "items": []any{syncPresentedUserItem()},
+	}}}}
 }
 
 func syncCompletedPayload(threadID, turnID, finalText string) map[string]any {
 	return map[string]any{"thread": map[string]any{"id": threadID, "status": "completed", "turns": []any{map[string]any{
-		"id": turnID, "status": "completed", "items": []any{map[string]any{"id": "final", "type": "agentMessage", "phase": "final_answer", "text": finalText}},
+		"id": turnID, "status": "completed", "items": []any{syncPresentedUserItem(), map[string]any{"id": "final", "type": "agentMessage", "phase": "final_answer", "text": finalText}},
 	}}}}
 }
 
 func syncCompletedPayloadWithCommentaries(threadID, turnID, finalText string, commentaries ...string) map[string]any {
-	items := make([]any, 0, len(commentaries)+1)
+	items := []any{syncPresentedUserItem()}
 	for index, commentary := range commentaries {
 		items = append(items, map[string]any{
 			"id": fmt.Sprintf("%s-commentary-%d", turnID, index+1), "type": "agentMessage", "phase": "commentary", "text": commentary,
@@ -2920,6 +2991,13 @@ func syncCompletedPayloadWithCommentaries(threadID, turnID, finalText string, co
 	}}}}
 }
 
+func syncPresentedUserItem() map[string]any {
+	return map[string]any{
+		"id": "already-presented-user", "type": "userMessage",
+		"content": []any{map[string]any{"type": "text", "text": "Already presented prompt"}},
+	}
+}
+
 func activeSyncService(t *testing.T) *Service {
 	t.Helper()
 	service := newTestService(t)
@@ -2928,9 +3006,10 @@ func activeSyncService(t *testing.T) *Service {
 	if err := service.store.BeginSyncActivation(ctx, "s", -1001); err != nil {
 		t.Fatal(err)
 	}
+	presentedUserFP := appserver.SnapshotFromThreadRead(syncRunningPayload("fixture-thread", "fixture-turn")).LatestUserMessageFP
 	for index, topicID := range []int64{11, 12} {
 		threadID := fmt.Sprintf("thread-%d", index+1)
-		if err := service.store.UpsertSyncTopic(ctx, model.SyncTopic{SessionID: "s", ChatID: -1001, TopicID: topicID, ThreadID: threadID, Title: "Topic", TelegramState: model.SyncTopicConnected}); err != nil {
+		if err := service.store.UpsertSyncTopic(ctx, model.SyncTopic{SessionID: "s", ChatID: -1001, TopicID: topicID, ThreadID: threadID, Title: "Topic", TelegramState: model.SyncTopicConnected, LastUserFP: presentedUserFP}); err != nil {
 			t.Fatal(err)
 		}
 		if err := service.store.UpsertThread(ctx, model.Thread{ID: threadID, Title: "Topic", CWD: "/tmp/project", Status: "idle"}); err != nil {

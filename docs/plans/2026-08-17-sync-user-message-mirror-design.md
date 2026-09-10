@@ -58,10 +58,10 @@ For each authoritative snapshot:
 5. Keep the turn's existing Status anchor and edit it in place.
 6. Continue with the existing status and final fingerprint lifecycle.
 
-User delivery failure stops active Status presentation for that snapshot and is
-retried by later event or safety reconciliation. At terminal state, Final is
-attempted independently so a transient User failure cannot hide the result;
-the safety reconciliation still retries the missing User fingerprint.
+User delivery failure stops Status and Final presentation for that snapshot and
+is retried by a later event or safety reconciliation. This keeps the visible
+turn order authoritative; Final remains independent only from a failed terminal
+Status edit, not from a missing User presentation.
 
 ## Rejected Alternatives
 

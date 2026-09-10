@@ -9,6 +9,8 @@
   without turning streaming events into reads or SQLite writes.
 - Allowed Final delivery to proceed independently of a failed terminal Status
   edit while preserving Final as the last newly sent turn message.
+- Delayed each new Codex-origin turn presentation until its authoritative User
+  item is available, so Telegram cannot create Status or Final before User.
 - Numbered multipart Telegram Finals as `Final 1/N` through `Final N/N` while keeping single-message Finals unchanged.
 - Added short durable Telegram terminal notices while keeping external launch
   cards updated as the request state authority.

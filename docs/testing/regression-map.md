@@ -68,6 +68,8 @@ Required scenarios:
   changes, mirrored user messages, and direct-delivery refreshes;
 - Telegram delivery is late-bound to the newest persisted projection, terminal
   state cannot regress to active, and Final does not wait for a Status edit;
+- a new Codex-origin turn waits for its authoritative User item before creating
+  Status or Final, while Telegram-origin input uses its already-visible original;
 - commentary blocks retain their duration and show the complete monotonic count
   of associated tool calls without labels or output;
 - active Status shows latest successful snapshot-read and valid App Server-event
