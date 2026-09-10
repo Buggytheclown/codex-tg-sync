@@ -45,8 +45,17 @@ sent before the terminal Status edit; the edit does not change topic ordering.
 When a terminal Status must be created, it is attempted before Final, and a
 failed creation is not appended after an already delivered Final.
 
-Status keeps commentary-block duration and renders bounded tool-call labels
-immediately below the owning commentary block. Tool output remains excluded.
+Status keeps commentary-block duration and renders only the authoritative tool
+count in each owning commentary-block header. Individual tool labels and tool
+output remain excluded. Counts are computed before compact detail truncation and
+merged monotonically within a turn.
+
+Active and waiting Status cards also show the local time of the latest successful
+bounded snapshot read and the latest valid per-thread App Server event. Event
+activity is ephemeral in-memory diagnostic state: streaming events update that
+timestamp without triggering a read or SQLite write, and the value resets on a
+new Sync activation. Terminal cards omit freshness because their projection is
+frozen.
 
 ## Consequences
 
@@ -70,5 +79,8 @@ immediately below the owning commentary block. Tool output remains excluded.
 - Telegram delivery reads the latest persisted projection.
 - Final delivery proceeds when terminal Status editing fails and remains
   idempotent on retry.
-- Tools render below their commentary block, are bounded, and never include
-  output.
+- Each commentary block shows its complete monotonic tool count without labels
+  or output, including when compact detail history is truncated.
+- Active freshness distinguishes the latest successful snapshot read from the
+  latest valid App Server event without turning streaming deltas into reads or
+  durable writes.

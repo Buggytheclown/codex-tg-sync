@@ -2,6 +2,7 @@ package appserver
 
 import (
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -695,6 +696,36 @@ func TestSnapshotFromThreadReadBuildsOrderedDetailsAndLinksToolsToCommentary(t *
 	}
 	if got, want := snapshot.DetailItems[4].CommentaryIndex, 2; got != want {
 		t.Fatalf("second commentary index = %d, want %d", got, want)
+	}
+	if len(snapshot.ToolCallCounts) != 2 || snapshot.ToolCallCounts[0] != 0 || snapshot.ToolCallCounts[1] != 1 {
+		t.Fatalf("ToolCallCounts = %#v, want one tool associated with commentary block 1", snapshot.ToolCallCounts)
+	}
+}
+
+func TestCompactSnapshotKeepsToolCountBeyondDetailLimit(t *testing.T) {
+	t.Parallel()
+
+	items := []any{map[string]any{"id": "agent-1", "type": "agentMessage", "phase": "commentary", "text": "Working."}}
+	for index := 0; index < compactSnapshotDetailLimit+12; index++ {
+		items = append(items, map[string]any{
+			"id": fmt.Sprintf("tool-%d", index), "type": "commandExecution", "command": "true", "status": "completed",
+		})
+	}
+	snapshot := SnapshotFromThreadRead(map[string]any{
+		"id": "thread-1", "status": "inProgress", "turns": []any{map[string]any{
+			"id": "turn-1", "status": "inProgress", "items": items,
+		}},
+	})
+	compact := CompactSnapshot(nil, snapshot, time.Now())
+	var observed ThreadReadSnapshot
+	if err := json.Unmarshal(compact.CompactJSON, &observed); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := observed.ToolCallCounts[1], compactSnapshotDetailLimit+12; got != want {
+		t.Fatalf("ToolCallCounts[1] = %d, want %d", got, want)
+	}
+	if len(observed.DetailItems) != compactSnapshotDetailLimit {
+		t.Fatalf("len(DetailItems) = %d, want compact limit %d", len(observed.DetailItems), compactSnapshotDetailLimit)
 	}
 }
 

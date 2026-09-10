@@ -87,6 +87,7 @@ type Service struct {
 	syncDirtyMu                  sync.Mutex
 	syncDirtyWake                chan struct{}
 	syncDirtyThreads             map[string]struct{}
+	syncLastEventAt              map[string]time.Time
 	syncDeliveryMu               sync.Mutex
 	syncDeliveryJobs             chan string
 	syncDeliveryPending          map[string]bool
@@ -140,6 +141,7 @@ func New(cfg config.Config) (*Service, error) {
 		syncReconcileWake:   make(chan struct{}, 1),
 		syncDirtyWake:       make(chan struct{}, 1),
 		syncDirtyThreads:    map[string]struct{}{},
+		syncLastEventAt:     map[string]time.Time{},
 		syncDeliveryJobs:    make(chan string, 256),
 		syncDeliveryPending: map[string]bool{},
 		syncDeliveryQueued:  map[string]bool{},

@@ -808,6 +808,30 @@ func TestSyncSnapshotInvalidationIgnoresStreamingUpdates(t *testing.T) {
 	}
 }
 
+func TestSyncStreamingEventRecordsActivityWithoutDirtyRead(t *testing.T) {
+	service := activeSyncService(t)
+	fixedNow := time.Date(2026, time.August, 17, 12, 0, 0, 0, time.UTC)
+	service.now = func() time.Time { return fixedNow }
+	process := &stubSession{}
+	service.syncMu.Lock()
+	service.syncPollEventProcess = process
+	service.syncPollEventGeneration = 7
+	service.syncMu.Unlock()
+
+	service.handleSyncPollEvent(context.Background(), process, appserver.Event{
+		Channel: "notification", Method: "item/updated", Params: map[string]any{"threadId": "thread-1"},
+	}, 7)
+	if got := service.lastSyncAppServerEvent("thread-1"); !got.Equal(fixedNow) {
+		t.Fatalf("last event = %s, want %s", got, fixedNow)
+	}
+	service.syncDirtyMu.Lock()
+	dirtyCount := len(service.syncDirtyThreads)
+	service.syncDirtyMu.Unlock()
+	if dirtyCount != 0 {
+		t.Fatalf("streaming event queued %d dirty reads, want none", dirtyCount)
+	}
+}
+
 func TestSyncDirtyThreadsCoalesceBeforeRead(t *testing.T) {
 	service := newTestService(t)
 	service.markSyncThreadDirty("thread-1")
@@ -1260,7 +1284,7 @@ func TestSyncStatusAggregatesCommentaryBlocksInOneMessage(t *testing.T) {
 	}
 }
 
-func TestSyncStatusUpdatesSameBlockAndRendersToolsBelowIt(t *testing.T) {
+func TestSyncStatusUpdatesSameBlockAndCountsTools(t *testing.T) {
 	t.Parallel()
 
 	startedAt := time.Date(2026, time.August, 17, 12, 0, 0, 0, time.UTC)
@@ -1279,17 +1303,17 @@ func TestSyncStatusUpdatesSameBlockAndRendersToolsBelowIt(t *testing.T) {
 	}
 
 	message := renderSyncStatusAt(snapshot, startedAt.Add(10*time.Second))
-	if strings.Count(message.Text, "Блок 1 ·") != 1 || strings.Count(message.Text, "Expanded reasoning") != 1 {
+	if strings.Count(message.Text, "Блок 1 · 7s · tools 1") != 1 || strings.Count(message.Text, "Expanded reasoning") != 1 {
 		t.Fatalf("status duplicated updated block: %q", message.Text)
 	}
-	if !strings.Contains(message.Text, "Expanded reasoning\n└ ◌ go test ./...") ||
-		!strings.Contains(message.Text, "Updated plan\n└ ✓ read sync.go") ||
+	if !strings.Contains(message.Text, "Блок 2 · 3s · tools 1\nUpdated plan") ||
+		strings.Contains(message.Text, "go test ./...") || strings.Contains(message.Text, "read sync.go") ||
 		strings.Contains(message.Text, "tool output") || strings.Contains(message.Text, "stale preview") {
 		t.Fatalf("status included wrong detail kinds: %q", message.Text)
 	}
 }
 
-func TestSyncStatusBoundsToolsPerCommentaryBlock(t *testing.T) {
+func TestSyncStatusCountsAllToolsWithoutRenderingLabels(t *testing.T) {
 	t.Parallel()
 
 	startedAt := time.Date(2026, time.August, 17, 12, 0, 0, 0, time.UTC)
@@ -1309,15 +1333,35 @@ func TestSyncStatusBoundsToolsPerCommentaryBlock(t *testing.T) {
 	}
 
 	message := renderSyncStatusAt(snapshot, startedAt.Add(time.Minute))
-	for _, want := range []string{"└ ✓ tool 1", "└ ✓ tool 2", "└ … ещё 4 tools", "└ ✓ tool 7"} {
-		if !strings.Contains(message.Text, want) {
-			t.Fatalf("status %q does not contain %q", message.Text, want)
-		}
+	if !strings.Contains(message.Text, "Блок 1 · 1m · tools 7\nWorking") {
+		t.Fatalf("status %q does not contain the complete tool count", message.Text)
 	}
-	for _, hidden := range []string{"tool 3", "tool 4", "tool 5", "tool 6"} {
+	for _, hidden := range []string{"tool 1", "tool 2", "tool 3", "tool 4", "tool 5", "tool 6", "tool 7"} {
 		if strings.Contains(message.Text, hidden) {
 			t.Fatalf("status %q unexpectedly contains %q", message.Text, hidden)
 		}
+	}
+}
+
+func TestSyncStatusShowsFreshnessOnlyWhileActive(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, time.August, 17, 12, 0, 10, 0, time.UTC)
+	snapshot := appserver.ThreadReadSnapshot{
+		Thread: model.Thread{Status: "inProgress"}, LatestTurnID: "turn-1", LatestTurnStatus: "inProgress",
+		LatestTurnStartedAt: now.Add(-time.Minute).Format(time.RFC3339Nano),
+	}
+	freshness := syncStatusFreshness{SnapshotAt: now.Add(-2 * time.Second), EventAt: now.Add(-time.Second)}
+	message := renderSyncStatusWithFreshnessAt(snapshot, freshness, now)
+	wantFreshness := "↻ snapshot " + freshness.SnapshotAt.Local().Truncate(syncStatusTimerTick).Format("15:04:05") +
+		" · event " + freshness.EventAt.Local().Truncate(syncStatusTimerTick).Format("15:04:05")
+	if !strings.Contains(message.Text, wantFreshness) {
+		t.Fatalf("active status = %q, want freshness %q", message.Text, wantFreshness)
+	}
+
+	snapshot.LatestTurnStatus = "completed"
+	if terminal := renderSyncStatusWithFreshnessAt(snapshot, freshness, now); strings.Contains(terminal.Text, "↻ snapshot") {
+		t.Fatalf("terminal status contains freshness: %q", terminal.Text)
 	}
 }
 
@@ -1334,6 +1378,20 @@ func TestSyncProjectionDoesNotRegressTerminalTurn(t *testing.T) {
 	merged := monotonicSyncSnapshot(&previous, stale)
 	if merged.LatestTurnStatus != "completed" || merged.LatestFinalFP != "final-fp" || merged.LatestFinalText != "done" {
 		t.Fatalf("terminal projection regressed: %#v", merged)
+	}
+}
+
+func TestSyncProjectionDoesNotRegressToolCounts(t *testing.T) {
+	previous := appserver.CompactSnapshot(nil, appserver.ThreadReadSnapshot{
+		Thread: model.Thread{ID: "thread-1", Status: "inProgress"}, LatestTurnID: "turn-1", LatestTurnStatus: "inProgress",
+		ToolCallCounts: []int{0, 5, 2},
+	}, time.Now())
+	current := appserver.ThreadReadSnapshot{
+		Thread: model.Thread{ID: "thread-1", Status: "inProgress"}, LatestTurnID: "turn-1", LatestTurnStatus: "inProgress",
+		ToolCallCounts: []int{0, 3, 4},
+	}
+	if got := monotonicSyncSnapshot(&previous, current).ToolCallCounts; !reflect.DeepEqual(got, []int{0, 5, 4}) {
+		t.Fatalf("ToolCallCounts = %#v, want monotonic per-block maxima", got)
 	}
 }
 
@@ -1578,7 +1636,7 @@ func TestSyncTelegramOriginHotPollRefreshesAndStopsAtTerminal(t *testing.T) {
 	}
 }
 
-func TestSyncEventReadRendersToolAndMonotonicProjectionPreservesIt(t *testing.T) {
+func TestSyncEventReadCountsToolAndMonotonicProjectionPreservesIt(t *testing.T) {
 	service := activeSyncService(t)
 	ctx := context.Background()
 	fixedNow := time.Date(2026, time.August, 15, 12, 0, 0, 0, time.UTC)
@@ -1613,8 +1671,8 @@ func TestSyncEventReadRendersToolAndMonotonicProjectionPreservesIt(t *testing.T)
 		},
 	}, service.syncWriter.Snapshot().Generation)
 	service.reconcileDirtySyncThreads(ctx)
-	if len(forum.sends) != 1 || !strings.Contains(forum.sends[0].text, "└ ◌ sleep 20") {
-		t.Fatalf("event-triggered read did not render tool under commentary: %#v", forum.sends)
+	if len(forum.sends) != 1 || !strings.Contains(forum.sends[0].text, "tools 1") || strings.Contains(forum.sends[0].text, "sleep 20") {
+		t.Fatalf("event-triggered read did not render a compact tool count: %#v", forum.sends)
 	}
 	stored, err := service.store.GetSnapshot(ctx, "thread-1")
 	if err != nil || stored == nil {
@@ -1635,8 +1693,8 @@ func TestSyncEventReadRendersToolAndMonotonicProjectionPreservesIt(t *testing.T)
 		t.Fatalf("stored snapshot after lagging poll=%#v err=%v", stored, err)
 	}
 	compact = appserver.ThreadReadSnapshot{}
-	if err := json.Unmarshal(stored.CompactJSON, &compact); err != nil || !strings.Contains(renderSyncStatusAt(compact, fixedNow).Text, "sleep 20") {
-		t.Fatalf("lagging read erased observed tool from compact snapshot: %#v err=%v", compact, err)
+	if err := json.Unmarshal(stored.CompactJSON, &compact); err != nil || !strings.Contains(renderSyncStatusAt(compact, fixedNow).Text, "tools 1") {
+		t.Fatalf("lagging read erased observed tool count from compact snapshot: %#v err=%v", compact, err)
 	}
 }
 

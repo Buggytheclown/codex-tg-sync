@@ -68,8 +68,10 @@ Required scenarios:
   changes, mirrored user messages, and direct-delivery refreshes;
 - Telegram delivery is late-bound to the newest persisted projection, terminal
   state cannot regress to active, and Final does not wait for a Status edit;
-- commentary blocks retain their duration and show a bounded list of associated
-  tool calls without tool output;
+- commentary blocks retain their duration and show the complete monotonic count
+  of associated tool calls without labels or output;
+- active Status shows latest successful snapshot-read and valid App Server-event
+  times, while streaming events update only ephemeral activity and stay read-free;
 - restart/reconnect does not duplicate user receipts or finals;
 - long finals preserve UTF-16 limits and number every Final chunk (`1/N` through `N/N`).
 

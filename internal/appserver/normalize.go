@@ -40,6 +40,7 @@ type ThreadReadSnapshot struct {
 	LatestToolUpdatedAt       string
 	PlanPrompt                *model.PlanPrompt
 	DetailItems               []model.DetailItem
+	ToolCallCounts            []int
 }
 
 type AgentMessageEntry struct {
@@ -147,6 +148,7 @@ func SnapshotFromThreadRead(result map[string]any) ThreadReadSnapshot {
 	snapshot.LatestAgentMessages = collectAgentMessagesFromItems(items, 3)
 	snapshot.LatestAgentMessageEntries = collectAgentMessageEntriesFromItems(items, 3)
 	snapshot.DetailItems = collectDetailItemsFromItems(items, snapshot.LatestTurnStatus)
+	snapshot.ToolCallCounts = toolCallCountsFromDetails(snapshot.DetailItems)
 	snapshot.PlanPrompt = syntheticPlanPrompt(snapshot.Thread, snapshot.LatestTurnID, items, snapshot.WaitingOnReply)
 	userID, userText, userFP := latestUserMessage(items)
 	snapshot.LatestUserMessageID = userID
@@ -1165,6 +1167,36 @@ func collectDetailItemsFromItems(items []any, turnStatus string) []model.DetailI
 		}
 	}
 	return out
+}
+
+func toolCallCountsFromDetails(items []model.DetailItem) []int {
+	counts := []int(nil)
+	seen := make(map[string]struct{})
+	for index, item := range items {
+		if item.Kind != model.DetailItemTool {
+			continue
+		}
+		key := strings.TrimSpace(item.ID)
+		if key == "" {
+			key = strings.TrimSpace(item.FP)
+		}
+		if key == "" {
+			key = fmt.Sprintf("detail:%d", index)
+		}
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		commentaryIndex := item.CommentaryIndex
+		if commentaryIndex < 0 {
+			commentaryIndex = 0
+		}
+		for len(counts) <= commentaryIndex {
+			counts = append(counts, 0)
+		}
+		counts[commentaryIndex]++
+	}
+	return counts
 }
 
 func normalizeAgentMessagePhase(item map[string]any) string {

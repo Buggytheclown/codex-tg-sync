@@ -48,7 +48,6 @@ const (
 	syncApprovalHeader  = "🔐 [Approval]"
 	syncInputHeader     = "❓ [Input]"
 	syncStatusTimerTick = 10 * time.Second
-	syncStatusToolLimit = 4
 )
 
 type SyncForumFailureKind string
@@ -507,6 +506,7 @@ func (s *Service) activateSync(ctx context.Context, userID int64) (*DirectRespon
 		return nil, fmt.Errorf("prepare Sync Control: %w", err)
 	}
 	s.cleanupSyncTopics(ctx, state.SessionID)
+	s.clearSyncEventActivity()
 
 	poll, err := s.controlReadSession(ctx)
 	if err != nil {
@@ -1021,6 +1021,7 @@ func (s *Service) handleSyncPollEvent(ctx context.Context, process Session, even
 		s.syncMu.Unlock()
 		return
 	}
+	s.recordSyncAppServerEvent(threadID, s.now().UTC())
 	if approval, ok := appserver.PendingApprovalFromServerRequest(event); ok {
 		s.handleSyncPendingRequestLocked(ctx, *topic, *approval)
 		s.syncMu.Unlock()
@@ -1071,6 +1072,7 @@ func (s *Service) handleSyncWriterEvent(ctx context.Context, process Session, ev
 		s.syncMu.Unlock()
 		return
 	}
+	s.recordSyncAppServerEvent(threadID, s.now().UTC())
 	if approval, ok := appserver.PendingApprovalFromServerRequest(event); ok {
 		s.handleSyncPendingRequestLocked(ctx, *topic, *approval)
 		s.syncMu.Unlock()
@@ -1120,6 +1122,33 @@ func (s *Service) markSyncThreadDirty(threadID string) {
 	case s.syncDirtyWake <- struct{}{}:
 	default:
 	}
+}
+
+func (s *Service) recordSyncAppServerEvent(threadID string, observedAt time.Time) {
+	threadID = strings.TrimSpace(threadID)
+	if threadID == "" {
+		return
+	}
+	if observedAt.IsZero() {
+		observedAt = time.Now().UTC()
+	} else {
+		observedAt = observedAt.UTC()
+	}
+	s.syncDirtyMu.Lock()
+	s.syncLastEventAt[threadID] = observedAt
+	s.syncDirtyMu.Unlock()
+}
+
+func (s *Service) lastSyncAppServerEvent(threadID string) time.Time {
+	s.syncDirtyMu.Lock()
+	defer s.syncDirtyMu.Unlock()
+	return s.syncLastEventAt[strings.TrimSpace(threadID)]
+}
+
+func (s *Service) clearSyncEventActivity() {
+	s.syncDirtyMu.Lock()
+	s.syncLastEventAt = map[string]time.Time{}
+	s.syncDirtyMu.Unlock()
 }
 
 func (s *Service) syncDirtyLoop(ctx context.Context) {
@@ -1253,7 +1282,8 @@ func (s *Service) releaseSyncTurnLeaseLocked(ctx context.Context, state model.Sy
 
 func (s *Service) persistAndDeliverSyncSnapshotLocked(ctx context.Context, forum SyncForum, topic model.SyncTopic, current appserver.ThreadReadSnapshot) {
 	observed, observedAt := s.persistSyncSnapshot(ctx, topic, current)
-	s.deliverSyncSnapshot(ctx, forum, topic, observed, observedAt)
+	freshness := syncStatusFreshness{SnapshotAt: observedAt, EventAt: s.lastSyncAppServerEvent(topic.ThreadID)}
+	s.deliverSyncSnapshot(ctx, forum, topic, observed, observedAt, freshness)
 }
 
 func (s *Service) persistSyncSnapshot(ctx context.Context, topic model.SyncTopic, current appserver.ThreadReadSnapshot) (appserver.ThreadReadSnapshot, time.Time) {
@@ -1299,8 +1329,26 @@ func monotonicSyncSnapshot(previous *model.ThreadSnapshotState, current appserve
 		current.LatestUserMessageFP = prior.LatestUserMessageFP
 		current.LatestUserMessageText = prior.LatestUserMessageText
 	}
+	current.ToolCallCounts = mergeSyncToolCallCounts(prior.ToolCallCounts, current.ToolCallCounts)
 	current.DetailItems = mergeSyncDetailItems(prior.DetailItems, current.DetailItems)
 	return current
+}
+
+func mergeSyncToolCallCounts(previous, current []int) []int {
+	length := max(len(previous), len(current))
+	if length == 0 {
+		return nil
+	}
+	merged := make([]int, length)
+	for index := range merged {
+		if index < len(previous) {
+			merged[index] = previous[index]
+		}
+		if index < len(current) && current[index] > merged[index] {
+			merged[index] = current[index]
+		}
+	}
+	return merged
 }
 
 func mergeSyncDetailItems(previous, current []model.DetailItem) []model.DetailItem {
@@ -1339,7 +1387,7 @@ func syncDetailItemKey(item model.DetailItem, index int) string {
 	return fmt.Sprintf("%s:%d:%d", item.Kind, item.CommentaryIndex, index)
 }
 
-func (s *Service) deliverSyncSnapshot(ctx context.Context, forum SyncForum, topic model.SyncTopic, current appserver.ThreadReadSnapshot, observedAt time.Time) {
+func (s *Service) deliverSyncSnapshot(ctx context.Context, forum SyncForum, topic model.SyncTopic, current appserver.ThreadReadSnapshot, observedAt time.Time, freshness syncStatusFreshness) {
 	currentTurnID := strings.TrimSpace(current.LatestTurnID)
 	desiredTitle := strings.TrimSpace(current.Thread.Title)
 	if desiredTitle != "" && desiredTitle != current.Thread.ID {
@@ -1357,7 +1405,7 @@ func (s *Service) deliverSyncSnapshot(ctx context.Context, forum SyncForum, topi
 		return
 	}
 	if terminal && statusNeedsCreate {
-		topic, _ = s.deliverSyncStatus(ctx, forum, topic, current, observedAt)
+		topic, _ = s.deliverSyncStatus(ctx, forum, topic, current, observedAt, freshness)
 		finalFP, _ := s.deliverSyncFinal(ctx, forum, topic, current)
 		topic.LastFinalFP = finalFP
 		return
@@ -1365,16 +1413,16 @@ func (s *Service) deliverSyncSnapshot(ctx context.Context, forum SyncForum, topi
 	if terminal {
 		finalFP, _ := s.deliverSyncFinal(ctx, forum, topic, current)
 		topic.LastFinalFP = finalFP
-		s.deliverSyncStatus(ctx, forum, topic, current, observedAt)
+		s.deliverSyncStatus(ctx, forum, topic, current, observedAt, freshness)
 		return
 	}
-	topic, _ = s.deliverSyncStatus(ctx, forum, topic, current, observedAt)
+	topic, _ = s.deliverSyncStatus(ctx, forum, topic, current, observedAt, freshness)
 	_, _ = s.deliverSyncFinal(ctx, forum, topic, current)
 }
 
-func (s *Service) deliverSyncStatus(ctx context.Context, forum SyncForum, topic model.SyncTopic, current appserver.ThreadReadSnapshot, observedAt time.Time) (model.SyncTopic, bool) {
+func (s *Service) deliverSyncStatus(ctx context.Context, forum SyncForum, topic model.SyncTopic, current appserver.ThreadReadSnapshot, observedAt time.Time, freshness syncStatusFreshness) (model.SyncTopic, bool) {
 	currentTurnID := strings.TrimSpace(current.LatestTurnID)
-	statusMessage := renderSyncStatusAt(current, observedAt)
+	statusMessage := renderSyncStatusWithFreshnessAt(current, freshness, observedAt)
 	renderFP := syncFingerprint(tgformat.HashRendered(statusMessage))
 	statusID := topic.StatusMessageID
 	statusTurnID := strings.TrimSpace(topic.StatusTurnID)
@@ -1529,7 +1577,12 @@ func (s *Service) runSyncDelivery(ctx context.Context, threadID string) {
 	if forum == nil {
 		return
 	}
-	s.deliverSyncSnapshot(ctx, forum, *topic, current, s.now().UTC())
+	now := s.now().UTC()
+	freshness := syncStatusFreshness{
+		SnapshotAt: parseTime(stored.LastPollAt),
+		EventAt:    s.lastSyncAppServerEvent(threadID),
+	}
+	s.deliverSyncSnapshot(ctx, forum, *topic, current, now, freshness)
 }
 
 func renderSyncFinal(finalText string) []model.RenderedMessage {
@@ -1823,7 +1876,16 @@ func syncActivationThreadPriority(thread model.Thread) int {
 	}
 }
 
+type syncStatusFreshness struct {
+	SnapshotAt time.Time
+	EventAt    time.Time
+}
+
 func renderSyncStatusAt(snapshot appserver.ThreadReadSnapshot, now time.Time) model.RenderedMessage {
+	return renderSyncStatusWithFreshnessAt(snapshot, syncStatusFreshness{}, now)
+}
+
+func renderSyncStatusWithFreshnessAt(snapshot appserver.ThreadReadSnapshot, freshness syncStatusFreshness, now time.Time) model.RenderedMessage {
 	now = syncStatusRenderTime(snapshot, now)
 	status := strings.TrimSpace(snapshot.LatestTurnStatus)
 	if snapshot.WaitingOnApproval || snapshot.WaitingOnReply {
@@ -1838,6 +1900,10 @@ func renderSyncStatusAt(snapshot appserver.ThreadReadSnapshot, now time.Time) mo
 	header := syncStatusHeader + " " + status
 	if duration, _ := runTimingValue(&snapshot, now); duration != "" {
 		header += " · " + duration
+	}
+	if !isTerminalStatus(snapshot.LatestTurnStatus) && (!freshness.SnapshotAt.IsZero() || !freshness.EventAt.IsZero()) {
+		header += "\n↻ snapshot " + formatSyncFreshnessTime(freshness.SnapshotAt, now) +
+			" · event " + formatSyncFreshnessTime(freshness.EventAt, now)
 	}
 
 	blocks := syncStatusBlocks(snapshot.DetailItems)
@@ -1855,6 +1921,18 @@ func renderSyncStatusAt(snapshot appserver.ThreadReadSnapshot, now time.Time) mo
 		}}
 	}
 	return message
+}
+
+func formatSyncFreshnessTime(value, now time.Time) string {
+	if value.IsZero() {
+		return "—"
+	}
+	value = value.Local().Truncate(syncStatusTimerTick)
+	now = now.Local()
+	if value.Year() == now.Year() && value.YearDay() == now.YearDay() {
+		return value.Format("15:04:05")
+	}
+	return value.Format("2006-01-02 15:04")
 }
 
 func syncStatusRenderTime(snapshot appserver.ThreadReadSnapshot, now time.Time) time.Time {
@@ -1934,62 +2012,44 @@ func renderSyncStatusBlocks(snapshot appserver.ThreadReadSnapshot, blocks []mode
 		if endedAt.Before(starts[index]) {
 			endedAt = starts[index]
 		}
-		part := fmt.Sprintf("Блок %d · %s\n%s", index+1, formatToolDuration(endedAt.Sub(starts[index])), strings.TrimSpace(block.Text))
-		if tools := renderSyncStatusTools(snapshot.DetailItems, block, index); tools != "" {
-			part += "\n" + tools
+		blockHeader := fmt.Sprintf("Блок %d · %s", index+1, formatToolDuration(endedAt.Sub(starts[index])))
+		if toolCount := syncStatusBlockToolCount(snapshot, block, index); toolCount > 0 {
+			blockHeader += fmt.Sprintf(" · tools %d", toolCount)
 		}
+		part := blockHeader + "\n" + strings.TrimSpace(block.Text)
 		parts = append(parts, part)
 	}
 	return strings.Join(parts, "\n\n")
 }
 
-func renderSyncStatusTools(items []model.DetailItem, block model.DetailItem, blockIndex int) string {
+func syncStatusBlockToolCount(snapshot appserver.ThreadReadSnapshot, block model.DetailItem, blockIndex int) int {
 	commentaryIndex := block.CommentaryIndex
 	if commentaryIndex <= 0 {
 		commentaryIndex = blockIndex + 1
 	}
-	tools := make([]model.DetailItem, 0)
-	for _, item := range items {
-		if item.Kind == model.DetailItemTool && item.CommentaryIndex == commentaryIndex && strings.TrimSpace(item.Label) != "" {
-			tools = append(tools, item)
+	if commentaryIndex < len(snapshot.ToolCallCounts) {
+		return snapshot.ToolCallCounts[commentaryIndex]
+	}
+	seen := make(map[string]struct{})
+	count := 0
+	for index, item := range snapshot.DetailItems {
+		if item.Kind != model.DetailItemTool || item.CommentaryIndex != commentaryIndex {
+			continue
 		}
-	}
-	if len(tools) == 0 {
-		return ""
-	}
-	lines := make([]string, 0, min(len(tools), syncStatusToolLimit))
-	appendTool := func(item model.DetailItem) {
-		label := strings.Join(strings.Fields(strings.TrimSpace(item.Label)), " ")
-		runes := []rune(label)
-		if len(runes) > 180 {
-			label = string(runes[:179]) + "…"
+		key := strings.TrimSpace(item.ID)
+		if key == "" {
+			key = strings.TrimSpace(item.FP)
 		}
-		lines = append(lines, "└ "+syncStatusToolMarker(item.Status)+" "+label)
-	}
-	if len(tools) <= syncStatusToolLimit {
-		for _, tool := range tools {
-			appendTool(tool)
+		if key == "" {
+			key = fmt.Sprintf("detail:%d", index)
 		}
-		return strings.Join(lines, "\n")
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		count++
 	}
-	appendTool(tools[0])
-	appendTool(tools[1])
-	lines = append(lines, fmt.Sprintf("└ … ещё %d tools", len(tools)-3))
-	appendTool(tools[len(tools)-1])
-	return strings.Join(lines, "\n")
-}
-
-func syncStatusToolMarker(status string) string {
-	switch strings.ToLower(strings.TrimSpace(status)) {
-	case "completed", "succeeded", "success":
-		return "✓"
-	case "failed", "interrupted", "cancelled", "canceled":
-		return "×"
-	case "running", "inprogress", "active", "started":
-		return "◌"
-	default:
-		return "·"
-	}
+	return count
 }
 
 func trimSyncStatusBody(header, body string) string {
