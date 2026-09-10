@@ -373,11 +373,20 @@ func boundCompactSnapshot(snapshot *ThreadReadSnapshot) {
 		return
 	}
 	snapshot.LatestProgressText = truncateSnapshotText(snapshot.LatestProgressText, compactSnapshotFieldLimit)
-	snapshot.LatestToolOutput = truncateSnapshotText(snapshot.LatestToolOutput, compactSnapshotFieldLimit)
-	for index := range snapshot.DetailItems {
-		snapshot.DetailItems[index].Text = truncateSnapshotText(snapshot.DetailItems[index].Text, compactSnapshotFieldLimit)
-		snapshot.DetailItems[index].Output = truncateSnapshotText(snapshot.DetailItems[index].Output, compactSnapshotFieldLimit)
+	// Telegram renders tool identity and status, never command output. Keeping
+	// outputs here rewrites large blobs on every event-triggered refresh without
+	// improving the projection, so discard them before persistence.
+	snapshot.LatestToolOutput = ""
+	details := snapshot.DetailItems[:0]
+	for _, item := range snapshot.DetailItems {
+		if item.Kind == model.DetailItemOutput {
+			continue
+		}
+		item.Text = truncateSnapshotText(item.Text, compactSnapshotFieldLimit)
+		item.Output = ""
+		details = append(details, item)
 	}
+	snapshot.DetailItems = details
 	if len(snapshot.DetailItems) > compactSnapshotDetailLimit {
 		snapshot.DetailItems = snapshot.DetailItems[len(snapshot.DetailItems)-compactSnapshotDetailLimit:]
 	}

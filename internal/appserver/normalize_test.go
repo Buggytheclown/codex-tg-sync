@@ -78,19 +78,25 @@ func TestThreadFromPayloadDoesNotPersistTurnsInRawIndexJSON(t *testing.T) {
 	}
 }
 
-func TestCompactSnapshotBoundsToolOutputButKeepsFinal(t *testing.T) {
+func TestCompactSnapshotDropsToolOutputButKeepsFinal(t *testing.T) {
 	large := strings.Repeat("x", compactSnapshotFieldLimit*2)
 	compact := CompactSnapshot(nil, ThreadReadSnapshot{
 		LatestToolOutput: large,
 		LatestFinalText:  large,
-		DetailItems:      []model.DetailItem{{Kind: "tool", Output: large}},
+		DetailItems: []model.DetailItem{
+			{Kind: model.DetailItemTool, Label: "go test ./...", Status: "completed"},
+			{Kind: model.DetailItemOutput, Output: large},
+		},
 	}, time.Now())
 	var snapshot ThreadReadSnapshot
 	if err := json.Unmarshal(compact.CompactJSON, &snapshot); err != nil {
 		t.Fatal(err)
 	}
-	if len(snapshot.LatestToolOutput) >= len(large) || len(snapshot.DetailItems[0].Output) >= len(large) {
-		t.Fatal("compact snapshot retained an unbounded tool output")
+	if snapshot.LatestToolOutput != "" {
+		t.Fatalf("LatestToolOutput = %q, want omitted from compact projection", snapshot.LatestToolOutput)
+	}
+	if len(snapshot.DetailItems) != 1 || snapshot.DetailItems[0].Kind != model.DetailItemTool {
+		t.Fatalf("DetailItems = %#v, want only tool metadata", snapshot.DetailItems)
 	}
 	if snapshot.LatestFinalText != large {
 		t.Fatal("final response was truncated")
