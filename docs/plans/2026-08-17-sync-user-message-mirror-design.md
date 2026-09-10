@@ -55,13 +55,13 @@ For each authoritative snapshot:
 3. A Telegram-origin new turn without pending state also advances
    `last_user_fp` without sending.
 4. Otherwise send one silent `[User]` message and persist `last_user_fp`.
-5. If the prior live status belongs to this same turn, reset and best-effort
-   delete it. Normal status delivery then creates a fresh tail anchor.
+5. Keep the turn's existing Status anchor and edit it in place.
 6. Continue with the existing status and final fingerprint lifecycle.
 
-User delivery failure stops presentation for that snapshot so status/final do
-not overtake a missing user message. The next poll retries. Status deletion
-remains best-effort and follows the existing tail-status contract.
+User delivery failure stops active Status presentation for that snapshot and is
+retried by later event or safety reconciliation. At terminal state, Final is
+attempted independently so a transient User failure cannot hide the result;
+the safety reconciliation still retries the missing User fingerprint.
 
 ## Rejected Alternatives
 

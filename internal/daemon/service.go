@@ -84,9 +84,12 @@ type Service struct {
 	syncPollEventGeneration      uint64
 	syncPollEventCancel          context.CancelFunc
 	syncReconcileWake            chan struct{}
+	syncDirtyMu                  sync.Mutex
+	syncDirtyWake                chan struct{}
+	syncDirtyThreads             map[string]struct{}
 	syncDeliveryMu               sync.Mutex
 	syncDeliveryJobs             chan string
-	syncDeliveryPending          map[string][]syncDeliveryJob
+	syncDeliveryPending          map[string]bool
 	syncDeliveryQueued           map[string]bool
 	sender                       Sender
 	externalReplySender          ExternalReplySender
@@ -135,8 +138,10 @@ func New(cfg config.Config) (*Service, error) {
 		store:               store,
 		externalLaunchWake:  make(chan struct{}, 1),
 		syncReconcileWake:   make(chan struct{}, 1),
+		syncDirtyWake:       make(chan struct{}, 1),
+		syncDirtyThreads:    map[string]struct{}{},
 		syncDeliveryJobs:    make(chan string, 256),
-		syncDeliveryPending: map[string][]syncDeliveryJob{},
+		syncDeliveryPending: map[string]bool{},
 		syncDeliveryQueued:  map[string]bool{},
 		logger:              discardDiagnosticLogger(),
 		diagnosticBy:        map[string]int{},
@@ -288,6 +293,7 @@ func (s *Service) Start(ctx context.Context) error {
 	s.spawn(runCtx, s.externalLaunchLoop)
 	s.spawn(runCtx, s.externalReplyLoop)
 	s.spawn(runCtx, s.telegramDeliveryLoop)
+	s.spawn(runCtx, s.syncDirtyLoop)
 	s.spawn(runCtx, s.syncDeliveryLoop)
 	s.spawn(runCtx, s.syncDeliveryLoop)
 	s.spawn(runCtx, s.controlLoop)
@@ -449,136 +455,6 @@ func (s *Service) ensurePollSessionLocked(ctx context.Context) {
 	s.installSyncPollEvents(client, generation)
 }
 
-func mergeLiveToolSnapshot(current *appserver.ThreadReadSnapshot, liveTool appserver.ThreadReadSnapshot) bool {
-	if current == nil || strings.TrimSpace(liveTool.LatestToolFP) == "" {
-		return false
-	}
-	turnID := strings.TrimSpace(liveTool.LatestTurnID)
-	if turnID == "" {
-		turnID = strings.TrimSpace(current.LatestTurnID)
-	}
-	if turnID == "" {
-		return false
-	}
-	if current.LatestTurnID != "" && current.LatestTurnID != turnID {
-		if !isTerminalStatus(current.LatestTurnStatus) || !turnIDAfter(turnID, current.LatestTurnID) {
-			return false
-		}
-	}
-	if current.LatestTurnID == turnID && isTerminalStatus(current.LatestTurnStatus) && strings.TrimSpace(current.LatestFinalFP) != "" {
-		return false
-	}
-	if current.LatestTurnID == turnID && liveToolIsOlderThanCurrentSameTurn(*current, liveTool) {
-		return false
-	}
-	if current.LatestTurnID == turnID &&
-		sameToolSnapshot(*current, liveTool) &&
-		terminalToolStatus(current.LatestToolStatus) &&
-		!terminalToolStatus(liveTool.LatestToolStatus) {
-		return false
-	}
-	current.LatestTurnID = turnID
-	current.LatestTurnStatus = firstNonEmpty(liveTool.LatestTurnStatus, current.LatestTurnStatus, "inProgress")
-	current.Thread.ActiveTurnID = turnID
-	current.Thread.Status = firstNonEmpty(liveTool.Thread.Status, current.Thread.Status, "inProgress")
-	current.LatestToolID = liveTool.LatestToolID
-	current.LatestToolKind = liveTool.LatestToolKind
-	current.LatestToolLabel = liveTool.LatestToolLabel
-	current.LatestToolStatus = liveTool.LatestToolStatus
-	current.LatestToolOutput = liveTool.LatestToolOutput
-	current.LatestToolFP = liveTool.LatestToolFP
-	current.LatestToolLiveCurrent = liveTool.LatestToolLiveCurrent
-	current.LatestProgressText = liveTool.LatestProgressText
-	current.LatestProgressFP = liveTool.LatestProgressFP
-	current.DetailItems = upsertLiveToolDetails(current.DetailItems, liveTool.DetailItems)
-	return true
-}
-
-func (s *Service) preserveTelegramOriginLiveCurrentTool(ctx context.Context, current *appserver.ThreadReadSnapshot, previous *model.ThreadSnapshotState) {
-	if current == nil || previous == nil || len(previous.CompactJSON) == 0 {
-		return
-	}
-	if isTerminalStatus(current.LatestTurnStatus) {
-		return
-	}
-	var prev appserver.ThreadReadSnapshot
-	if err := json.Unmarshal(previous.CompactJSON, &prev); err != nil {
-		return
-	}
-	turnID := strings.TrimSpace(current.LatestTurnID)
-	if turnID == "" || turnID != strings.TrimSpace(prev.LatestTurnID) {
-		return
-	}
-	if !prev.LatestToolLiveCurrent || isTerminalStatus(prev.LatestTurnStatus) || terminalToolStatus(prev.LatestToolStatus) {
-		return
-	}
-	threadID := strings.TrimSpace(firstNonEmpty(current.Thread.ID, prev.Thread.ID))
-	if threadID == "" || !s.isTelegramOriginTurn(ctx, threadID, turnID) {
-		return
-	}
-	label := strings.TrimSpace(cleanTelegramNilLiteral(prev.LatestToolLabel))
-	if label == "" || strings.TrimSpace(prev.LatestToolFP) == "" {
-		return
-	}
-	if !shouldPreserveTelegramOriginLiveCurrentTool(*current, prev) {
-		return
-	}
-	current.LatestToolID = prev.LatestToolID
-	current.LatestToolKind = prev.LatestToolKind
-	current.LatestToolLabel = prev.LatestToolLabel
-	current.LatestToolStatus = prev.LatestToolStatus
-	current.LatestToolOutput = prev.LatestToolOutput
-	current.LatestToolFP = prev.LatestToolFP
-	current.LatestToolLiveCurrent = prev.LatestToolLiveCurrent
-	current.LatestProgressText = prev.LatestProgressText
-	current.LatestProgressFP = prev.LatestProgressFP
-	current.LatestToolStartedAt = prev.LatestToolStartedAt
-	current.LatestToolUpdatedAt = prev.LatestToolUpdatedAt
-	current.DetailItems = upsertLiveToolDetails(current.DetailItems, toolOutputDetailItems(prev.DetailItems))
-}
-
-func shouldPreserveTelegramOriginLiveCurrentTool(current, previous appserver.ThreadReadSnapshot) bool {
-	if !snapshotHasToolEvidence(current) {
-		return true
-	}
-	if sameToolSnapshot(current, previous) {
-		return !terminalToolStatus(current.LatestToolStatus)
-	}
-	previousIndex := latestToolDetailIndex(previous.DetailItems, previous.LatestToolID, previous.LatestToolLabel)
-	currentIndex := latestToolDetailIndex(previous.DetailItems, current.LatestToolID, current.LatestToolLabel)
-	return previousIndex >= 0 && currentIndex >= 0 && currentIndex < previousIndex
-}
-
-func snapshotHasToolEvidence(snapshot appserver.ThreadReadSnapshot) bool {
-	if strings.TrimSpace(cleanTelegramNilLiteral(snapshot.LatestToolID)) != "" ||
-		strings.TrimSpace(cleanTelegramNilLiteral(snapshot.LatestToolLabel)) != "" ||
-		strings.TrimSpace(cleanTelegramNilLiteral(snapshot.LatestToolOutput)) != "" ||
-		strings.TrimSpace(snapshot.LatestToolFP) != "" {
-		return true
-	}
-	for _, item := range snapshot.DetailItems {
-		switch item.Kind {
-		case model.DetailItemTool, model.DetailItemOutput:
-			return true
-		}
-	}
-	return false
-}
-
-func toolOutputDetailItems(items []model.DetailItem) []model.DetailItem {
-	if len(items) == 0 {
-		return nil
-	}
-	out := make([]model.DetailItem, 0, len(items))
-	for _, item := range items {
-		switch item.Kind {
-		case model.DetailItemTool, model.DetailItemOutput:
-			out = append(out, item)
-		}
-	}
-	return out
-}
-
 func turnIDAfter(candidate, current string) bool {
 	candidate = strings.TrimSpace(candidate)
 	current = strings.TrimSpace(current)
@@ -589,74 +465,6 @@ func turnIDAfter(candidate, current string) bool {
 		return false
 	}
 	return strings.Compare(candidate, current) > 0
-}
-
-func liveToolIsOlderThanCurrentSameTurn(current, liveTool appserver.ThreadReadSnapshot) bool {
-	currentIndex := latestToolDetailIndex(current.DetailItems, current.LatestToolID, current.LatestToolLabel)
-	liveIndex := latestToolDetailIndex(current.DetailItems, liveTool.LatestToolID, liveTool.LatestToolLabel)
-	return currentIndex >= 0 && liveIndex >= 0 && liveIndex < currentIndex
-}
-
-func latestToolDetailIndex(items []model.DetailItem, toolID, label string) int {
-	toolID = strings.TrimSpace(toolID)
-	label = strings.TrimSpace(label)
-	if toolID == "" && label == "" {
-		return -1
-	}
-	for i := len(items) - 1; i >= 0; i-- {
-		item := items[i]
-		if item.Kind != model.DetailItemTool {
-			continue
-		}
-		if toolID != "" && strings.TrimSpace(item.ID) == toolID {
-			return i
-		}
-		if toolID == "" && label != "" && strings.TrimSpace(item.Label) == label {
-			return i
-		}
-	}
-	return -1
-}
-
-func upsertLiveToolDetails(items []model.DetailItem, liveItems []model.DetailItem) []model.DetailItem {
-	if len(liveItems) == 0 {
-		return items
-	}
-	remove := map[string]struct{}{}
-	for _, item := range liveItems {
-		if id := strings.TrimSpace(item.ID); id != "" {
-			remove[id] = struct{}{}
-		}
-	}
-	out := make([]model.DetailItem, 0, len(items)+len(liveItems))
-	for _, item := range items {
-		if _, ok := remove[strings.TrimSpace(item.ID)]; ok {
-			continue
-		}
-		out = append(out, item)
-	}
-	out = append(out, liveItems...)
-	return out
-}
-
-func sameToolSnapshot(left, right appserver.ThreadReadSnapshot) bool {
-	leftID := strings.TrimSpace(left.LatestToolID)
-	rightID := strings.TrimSpace(right.LatestToolID)
-	if leftID != "" && rightID != "" {
-		return leftID == rightID
-	}
-	leftLabel := strings.TrimSpace(left.LatestToolLabel)
-	rightLabel := strings.TrimSpace(right.LatestToolLabel)
-	return leftLabel != "" && leftLabel == rightLabel
-}
-
-func terminalToolStatus(status string) bool {
-	switch strings.ToLower(strings.TrimSpace(status)) {
-	case "completed", "succeeded", "failed", "interrupted", "cancelled", "canceled":
-		return true
-	default:
-		return false
-	}
 }
 
 func (s *Service) indexLoop(ctx context.Context) {

@@ -48,6 +48,7 @@ const (
 	syncApprovalHeader  = "🔐 [Approval]"
 	syncInputHeader     = "❓ [Input]"
 	syncStatusTimerTick = 10 * time.Second
+	syncStatusToolLimit = 4
 )
 
 type SyncForumFailureKind string
@@ -663,12 +664,6 @@ type reconcileSyncResult struct {
 	ReadFailures         int
 }
 
-type syncDeliveryJob struct {
-	SessionID string
-	Topic     model.SyncTopic
-	Snapshot  appserver.ThreadReadSnapshot
-}
-
 func (s *Service) reconcileSyncCommand(ctx context.Context) (*DirectResponse, error) {
 	s.syncMu.Lock()
 	defer s.syncMu.Unlock()
@@ -731,19 +726,41 @@ func (s *Service) reconcileSyncLocked(ctx context.Context) (reconcileSyncResult,
 		}
 		previous, _ := s.store.GetSnapshot(ctx, topic.ThreadID)
 		if isTerminalStatus(current.LatestTurnStatus) {
-			finalDelivered := strings.TrimSpace(current.LatestFinalFP) == "" || current.LatestFinalFP == topic.LastFinalFP
-			if previous != nil && previous.LastSeenTurnID == current.LatestTurnID && isTerminalStatus(previous.LastSeenTurnStatus) && finalDelivered {
+			if previous != nil && previous.LastSeenTurnID == current.LatestTurnID && isTerminalStatus(previous.LastSeenTurnStatus) &&
+				syncStoredTerminalPresentationDelivered(previous, topic) {
 				continue
 			}
-			current, readErr = readLatestSyncSnapshot(ctx, poll, topic.ThreadID)
-			if readErr != nil {
-				result.ReadFailures++
-				continue
-			}
+		}
+		current, readErr = readLatestSyncSnapshot(ctx, poll, topic.ThreadID)
+		if readErr != nil {
+			result.ReadFailures++
+			continue
 		}
 		s.processSyncSnapshotLocked(ctx, state, forum, topic, current, "sync_poll")
 	}
 	return result, discoveryErr
+}
+
+func syncStoredTerminalPresentationDelivered(previous *model.ThreadSnapshotState, topic model.SyncTopic) bool {
+	if previous == nil || len(previous.CompactJSON) == 0 {
+		return false
+	}
+	var snapshot appserver.ThreadReadSnapshot
+	if json.Unmarshal(previous.CompactJSON, &snapshot) != nil {
+		return false
+	}
+	if snapshot.LatestFinalFP != "" && snapshot.LatestFinalFP != topic.LastFinalFP {
+		return false
+	}
+	if snapshot.LatestUserMessageFP != "" && snapshot.LatestUserMessageFP != topic.LastUserFP {
+		return false
+	}
+	turnID := strings.TrimSpace(snapshot.LatestTurnID)
+	if topic.StatusMessageID == 0 || strings.TrimSpace(topic.StatusTurnID) != turnID {
+		return strings.TrimSpace(snapshot.LatestFinalFP) != "" && snapshot.LatestFinalFP == topic.LastFinalFP
+	}
+	desired := syncFingerprint(tgformat.HashRendered(renderSyncStatusAt(snapshot, time.Time{})))
+	return desired != "" && desired == topic.LastRenderFP
 }
 
 func (s *Service) discoverSyncThreadsLocked(ctx context.Context, state model.SyncState, forum SyncForum, poll Session, topics []model.SyncTopic) (int, int, error) {
@@ -925,6 +942,10 @@ func (s *Service) syncWriterEventLoop(ctx context.Context, process Session, even
 			if !ok {
 				return
 			}
+			if event.Channel == "event_gap" {
+				s.wakeSyncReconcile()
+				continue
+			}
 			s.handleSyncWriterEvent(ctx, process, event, generation)
 		}
 	}
@@ -986,146 +1007,39 @@ func (s *Service) handleSyncPollEvent(ctx context.Context, process Session, even
 		return
 	}
 	s.syncMu.Lock()
-	defer s.syncMu.Unlock()
 	if s.syncPollEventProcess != process || s.syncPollEventGeneration != generation {
+		s.syncMu.Unlock()
 		return
 	}
 	state, err := s.store.GetSyncState(ctx)
 	if err != nil || (state.State != model.SyncStateActive && state.State != model.SyncStateDraining) {
+		s.syncMu.Unlock()
 		return
 	}
 	topic, err := s.store.GetActiveSyncTopicByThread(ctx, state.SessionID, threadID)
 	if err != nil || topic == nil {
+		s.syncMu.Unlock()
 		return
 	}
 	if approval, ok := appserver.PendingApprovalFromServerRequest(event); ok {
 		s.handleSyncPendingRequestLocked(ctx, *topic, *approval)
+		s.syncMu.Unlock()
+		s.markSyncThreadDirty(threadID)
 		return
 	}
 	if strings.EqualFold(event.Method, "serverRequest/resolved") {
 		if requestID := payloadMapString(event.Params, "requestId"); requestID != "" {
 			_ = s.store.ExpireSyncCallbackRoutesByRequest(ctx, requestID)
 		}
+		s.syncMu.Unlock()
+		s.markSyncThreadDirty(threadID)
 		return
 	}
-	var current appserver.ThreadReadSnapshot
-	if isTerminalSyncEvent(event) {
-		current, err = readLatestSyncSnapshot(ctx, process, threadID)
-		if err != nil {
-			s.wakeSyncReconcile()
-			return
-		}
-	} else {
-		previous, _ := s.store.GetSnapshot(ctx, threadID)
-		var applied bool
-		current, applied = applySyncLiveEvent(previous, event, topic.Title, s.now().UTC())
-		if !applied {
-			return
-		}
+	invalidates := syncEventInvalidatesSnapshot(event)
+	s.syncMu.Unlock()
+	if invalidates {
+		s.markSyncThreadDirty(threadID)
 	}
-	s.processSyncSnapshotLocked(ctx, state, s.getSyncForum(), *topic, current, "sync_poll_event")
-}
-
-func isTerminalSyncEvent(event appserver.Event) bool {
-	method := strings.ToLower(strings.TrimSpace(event.Method))
-	if method == "turn/completed" || strings.Contains(method, "task_complete") || strings.Contains(method, "turn_aborted") {
-		return true
-	}
-	if method == "thread/status/changed" {
-		normalized, ok := appserver.NormalizeAppServerLiveEvent(event, model.Thread{ID: threadIDFromEvent(event)})
-		return ok && isTerminalStatus(normalized.TurnStatus)
-	}
-	return false
-}
-
-func applySyncLiveEvent(previous *model.ThreadSnapshotState, event appserver.Event, fallbackTitle string, observedAt time.Time) (appserver.ThreadReadSnapshot, bool) {
-	var current appserver.ThreadReadSnapshot
-	if previous != nil && len(previous.CompactJSON) > 0 {
-		_ = json.Unmarshal(previous.CompactJSON, &current)
-	}
-	threadID := threadIDFromEvent(event)
-	if current.Thread.ID == "" {
-		current.Thread = model.Thread{ID: threadID, Title: fallbackTitle, Status: "inProgress"}
-	}
-	normalized, ok := appserver.NormalizeAppServerLiveEvent(event, current.Thread)
-	if !ok {
-		return current, false
-	}
-	if normalized.ThreadID != "" {
-		current.Thread.ID = normalized.ThreadID
-	}
-	if normalized.ThreadTitle != "" {
-		current.Thread.Title = normalized.ThreadTitle
-	}
-	if normalized.ProjectName != "" {
-		current.Thread.ProjectName = normalized.ProjectName
-	}
-	current.Thread.UpdatedAt = observedAt.Unix()
-	switch normalized.Kind {
-	case appserver.LiveEventTurnStarted, appserver.LiveEventLegacyTaskStarted:
-		current.LatestTurnID = normalized.TurnID
-		current.LatestTurnStatus = "inProgress"
-		current.Thread.Status = "inProgress"
-		current.Thread.ActiveTurnID = normalized.TurnID
-		current.LatestFinalFP, current.LatestFinalText = "", ""
-		current.LatestToolFP, current.LatestToolOutput = "", ""
-		current.LatestProgressFP, current.LatestProgressText = "", ""
-		current.DetailItems = nil
-		current.LatestAgentMessages = nil
-		current.LatestAgentMessageEntries = nil
-	case appserver.LiveEventThreadStatus:
-		if normalized.TurnStatus != "" {
-			current.Thread.Status = normalized.TurnStatus
-			current.LatestTurnStatus = normalized.TurnStatus
-		}
-	case appserver.LiveEventToolStarted, appserver.LiveEventToolUpdated, appserver.LiveEventToolCompleted:
-		live, hasTool := appserver.ToolSnapshotFromLiveEvent(normalized, current.Thread)
-		if !hasTool || !mergeLiveToolSnapshot(&current, live) {
-			return current, false
-		}
-	case appserver.LiveEventAgentMessage:
-		text := strings.TrimSpace(normalized.Text)
-		if text == "" {
-			return current, false
-		}
-		fp := syncFingerprint(strings.Join([]string{normalized.TurnID, normalized.ItemID, normalized.Phase, text}, "\x00"))
-		entry := appserver.AgentMessageEntry{ID: normalized.ItemID, Phase: normalized.Phase, Text: text, FP: fp}
-		replaced := false
-		for index := range current.LatestAgentMessageEntries {
-			if current.LatestAgentMessageEntries[index].ID == entry.ID && entry.ID != "" {
-				current.LatestAgentMessageEntries[index] = entry
-				replaced = true
-				break
-			}
-		}
-		if !replaced {
-			current.LatestAgentMessageEntries = append(current.LatestAgentMessageEntries, entry)
-		}
-		if len(current.LatestAgentMessageEntries) > 3 {
-			current.LatestAgentMessageEntries = current.LatestAgentMessageEntries[len(current.LatestAgentMessageEntries)-3:]
-		}
-		current.LatestAgentMessages = current.LatestAgentMessages[:0]
-		for _, item := range current.LatestAgentMessageEntries {
-			current.LatestAgentMessages = append(current.LatestAgentMessages, item.Text)
-		}
-		current.LatestProgressFP = fp
-		current.LatestProgressText = text
-		detail := model.DetailItem{ID: normalized.ItemID, Kind: "agentMessage", Phase: normalized.Phase, Text: text, FP: fp}
-		detailReplaced := false
-		for index := range current.DetailItems {
-			if current.DetailItems[index].ID == detail.ID && detail.ID != "" {
-				current.DetailItems[index] = detail
-				detailReplaced = true
-				break
-			}
-		}
-		if !detailReplaced {
-			current.DetailItems = append(current.DetailItems, detail)
-		}
-	default:
-		return current, false
-	}
-	return current, true
 }
 
 func (s *Service) handleSyncWriterEvent(ctx context.Context, process Session, event appserver.Event, generation uint64) {
@@ -1134,59 +1048,150 @@ func (s *Service) handleSyncWriterEvent(ctx context.Context, process Session, ev
 		return
 	}
 	s.syncMu.Lock()
-	defer s.syncMu.Unlock()
 	if s.syncEventProcess != process || s.syncEventGeneration != generation {
+		s.syncMu.Unlock()
 		return
 	}
 	lease, ok := s.syncLeases[threadID]
 	if !ok || lease.Generation != generation {
+		s.syncMu.Unlock()
 		return
 	}
 	state, err := s.store.GetSyncState(ctx)
 	if err != nil || (state.State != model.SyncStateActive && state.State != model.SyncStateDraining) {
+		s.syncMu.Unlock()
 		return
 	}
 	topic, err := s.store.GetActiveSyncTopicByThread(ctx, state.SessionID, threadID)
 	if err != nil || topic == nil || topic.WriterGeneration != generation {
+		s.syncMu.Unlock()
 		return
 	}
 	if eventTurnID := syncEventTurnID(event); eventTurnID != "" && topic.ActiveTurnID != "" && eventTurnID != topic.ActiveTurnID {
+		s.syncMu.Unlock()
 		return
 	}
 	if approval, ok := appserver.PendingApprovalFromServerRequest(event); ok {
 		s.handleSyncPendingRequestLocked(ctx, *topic, *approval)
+		s.syncMu.Unlock()
+		s.markSyncThreadDirty(threadID)
 		return
 	}
 	if strings.EqualFold(event.Method, "serverRequest/resolved") {
 		if requestID := payloadMapString(event.Params, "requestId"); requestID != "" {
 			_ = s.store.ExpireSyncCallbackRoutesByRequest(ctx, requestID)
 		}
+		s.syncMu.Unlock()
+		s.markSyncThreadDirty(threadID)
 		return
 	}
-	var current appserver.ThreadReadSnapshot
-	if isTerminalSyncEvent(event) {
-		current, err = readLatestSyncSnapshot(ctx, process, threadID)
-		if err != nil {
+	invalidates := syncEventInvalidatesSnapshot(event)
+	s.syncMu.Unlock()
+	if invalidates {
+		s.markSyncThreadDirty(threadID)
+	}
+}
+
+func syncEventInvalidatesSnapshot(event appserver.Event) bool {
+	method := strings.ToLower(strings.TrimSpace(event.Method))
+	switch method {
+	case "turn/started", "turn/completed", "thread/status/changed", "item/started", "item/completed":
+		return true
+	}
+	if strings.Contains(method, "task_started") || strings.Contains(method, "task_complete") || strings.Contains(method, "turn_aborted") {
+		return true
+	}
+	normalized, ok := appserver.NormalizeAppServerLiveEvent(event, model.Thread{ID: threadIDFromEvent(event)})
+	if !ok {
+		return false
+	}
+	return normalized.Kind != appserver.LiveEventToolUpdated
+}
+
+func (s *Service) markSyncThreadDirty(threadID string) {
+	threadID = strings.TrimSpace(threadID)
+	if threadID == "" {
+		return
+	}
+	s.syncDirtyMu.Lock()
+	s.syncDirtyThreads[threadID] = struct{}{}
+	s.syncDirtyMu.Unlock()
+	select {
+	case s.syncDirtyWake <- struct{}{}:
+	default:
+	}
+}
+
+func (s *Service) syncDirtyLoop(ctx context.Context) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-s.syncDirtyWake:
+		}
+		timer := time.NewTimer(500 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			if !timer.Stop() {
+				<-timer.C
+			}
+			return
+		case <-timer.C:
+		}
+		s.reconcileDirtySyncThreads(ctx)
+	}
+}
+
+func (s *Service) reconcileDirtySyncThreads(ctx context.Context) {
+	s.syncDirtyMu.Lock()
+	threadIDs := make([]string, 0, len(s.syncDirtyThreads))
+	for threadID := range s.syncDirtyThreads {
+		threadIDs = append(threadIDs, threadID)
+	}
+	s.syncDirtyThreads = map[string]struct{}{}
+	s.syncDirtyMu.Unlock()
+	sort.Strings(threadIDs)
+	for _, threadID := range threadIDs {
+		s.reconcileSyncThread(ctx, threadID)
+	}
+}
+
+func (s *Service) reconcileSyncThread(ctx context.Context, threadID string) {
+	s.syncMu.Lock()
+	defer s.syncMu.Unlock()
+	state, err := s.store.GetSyncState(ctx)
+	if err != nil || (state.State != model.SyncStateActive && state.State != model.SyncStateDraining) {
+		return
+	}
+	topic, err := s.store.GetActiveSyncTopicByThread(ctx, state.SessionID, threadID)
+	if err != nil || topic == nil {
+		return
+	}
+	var session Session
+	if lease, ok := s.syncLeases[threadID]; ok && lease.Generation == topic.WriterGeneration {
+		session = lease.Process
+	} else {
+		s.mu.RLock()
+		poll, connected := s.poll, s.pollConnected
+		s.mu.RUnlock()
+		if !connected {
 			return
 		}
-	} else {
-		previous, _ := s.store.GetSnapshot(ctx, threadID)
-		var applied bool
-		current, applied = applySyncLiveEvent(previous, event, topic.Title, s.now().UTC())
-		if !applied {
-			// Compatibility for legacy/minimal notifications that do not carry
-			// an item body. Current App Server notifications stay read-free.
-			current, err = readLatestSyncSnapshot(ctx, process, threadID)
-			if err != nil {
-				return
-			}
-		}
+		session = poll
 	}
-	forum := s.getSyncForum()
-	s.processSyncSnapshotLocked(ctx, state, forum, *topic, current, "sync_event")
+	if session == nil {
+		return
+	}
+	current, err := readLatestSyncSnapshot(ctx, session, threadID)
+	if err != nil {
+		s.wakeSyncReconcile()
+		return
+	}
+	s.processSyncSnapshotLocked(ctx, state, s.getSyncForum(), *topic, current, "sync_event_read")
 }
 
 func (s *Service) processSyncSnapshotLocked(ctx context.Context, state model.SyncState, forum SyncForum, topic model.SyncTopic, current appserver.ThreadReadSnapshot, operation string) {
+	previous, _ := s.store.GetSnapshot(ctx, topic.ThreadID)
 	activeTurnID := strings.TrimSpace(topic.ActiveTurnID)
 	currentTurnID := strings.TrimSpace(current.LatestTurnID)
 	if topic.ActiveTurnState == model.SyncTurnActive && activeTurnID != "" && currentTurnID != "" && currentTurnID != activeTurnID {
@@ -1199,21 +1204,19 @@ func (s *Service) processSyncSnapshotLocked(ctx context.Context, state model.Syn
 	if topic.ActiveTurnState == model.SyncTurnActive &&
 		activeTurnID != "" &&
 		currentTurnID == activeTurnID {
-		previous, _ := s.store.GetSnapshot(ctx, topic.ThreadID)
 		if s.applyTelegramOriginTerminalGate(ctx, operation, &current, previous) {
 			return
 		}
-		s.preserveTelegramOriginLiveCurrentTool(ctx, &current, previous)
 	}
+	current = monotonicSyncSnapshot(previous, current)
 	s.queueExternalReplyFromSnapshot(ctx, current)
 	if forum != nil {
 		s.mu.RLock()
 		started := s.started
 		s.mu.RUnlock()
 		if started {
-			observed, _ := s.persistSyncSnapshot(ctx, topic, current)
-			job := syncDeliveryJob{SessionID: state.SessionID, Topic: topic, Snapshot: observed}
-			s.enqueueSyncDelivery(job)
+			s.persistSyncSnapshot(ctx, topic, current)
+			s.enqueueSyncDelivery(topic.ThreadID)
 		} else {
 			s.persistAndDeliverSyncSnapshotLocked(ctx, forum, topic, current)
 		}
@@ -1255,6 +1258,7 @@ func (s *Service) persistAndDeliverSyncSnapshotLocked(ctx context.Context, forum
 
 func (s *Service) persistSyncSnapshot(ctx context.Context, topic model.SyncTopic, current appserver.ThreadReadSnapshot) (appserver.ThreadReadSnapshot, time.Time) {
 	previous, _ := s.store.GetSnapshot(ctx, topic.ThreadID)
+	current = monotonicSyncSnapshot(previous, current)
 	observedAt := s.now().UTC()
 	compact := appserver.CompactSnapshot(previous, current, observedAt)
 	observed := current
@@ -1262,6 +1266,77 @@ func (s *Service) persistSyncSnapshot(ctx context.Context, topic model.SyncTopic
 	_ = s.store.UpsertThread(ctx, current.Thread)
 	_ = s.store.UpsertSnapshot(ctx, topic.ThreadID, compact)
 	return observed, observedAt
+}
+
+func monotonicSyncSnapshot(previous *model.ThreadSnapshotState, current appserver.ThreadReadSnapshot) appserver.ThreadReadSnapshot {
+	if previous == nil || len(previous.CompactJSON) == 0 {
+		return current
+	}
+	var prior appserver.ThreadReadSnapshot
+	if json.Unmarshal(previous.CompactJSON, &prior) != nil {
+		return current
+	}
+	priorTurnID := strings.TrimSpace(prior.LatestTurnID)
+	currentTurnID := strings.TrimSpace(current.LatestTurnID)
+	if priorTurnID == "" || currentTurnID == "" {
+		return current
+	}
+	if priorTurnID != currentTurnID {
+		if turnIDAfter(priorTurnID, currentTurnID) {
+			return prior
+		}
+		return current
+	}
+	if isTerminalStatus(prior.LatestTurnStatus) && !isTerminalStatus(current.LatestTurnStatus) {
+		return prior
+	}
+	if current.LatestFinalFP == "" && prior.LatestFinalFP != "" {
+		current.LatestFinalFP = prior.LatestFinalFP
+		current.LatestFinalText = prior.LatestFinalText
+	}
+	if current.LatestUserMessageFP == "" && prior.LatestUserMessageFP != "" {
+		current.LatestUserMessageID = prior.LatestUserMessageID
+		current.LatestUserMessageFP = prior.LatestUserMessageFP
+		current.LatestUserMessageText = prior.LatestUserMessageText
+	}
+	current.DetailItems = mergeSyncDetailItems(prior.DetailItems, current.DetailItems)
+	return current
+}
+
+func mergeSyncDetailItems(previous, current []model.DetailItem) []model.DetailItem {
+	if len(previous) == 0 || len(current) == 0 {
+		if len(current) == 0 {
+			return append([]model.DetailItem(nil), previous...)
+		}
+		return current
+	}
+	out := append([]model.DetailItem(nil), previous...)
+	indexes := make(map[string]int, len(out))
+	for index, item := range out {
+		if key := syncDetailItemKey(item, index); key != "" {
+			indexes[key] = index
+		}
+	}
+	for index, item := range current {
+		key := syncDetailItemKey(item, index)
+		if previousIndex, ok := indexes[key]; ok {
+			if item.StartedAt == "" {
+				item.StartedAt = out[previousIndex].StartedAt
+			}
+			out[previousIndex] = item
+			continue
+		}
+		indexes[key] = len(out)
+		out = append(out, item)
+	}
+	return out
+}
+
+func syncDetailItemKey(item model.DetailItem, index int) string {
+	if id := strings.TrimSpace(item.ID); id != "" {
+		return item.Kind + ":" + id
+	}
+	return fmt.Sprintf("%s:%d:%d", item.Kind, item.CommentaryIndex, index)
 }
 
 func (s *Service) deliverSyncSnapshot(ctx context.Context, forum SyncForum, topic model.SyncTopic, current appserver.ThreadReadSnapshot, observedAt time.Time) {
@@ -1275,14 +1350,39 @@ func (s *Service) deliverSyncSnapshot(ctx context.Context, forum SyncForum, topi
 	}
 	var userDeliveryOK bool
 	topic, userDeliveryOK = s.deliverSyncUserMessageLocked(ctx, forum, topic, current)
-	if !userDeliveryOK {
+	statusNeedsCreate := topic.StatusMessageID == 0 ||
+		(strings.TrimSpace(topic.StatusTurnID) != "" && currentTurnID != "" && strings.TrimSpace(topic.StatusTurnID) != currentTurnID)
+	terminal := isTerminalStatus(current.LatestTurnStatus)
+	if !userDeliveryOK && !terminal {
 		return
 	}
+	if terminal && statusNeedsCreate {
+		topic, _ = s.deliverSyncStatus(ctx, forum, topic, current, observedAt)
+		finalFP, _ := s.deliverSyncFinal(ctx, forum, topic, current)
+		topic.LastFinalFP = finalFP
+		return
+	}
+	if terminal {
+		finalFP, _ := s.deliverSyncFinal(ctx, forum, topic, current)
+		topic.LastFinalFP = finalFP
+		s.deliverSyncStatus(ctx, forum, topic, current, observedAt)
+		return
+	}
+	topic, _ = s.deliverSyncStatus(ctx, forum, topic, current, observedAt)
+	_, _ = s.deliverSyncFinal(ctx, forum, topic, current)
+}
+
+func (s *Service) deliverSyncStatus(ctx context.Context, forum SyncForum, topic model.SyncTopic, current appserver.ThreadReadSnapshot, observedAt time.Time) (model.SyncTopic, bool) {
+	currentTurnID := strings.TrimSpace(current.LatestTurnID)
 	statusMessage := renderSyncStatusAt(current, observedAt)
 	renderFP := syncFingerprint(tgformat.HashRendered(statusMessage))
 	statusID := topic.StatusMessageID
 	statusTurnID := strings.TrimSpace(topic.StatusTurnID)
 	newObservedTurn := statusTurnID != "" && currentTurnID != "" && statusTurnID != currentTurnID
+	if (statusID == 0 || newObservedTurn) && isTerminalStatus(current.LatestTurnStatus) &&
+		strings.TrimSpace(current.LatestFinalFP) != "" && current.LatestFinalFP == topic.LastFinalFP {
+		return topic, true
+	}
 	var deliveryErr error
 	if statusID == 0 || newObservedTurn {
 		statusID, deliveryErr = forum.SendSyncMessage(ctx, topic.TopicID, statusMessage, model.SendOptions{Silent: true, Background: true})
@@ -1290,18 +1390,18 @@ func (s *Service) deliverSyncSnapshot(ctx context.Context, forum SyncForum, topi
 		deliveryErr = forum.EditSyncMessage(ctx, topic.TopicID, statusID, statusMessage, model.SendOptions{Background: true})
 	}
 	if deliveryErr != nil {
-		return
+		return topic, false
 	}
 	if currentTurnID != "" {
 		statusTurnID = currentTurnID
 	}
 	if err := s.store.UpdateSyncTopicStatusDelivery(ctx, topic.SessionID, topic.TopicID, statusID, statusTurnID, renderFP); err != nil {
-		return
+		return topic, false
 	}
 	topic.StatusMessageID = statusID
 	topic.StatusTurnID = statusTurnID
 	topic.LastRenderFP = renderFP
-	_, _ = s.deliverSyncFinal(ctx, forum, topic, current)
+	return topic, true
 }
 
 func (s *Service) deliverSyncFinal(ctx context.Context, forum SyncForum, topic model.SyncTopic, current appserver.ThreadReadSnapshot) (string, error) {
@@ -1342,27 +1442,13 @@ func (s *Service) deliverSyncFinal(ctx context.Context, forum SyncForum, topic m
 	return finalFP, nil
 }
 
-func (s *Service) enqueueSyncDelivery(job syncDeliveryJob) {
-	threadID := strings.TrimSpace(job.Topic.ThreadID)
+func (s *Service) enqueueSyncDelivery(threadID string) {
+	threadID = strings.TrimSpace(threadID)
 	if threadID == "" {
 		return
 	}
 	s.syncDeliveryMu.Lock()
-	queue := s.syncDeliveryPending[threadID]
-	terminal := isTerminalStatus(job.Snapshot.LatestTurnStatus) || strings.TrimSpace(job.Snapshot.LatestFinalFP) != ""
-	if len(queue) > 0 && !terminal {
-		last := queue[len(queue)-1]
-		lastTerminal := isTerminalStatus(last.Snapshot.LatestTurnStatus) || strings.TrimSpace(last.Snapshot.LatestFinalFP) != ""
-		if !lastTerminal && strings.TrimSpace(last.Snapshot.LatestTurnID) == strings.TrimSpace(job.Snapshot.LatestTurnID) {
-			queue[len(queue)-1] = job
-			s.syncDeliveryPending[threadID] = queue
-			s.syncDeliveryMu.Unlock()
-			return
-		}
-	}
-	s.syncDeliveryPending[threadID] = append(queue, job)
-	// Keep only one runnable token per thread. Multiple workers may deliver
-	// different topics, but status and Final for one topic stay ordered.
+	s.syncDeliveryPending[threadID] = true
 	if s.syncDeliveryQueued[threadID] {
 		s.syncDeliveryMu.Unlock()
 		return
@@ -1385,30 +1471,27 @@ func (s *Service) syncDeliveryLoop(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case threadID := <-s.syncDeliveryJobs:
-			job, ok := s.takeSyncDelivery(threadID)
-			if ok {
-				s.runSyncDelivery(ctx, job)
+			if s.takeSyncDelivery(threadID) {
+				s.runSyncDelivery(ctx, threadID)
 			}
 			s.finishSyncDelivery(threadID)
 		}
 	}
 }
 
-func (s *Service) takeSyncDelivery(threadID string) (syncDeliveryJob, bool) {
+func (s *Service) takeSyncDelivery(threadID string) bool {
 	s.syncDeliveryMu.Lock()
 	defer s.syncDeliveryMu.Unlock()
-	queue := s.syncDeliveryPending[threadID]
-	if len(queue) == 0 {
-		return syncDeliveryJob{}, false
+	if !s.syncDeliveryPending[threadID] {
+		return false
 	}
-	job := queue[0]
-	s.syncDeliveryPending[threadID] = queue[1:]
-	return job, true
+	s.syncDeliveryPending[threadID] = false
+	return true
 }
 
 func (s *Service) finishSyncDelivery(threadID string) {
 	s.syncDeliveryMu.Lock()
-	if len(s.syncDeliveryPending[threadID]) == 0 {
+	if !s.syncDeliveryPending[threadID] {
 		delete(s.syncDeliveryPending, threadID)
 		delete(s.syncDeliveryQueued, threadID)
 		s.syncDeliveryMu.Unlock()
@@ -1425,20 +1508,28 @@ func (s *Service) finishSyncDelivery(threadID string) {
 	}
 }
 
-func (s *Service) runSyncDelivery(ctx context.Context, job syncDeliveryJob) {
+func (s *Service) runSyncDelivery(ctx context.Context, threadID string) {
 	state, err := s.store.GetSyncState(ctx)
-	if err != nil || state.SessionID != job.SessionID || (state.State != model.SyncStateActive && state.State != model.SyncStateDraining) {
+	if err != nil || (state.State != model.SyncStateActive && state.State != model.SyncStateDraining) {
 		return
 	}
-	topic, err := s.store.GetActiveSyncTopicByThread(ctx, state.SessionID, job.Topic.ThreadID)
-	if err != nil || topic == nil || topic.TopicID != job.Topic.TopicID {
+	topic, err := s.store.GetActiveSyncTopicByThread(ctx, state.SessionID, threadID)
+	if err != nil || topic == nil {
+		return
+	}
+	stored, err := s.store.GetSnapshot(ctx, threadID)
+	if err != nil || stored == nil || len(stored.CompactJSON) == 0 {
+		return
+	}
+	var current appserver.ThreadReadSnapshot
+	if json.Unmarshal(stored.CompactJSON, &current) != nil {
 		return
 	}
 	forum := s.getSyncForum()
 	if forum == nil {
 		return
 	}
-	s.deliverSyncSnapshot(ctx, forum, *topic, job.Snapshot, s.now().UTC())
+	s.deliverSyncSnapshot(ctx, forum, *topic, current, s.now().UTC())
 }
 
 func renderSyncFinal(finalText string) []model.RenderedMessage {
@@ -1843,9 +1934,62 @@ func renderSyncStatusBlocks(snapshot appserver.ThreadReadSnapshot, blocks []mode
 		if endedAt.Before(starts[index]) {
 			endedAt = starts[index]
 		}
-		parts = append(parts, fmt.Sprintf("Блок %d · %s\n%s", index+1, formatToolDuration(endedAt.Sub(starts[index])), strings.TrimSpace(block.Text)))
+		part := fmt.Sprintf("Блок %d · %s\n%s", index+1, formatToolDuration(endedAt.Sub(starts[index])), strings.TrimSpace(block.Text))
+		if tools := renderSyncStatusTools(snapshot.DetailItems, block, index); tools != "" {
+			part += "\n" + tools
+		}
+		parts = append(parts, part)
 	}
 	return strings.Join(parts, "\n\n")
+}
+
+func renderSyncStatusTools(items []model.DetailItem, block model.DetailItem, blockIndex int) string {
+	commentaryIndex := block.CommentaryIndex
+	if commentaryIndex <= 0 {
+		commentaryIndex = blockIndex + 1
+	}
+	tools := make([]model.DetailItem, 0)
+	for _, item := range items {
+		if item.Kind == model.DetailItemTool && item.CommentaryIndex == commentaryIndex && strings.TrimSpace(item.Label) != "" {
+			tools = append(tools, item)
+		}
+	}
+	if len(tools) == 0 {
+		return ""
+	}
+	lines := make([]string, 0, min(len(tools), syncStatusToolLimit))
+	appendTool := func(item model.DetailItem) {
+		label := strings.Join(strings.Fields(strings.TrimSpace(item.Label)), " ")
+		runes := []rune(label)
+		if len(runes) > 180 {
+			label = string(runes[:179]) + "…"
+		}
+		lines = append(lines, "└ "+syncStatusToolMarker(item.Status)+" "+label)
+	}
+	if len(tools) <= syncStatusToolLimit {
+		for _, tool := range tools {
+			appendTool(tool)
+		}
+		return strings.Join(lines, "\n")
+	}
+	appendTool(tools[0])
+	appendTool(tools[1])
+	lines = append(lines, fmt.Sprintf("└ … ещё %d tools", len(tools)-3))
+	appendTool(tools[len(tools)-1])
+	return strings.Join(lines, "\n")
+}
+
+func syncStatusToolMarker(status string) string {
+	switch strings.ToLower(strings.TrimSpace(status)) {
+	case "completed", "succeeded", "success":
+		return "✓"
+	case "failed", "interrupted", "cancelled", "canceled":
+		return "×"
+	case "running", "inprogress", "active", "started":
+		return "◌"
+	default:
+		return "·"
+	}
 }
 
 func trimSyncStatusBody(header, body string) string {

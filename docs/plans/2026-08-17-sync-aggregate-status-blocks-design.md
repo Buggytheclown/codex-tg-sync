@@ -6,7 +6,9 @@ Each Sync turn owns one live Status message. The message keeps every textual
 commentary/reasoning or plan block observed for that turn in chronological
 order. A new block is appended to the rendered aggregate; an update for the
 same stable item id edits that block in place. User, Final, tool, and tool-output
-items are not Status blocks.
+items are not Status blocks. A bounded list of tool labels is rendered below
+the commentary or plan block identified by the tool item's `CommentaryIndex`;
+tool output is not rendered.
 
 The first line always remains compact and outside any collapsed content so it
 is useful in Telegram topic previews:
@@ -20,6 +22,8 @@ The expanded active body is:
 ```text
 Block 1 · 32s
 Checking the current architecture…
+└ ✓ Read sync.go
+└ ◌ Run go test ./internal/daemon
 
 Block 2 · 1m 05s
 Found the cause…
@@ -101,6 +105,8 @@ one removed line.
 - Consecutive commentary blocks append in chronological order in one message.
 - Same-id commentary updates in place without duplicating or resetting time.
 - Plan blocks participate; tool and output items do not.
+- Tool labels appear below their owning block, use compact lifecycle markers,
+  and long tool lists are bounded without including output.
 - Active block durations approximately sum to the overall elapsed time.
 - Several blocks first observed in one poll receive a deterministic even timing
   allocation.

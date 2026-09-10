@@ -570,10 +570,16 @@ func TestSyncSafetyReconcileSkipsFullReadForStableTerminalTurn(t *testing.T) {
 	}
 	payload := syncCompletedPayload("thread-1", "turn-1", "done")
 	current := appserver.SnapshotFromThreadRead(payload)
-	if err := service.store.UpsertSnapshot(ctx, "thread-1", appserver.CompactSnapshot(nil, current, time.Now())); err != nil {
+	compact := appserver.CompactSnapshot(nil, current, time.Now())
+	if err := service.store.UpsertSnapshot(ctx, "thread-1", compact); err != nil {
 		t.Fatal(err)
 	}
-	if err := service.store.UpdateSyncTopicDelivery(ctx, "s", 11, 100, "turn-1", "status-fp", current.LatestFinalFP); err != nil {
+	var observed appserver.ThreadReadSnapshot
+	if err := json.Unmarshal(compact.CompactJSON, &observed); err != nil {
+		t.Fatal(err)
+	}
+	statusFP := syncFingerprint(tgformat.HashRendered(renderSyncStatusAt(observed, time.Time{})))
+	if err := service.store.UpdateSyncTopicDelivery(ctx, "s", 11, 100, "turn-1", statusFP, current.LatestFinalFP); err != nil {
 		t.Fatal(err)
 	}
 	poll := &latestReadSession{stubSession: &stubSession{}, summary: payload, full: payload}
@@ -672,7 +678,7 @@ func TestSyncLongFinalFailureKeepsFingerprintPending(t *testing.T) {
 	}
 }
 
-func TestSyncTerminalStatusFailureDefersFinal(t *testing.T) {
+func TestSyncTerminalStatusFailureDoesNotDeferFinal(t *testing.T) {
 	service := activeSyncService(t)
 	ctx := context.Background()
 	poll := &stubSession{threadReads: map[string]map[string]any{
@@ -689,12 +695,12 @@ func TestSyncTerminalStatusFailureDefersFinal(t *testing.T) {
 	forum.editErr = errors.New("temporary Telegram failure")
 	poll.threadReads["thread-1"] = syncCompletedPayload("thread-1", "turn-1", "done")
 	service.reconcileSync(ctx)
-	if len(forum.sends) != 1 {
-		t.Fatalf("sends=%#v, want no Final before completed status succeeds", forum.sends)
+	if len(forum.sends) != 2 || forum.sends[1].text != syncFinalHeader+"\ndone" {
+		t.Fatalf("sends=%#v, want Final despite failed completed-status edit", forum.sends)
 	}
 	topic, err := service.store.GetActiveSyncTopic(ctx, -1001, 11)
-	if err != nil || topic == nil || topic.LastFinalFP != "" || topic.StatusMessageID != statusID {
-		t.Fatalf("topic=%#v err=%v, want pending Final and stable status %d", topic, err, statusID)
+	if err != nil || topic == nil || topic.LastFinalFP == "" || topic.StatusMessageID != statusID {
+		t.Fatalf("topic=%#v err=%v, want delivered Final and stable status %d", topic, err, statusID)
 	}
 
 	forum.editErr = nil
@@ -702,48 +708,117 @@ func TestSyncTerminalStatusFailureDefersFinal(t *testing.T) {
 	if len(forum.edits) != 2 || forum.edits[1].messageID != statusID || !strings.HasPrefix(forum.edits[1].text, syncStatusHeader+" completed") {
 		t.Fatalf("edits=%#v, want completed status retried in place", forum.edits)
 	}
-	if len(forum.sends) != 2 || forum.sends[1].text != syncFinalHeader+"\ndone" {
-		t.Fatalf("sends=%#v, want Final only after status retry", forum.sends)
+	if len(forum.sends) != 2 {
+		t.Fatalf("sends=%#v, want Final delivered exactly once", forum.sends)
 	}
 }
 
-func TestSyncDeliveryCoalescesOnlyNonTerminalStatus(t *testing.T) {
+func TestSyncTerminalUserFailureRetriesAfterFinal(t *testing.T) {
+	service := activeSyncService(t)
+	ctx := context.Background()
+	payload := syncCompletedPayload("thread-1", "turn-1", "done")
+	thread := payload["thread"].(map[string]any)
+	turn := thread["turns"].([]any)[0].(map[string]any)
+	turn["items"] = append([]any{map[string]any{
+		"id": "user-1", "type": "userMessage", "content": []any{map[string]any{"type": "text", "text": "Desktop request"}},
+	}}, turn["items"].([]any)...)
+	poll := &stubSession{threadReads: map[string]map[string]any{"thread-1": payload}}
+	service.mu.Lock()
+	service.poll, service.pollConnected = poll, true
+	service.mu.Unlock()
+	forum := &fakeSyncForum{sendErrAt: 1, sendErr: errors.New("temporary user delivery failure")}
+	service.SetSyncForum(forum)
+
+	service.reconcileSync(ctx)
+	topic, err := service.store.GetActiveSyncTopic(ctx, -1001, 11)
+	if err != nil || topic == nil || topic.LastUserFP != "" || topic.LastFinalFP == "" {
+		t.Fatalf("topic=%#v err=%v, want pending User and delivered Final", topic, err)
+	}
+	forum.sendErrAt, forum.sendErr = 0, nil
+	service.reconcileSync(ctx)
+	topic, err = service.store.GetActiveSyncTopic(ctx, -1001, 11)
+	if err != nil || topic == nil || topic.LastUserFP == "" {
+		t.Fatalf("topic=%#v err=%v, want User retry committed", topic, err)
+	}
+	if got := forum.sends[len(forum.sends)-1].text; got != syncUserHeader+"\nDesktop request" {
+		t.Fatalf("last retry=%q, want User", got)
+	}
+}
+
+func TestSyncDeliveryCoalescesToOneLateBoundThreadWake(t *testing.T) {
 	service := newTestService(t)
-	topic := model.SyncTopic{SessionID: "s", ThreadID: "thread-1", TopicID: 11}
-	service.enqueueSyncDelivery(syncDeliveryJob{SessionID: "s", Topic: topic, Snapshot: appserver.ThreadReadSnapshot{LatestTurnID: "turn-1", LatestProgressText: "old"}})
-	service.enqueueSyncDelivery(syncDeliveryJob{SessionID: "s", Topic: topic, Snapshot: appserver.ThreadReadSnapshot{LatestTurnID: "turn-1", LatestProgressText: "new"}})
-	service.enqueueSyncDelivery(syncDeliveryJob{SessionID: "s", Topic: topic, Snapshot: appserver.ThreadReadSnapshot{LatestTurnID: "turn-1", LatestTurnStatus: "completed", LatestFinalFP: "final"}})
+	service.enqueueSyncDelivery("thread-1")
+	service.enqueueSyncDelivery("thread-1")
+	service.enqueueSyncDelivery("thread-1")
 
 	service.syncDeliveryMu.Lock()
-	queue := append([]syncDeliveryJob(nil), service.syncDeliveryPending["thread-1"]...)
+	pending := service.syncDeliveryPending["thread-1"]
 	service.syncDeliveryMu.Unlock()
-	if len(queue) != 2 {
-		t.Fatalf("pending jobs=%d, want one coalesced status plus terminal", len(queue))
-	}
-	if queue[0].Snapshot.LatestProgressText != "new" || queue[1].Snapshot.LatestFinalFP != "final" {
-		t.Fatalf("pending jobs=%#v", queue)
+	if !pending {
+		t.Fatal("thread delivery was not marked pending")
 	}
 	if got := len(service.syncDeliveryJobs); got != 1 {
 		t.Fatalf("runnable tokens=%d, want one serialized token for the topic", got)
 	}
 }
 
-func TestApplySyncLiveToolEventUpdatesProjectionWithoutThreadRead(t *testing.T) {
-	previousSnapshot := appserver.ThreadReadSnapshot{
-		Thread:           model.Thread{ID: "thread-1", Title: "One", Status: "inProgress"},
-		LatestTurnID:     "turn-1",
-		LatestTurnStatus: "inProgress",
+func TestSyncDeliveryLoadsLatestPersistedProjectionAtExecution(t *testing.T) {
+	service := activeSyncService(t)
+	ctx := context.Background()
+	forum := &fakeSyncForum{}
+	service.SetSyncForum(forum)
+
+	active := appserver.SnapshotFromThreadRead(syncRunningPayloadWithCommentary("thread-1", "turn-1", "working"))
+	if err := service.store.UpsertSnapshot(ctx, "thread-1", appserver.CompactSnapshot(nil, active, time.Now())); err != nil {
+		t.Fatal(err)
 	}
-	previous := appserver.CompactSnapshot(nil, previousSnapshot, time.Now())
-	current, ok := applySyncLiveEvent(&previous, appserver.Event{Channel: "notification", Method: "item/updated", Params: map[string]any{
-		"threadId": "thread-1",
-		"turnId":   "turn-1",
-		"item": map[string]any{
-			"id": "tool-1", "type": "commandExecution", "command": "go test ./...", "status": "running", "aggregatedOutput": "ok",
-		},
-	}}, "One", time.Now())
-	if !ok || current.LatestToolID != "tool-1" || current.LatestToolOutput != "ok" {
-		t.Fatalf("current=%#v ok=%t", current, ok)
+	service.enqueueSyncDelivery("thread-1")
+	terminal := appserver.SnapshotFromThreadRead(syncCompletedPayload("thread-1", "turn-1", "done"))
+	previous, _ := service.store.GetSnapshot(ctx, "thread-1")
+	if err := service.store.UpsertSnapshot(ctx, "thread-1", appserver.CompactSnapshot(previous, terminal, time.Now())); err != nil {
+		t.Fatal(err)
+	}
+
+	if !service.takeSyncDelivery("thread-1") {
+		t.Fatal("delivery wake was not pending")
+	}
+	service.runSyncDelivery(ctx, "thread-1")
+	if len(forum.sends) != 2 || !strings.Contains(forum.sends[0].text, "completed") || forum.sends[1].text != syncFinalHeader+"\ndone" {
+		t.Fatalf("delivery used stale projection: %#v", forum.sends)
+	}
+}
+
+func TestSyncSnapshotInvalidationIgnoresStreamingUpdates(t *testing.T) {
+	for _, test := range []struct {
+		method string
+		want   bool
+	}{
+		{method: "turn/started", want: true},
+		{method: "item/started", want: true},
+		{method: "item/completed", want: true},
+		{method: "turn/completed", want: true},
+		{method: "thread/status/changed", want: true},
+		{method: "item/updated", want: false},
+		{method: "item/agentMessage/delta", want: false},
+	} {
+		event := appserver.Event{Channel: "notification", Method: test.method, Params: map[string]any{"threadId": "thread-1"}}
+		if got := syncEventInvalidatesSnapshot(event); got != test.want {
+			t.Fatalf("syncEventInvalidatesSnapshot(%q)=%t, want %t", test.method, got, test.want)
+		}
+	}
+}
+
+func TestSyncDirtyThreadsCoalesceBeforeRead(t *testing.T) {
+	service := newTestService(t)
+	service.markSyncThreadDirty("thread-1")
+	service.markSyncThreadDirty("thread-1")
+	service.markSyncThreadDirty("thread-1")
+
+	service.syncDirtyMu.Lock()
+	dirtyCount := len(service.syncDirtyThreads)
+	service.syncDirtyMu.Unlock()
+	if dirtyCount != 1 || len(service.syncDirtyWake) != 1 {
+		t.Fatalf("dirty threads=%d wakes=%d, want one coalesced invalidation", dirtyCount, len(service.syncDirtyWake))
 	}
 }
 
@@ -1105,9 +1180,10 @@ func TestSyncPresentationIgnoresStalePollTurnWhileSyncWriterIsActive(t *testing.
 	if _, err := service.HandleMessageWithID(ctx, -1001, 11, 501, 123456789, "one", 0); err != nil {
 		t.Fatal(err)
 	}
-	service.handleSyncWriterEvent(ctx, writer, appserver.Event{Method: "item/updated", Params: map[string]any{
+	service.handleSyncWriterEvent(ctx, writer, appserver.Event{Method: "item/completed", Params: map[string]any{
 		"threadId": "thread-1", "turnId": "started-turn",
 	}}, service.syncWriter.Snapshot().Generation)
+	service.reconcileDirtySyncThreads(ctx)
 	if len(forum.sends) != 1 || !strings.Contains(forum.sends[0].text, "live progress") {
 		t.Fatalf("live sends=%#v", forum.sends)
 	}
@@ -1184,7 +1260,7 @@ func TestSyncStatusAggregatesCommentaryBlocksInOneMessage(t *testing.T) {
 	}
 }
 
-func TestSyncStatusUpdatesSameBlockWithoutDuplicatingAndExcludesTools(t *testing.T) {
+func TestSyncStatusUpdatesSameBlockAndRendersToolsBelowIt(t *testing.T) {
 	t.Parallel()
 
 	startedAt := time.Date(2026, time.August, 17, 12, 0, 0, 0, time.UTC)
@@ -1194,10 +1270,11 @@ func TestSyncStatusUpdatesSameBlockWithoutDuplicatingAndExcludesTools(t *testing
 		LatestTurnStatus:    "inProgress",
 		LatestTurnStartedAt: startedAt.Format(time.RFC3339Nano),
 		DetailItems: []model.DetailItem{
-			{ID: "commentary-1", Kind: model.DetailItemCommentary, Text: "Expanded reasoning", StartedAt: model.TimeString(startedAt.Format(time.RFC3339Nano))},
-			{ID: "tool-1", Kind: model.DetailItemTool, Label: "go test ./...", Status: "running"},
-			{ID: "output-1", Kind: model.DetailItemOutput, Output: "tool output"},
-			{ID: "plan-1", Kind: model.DetailItemPlan, Text: "Updated plan", StartedAt: model.TimeString(startedAt.Add(7 * time.Second).Format(time.RFC3339Nano))},
+			{ID: "commentary-1", Kind: model.DetailItemCommentary, Text: "Expanded reasoning", StartedAt: model.TimeString(startedAt.Format(time.RFC3339Nano)), CommentaryIndex: 1},
+			{ID: "tool-1", Kind: model.DetailItemTool, Label: "go test ./...", Status: "running", CommentaryIndex: 1},
+			{ID: "output-1", Kind: model.DetailItemOutput, Output: "tool output", CommentaryIndex: 1},
+			{ID: "plan-1", Kind: model.DetailItemPlan, Text: "Updated plan", StartedAt: model.TimeString(startedAt.Add(7 * time.Second).Format(time.RFC3339Nano)), CommentaryIndex: 2},
+			{ID: "tool-2", Kind: model.DetailItemTool, Label: "read sync.go", Status: "completed", CommentaryIndex: 2},
 		},
 	}
 
@@ -1205,8 +1282,58 @@ func TestSyncStatusUpdatesSameBlockWithoutDuplicatingAndExcludesTools(t *testing
 	if strings.Count(message.Text, "Блок 1 ·") != 1 || strings.Count(message.Text, "Expanded reasoning") != 1 {
 		t.Fatalf("status duplicated updated block: %q", message.Text)
 	}
-	if !strings.Contains(message.Text, "Updated plan") || strings.Contains(message.Text, "go test") || strings.Contains(message.Text, "tool output") || strings.Contains(message.Text, "stale preview") {
+	if !strings.Contains(message.Text, "Expanded reasoning\n└ ◌ go test ./...") ||
+		!strings.Contains(message.Text, "Updated plan\n└ ✓ read sync.go") ||
+		strings.Contains(message.Text, "tool output") || strings.Contains(message.Text, "stale preview") {
 		t.Fatalf("status included wrong detail kinds: %q", message.Text)
+	}
+}
+
+func TestSyncStatusBoundsToolsPerCommentaryBlock(t *testing.T) {
+	t.Parallel()
+
+	startedAt := time.Date(2026, time.August, 17, 12, 0, 0, 0, time.UTC)
+	items := []model.DetailItem{{
+		ID: "commentary-1", Kind: model.DetailItemCommentary, Text: "Working", CommentaryIndex: 1,
+		StartedAt: model.TimeString(startedAt.Format(time.RFC3339Nano)),
+	}}
+	for index := 1; index <= 7; index++ {
+		items = append(items, model.DetailItem{
+			ID: fmt.Sprintf("tool-%d", index), Kind: model.DetailItemTool,
+			Label: fmt.Sprintf("tool %d", index), Status: "completed", CommentaryIndex: 1,
+		})
+	}
+	snapshot := appserver.ThreadReadSnapshot{
+		Thread: model.Thread{Status: "inProgress"}, LatestTurnID: "turn-1", LatestTurnStatus: "inProgress",
+		LatestTurnStartedAt: startedAt.Format(time.RFC3339Nano), DetailItems: items,
+	}
+
+	message := renderSyncStatusAt(snapshot, startedAt.Add(time.Minute))
+	for _, want := range []string{"└ ✓ tool 1", "└ ✓ tool 2", "└ … ещё 4 tools", "└ ✓ tool 7"} {
+		if !strings.Contains(message.Text, want) {
+			t.Fatalf("status %q does not contain %q", message.Text, want)
+		}
+	}
+	for _, hidden := range []string{"tool 3", "tool 4", "tool 5", "tool 6"} {
+		if strings.Contains(message.Text, hidden) {
+			t.Fatalf("status %q unexpectedly contains %q", message.Text, hidden)
+		}
+	}
+}
+
+func TestSyncProjectionDoesNotRegressTerminalTurn(t *testing.T) {
+	previousCurrent := appserver.ThreadReadSnapshot{
+		Thread: model.Thread{ID: "thread-1", Status: "completed"}, LatestTurnID: "turn-1", LatestTurnStatus: "completed",
+		LatestFinalFP: "final-fp", LatestFinalText: "done",
+	}
+	previous := appserver.CompactSnapshot(nil, previousCurrent, time.Now())
+	stale := appserver.ThreadReadSnapshot{
+		Thread: model.Thread{ID: "thread-1", Status: "inProgress"}, LatestTurnID: "turn-1", LatestTurnStatus: "inProgress",
+	}
+
+	merged := monotonicSyncSnapshot(&previous, stale)
+	if merged.LatestTurnStatus != "completed" || merged.LatestFinalFP != "final-fp" || merged.LatestFinalText != "done" {
+		t.Fatalf("terminal projection regressed: %#v", merged)
 	}
 }
 
@@ -1451,14 +1578,18 @@ func TestSyncTelegramOriginHotPollRefreshesAndStopsAtTerminal(t *testing.T) {
 	}
 }
 
-func TestSyncLiveToolOverlaySurvivesLaggingThreadReadWithoutEnteringAggregateStatus(t *testing.T) {
+func TestSyncEventReadRendersToolAndMonotonicProjectionPreservesIt(t *testing.T) {
 	service := activeSyncService(t)
 	ctx := context.Background()
 	fixedNow := time.Date(2026, time.August, 15, 12, 0, 0, 0, time.UTC)
 	service.now = func() time.Time { return fixedNow }
-	reads := map[string]map[string]any{
-		"thread-1": syncRunningPayload("thread-1", "started-turn"),
-	}
+	rich := syncRunningPayloadWithCommentary("thread-1", "started-turn", "Checking the implementation")
+	thread := rich["thread"].(map[string]any)
+	turn := thread["turns"].([]any)[0].(map[string]any)
+	turn["items"] = append(turn["items"].([]any), map[string]any{
+		"id": "cmd-slow", "type": "commandExecution", "command": "sleep 20", "status": "running",
+	})
+	reads := map[string]map[string]any{"thread-1": rich}
 	writer := &syncWriterSession{stubSession: &stubSession{threadReads: reads}, events: make(chan appserver.Event, 2)}
 	service.liveFactory = func() Session { return writer }
 	forum := &fakeSyncForum{}
@@ -1481,20 +1612,22 @@ func TestSyncLiveToolOverlaySurvivesLaggingThreadReadWithoutEnteringAggregateSta
 			},
 		},
 	}, service.syncWriter.Snapshot().Generation)
-	if len(forum.sends) != 1 || strings.Contains(forum.sends[0].text, "sleep 20") {
-		t.Fatalf("live tool entered aggregate status: %#v", forum.sends)
+	service.reconcileDirtySyncThreads(ctx)
+	if len(forum.sends) != 1 || !strings.Contains(forum.sends[0].text, "└ ◌ sleep 20") {
+		t.Fatalf("event-triggered read did not render tool under commentary: %#v", forum.sends)
 	}
 	stored, err := service.store.GetSnapshot(ctx, "thread-1")
 	if err != nil || stored == nil {
 		t.Fatalf("stored snapshot=%#v err=%v", stored, err)
 	}
 	var compact appserver.ThreadReadSnapshot
-	if err := json.Unmarshal(stored.CompactJSON, &compact); err != nil || compact.LatestToolLabel != "sleep 20" {
-		t.Fatalf("compact snapshot=%#v err=%v, want live tool preserved", compact, err)
+	if err := json.Unmarshal(stored.CompactJSON, &compact); err != nil || len(compact.DetailItems) != 2 {
+		t.Fatalf("compact snapshot=%#v err=%v, want commentary and tool from authoritative read", compact, err)
 	}
 
+	lagging := syncRunningPayloadWithCommentary("thread-1", "started-turn", "Checking the implementation")
 	service.mu.Lock()
-	service.poll, service.pollConnected = &stubSession{threadReads: reads}, true
+	service.poll, service.pollConnected = &stubSession{threadReads: map[string]map[string]any{"thread-1": lagging}}, true
 	service.mu.Unlock()
 	service.reconcileSync(ctx)
 	stored, err = service.store.GetSnapshot(ctx, "thread-1")
@@ -1502,8 +1635,8 @@ func TestSyncLiveToolOverlaySurvivesLaggingThreadReadWithoutEnteringAggregateSta
 		t.Fatalf("stored snapshot after lagging poll=%#v err=%v", stored, err)
 	}
 	compact = appserver.ThreadReadSnapshot{}
-	if err := json.Unmarshal(stored.CompactJSON, &compact); err != nil || compact.LatestToolLabel != "sleep 20" {
-		t.Fatalf("lagging poll erased live tool from compact snapshot: %#v err=%v", compact, err)
+	if err := json.Unmarshal(stored.CompactJSON, &compact); err != nil || !strings.Contains(renderSyncStatusAt(compact, fixedNow).Text, "sleep 20") {
+		t.Fatalf("lagging read erased observed tool from compact snapshot: %#v err=%v", compact, err)
 	}
 }
 
@@ -1860,6 +1993,7 @@ func TestSyncTerminalEventsRoutePerTopicAndCloseAfterLastTurn(t *testing.T) {
 		t.Fatalf("stale generation routed sends=%#v", forum.sends)
 	}
 	service.handleSyncWriterEvent(ctx, writer, eventOne, generation)
+	service.reconcileDirtySyncThreads(ctx)
 	if service.syncWriter.Snapshot().Active != 1 || writer.closeCalls != 0 {
 		t.Fatalf("after first: writer=%#v closes=%d", service.syncWriter.Snapshot(), writer.closeCalls)
 	}
@@ -1870,6 +2004,7 @@ func TestSyncTerminalEventsRoutePerTopicAndCloseAfterLastTurn(t *testing.T) {
 	}
 	eventTwo := appserver.Event{Method: "turn/completed", Params: map[string]any{"threadId": "thread-2", "turnId": "started-turn"}}
 	service.handleSyncWriterEvent(ctx, writer, eventTwo, generation)
+	service.reconcileDirtySyncThreads(ctx)
 	if service.syncWriter.Snapshot().State != appserver.WriterStopped || writer.closeCalls != 1 {
 		t.Fatalf("after last: writer=%#v closes=%d", service.syncWriter.Snapshot(), writer.closeCalls)
 	}
@@ -1904,6 +2039,7 @@ func TestSyncTransientInterruptedEventKeepsWriterAndRecoversProgress(t *testing.
 	generation := service.syncWriter.Snapshot().Generation
 	event := appserver.Event{Method: "turn/completed", Params: map[string]any{"threadId": "thread-1", "turnId": "started-turn"}}
 	service.handleSyncWriterEvent(ctx, writer, event, generation)
+	service.reconcileDirtySyncThreads(ctx)
 	if snapshot := service.syncWriter.Snapshot(); snapshot.Active != 1 || snapshot.State != appserver.WriterRunning {
 		t.Fatalf("transient interrupted released writer: %#v", snapshot)
 	}
@@ -1912,12 +2048,14 @@ func TestSyncTransientInterruptedEventKeepsWriterAndRecoversProgress(t *testing.
 	}
 
 	reads["thread-1"] = syncRunningPayload("thread-1", "started-turn")
-	service.handleSyncWriterEvent(ctx, writer, appserver.Event{Method: "item/updated", Params: map[string]any{"threadId": "thread-1", "turnId": "started-turn"}}, generation)
+	service.handleSyncWriterEvent(ctx, writer, appserver.Event{Method: "item/completed", Params: map[string]any{"threadId": "thread-1", "turnId": "started-turn"}}, generation)
+	service.reconcileDirtySyncThreads(ctx)
 	if len(forum.sends) != 1 || !strings.Contains(forum.sends[0].text, "inProgress") {
 		t.Fatalf("recovered progress not delivered: %#v", forum.sends)
 	}
 	reads["thread-1"] = syncCompletedPayload("thread-1", "started-turn", "done")
 	service.handleSyncWriterEvent(ctx, writer, event, generation)
+	service.reconcileDirtySyncThreads(ctx)
 	if snapshot := service.syncWriter.Snapshot(); snapshot.State != appserver.WriterStopped || snapshot.Active != 0 {
 		t.Fatalf("confirmed terminal did not release writer: %#v", snapshot)
 	}
@@ -1966,6 +2104,7 @@ func TestSyncExplicitStopInterruptedBypassesTerminalGrace(t *testing.T) {
 	service.handleSyncWriterEvent(ctx, writer, appserver.Event{Method: "turn/completed", Params: map[string]any{
 		"threadId": "thread-1", "turnId": "started-turn",
 	}}, service.syncWriter.Snapshot().Generation)
+	service.reconcileDirtySyncThreads(ctx)
 	if snapshot := service.syncWriter.Snapshot(); snapshot.State != appserver.WriterStopped || snapshot.Active != 0 {
 		t.Fatalf("explicit stop did not bypass grace: %#v", snapshot)
 	}

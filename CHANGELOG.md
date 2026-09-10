@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Replaced partial live-event snapshot mutation with coalesced, bounded
+  latest-turn reads and a monotonic late-bound Telegram projection.
+- Kept commentary-block timing and added bounded tool-call labels below their
+  owning Status block without including tool output.
+- Allowed Final delivery to proceed independently of a failed terminal Status
+  edit while preserving Final as the last newly sent turn message.
 - Numbered multipart Telegram Finals as `Final 1/N` through `Final N/N` while keeping single-message Finals unchanged.
 - Added short durable Telegram terminal notices while keeping external launch
   cards updated as the request state authority.

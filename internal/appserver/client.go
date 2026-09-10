@@ -488,9 +488,7 @@ func (c *Client) threadReadLatest(ctx context.Context, threadID, itemsView strin
 		"itemsView":     itemsView,
 	})
 	if err != nil {
-		// Older App Server builds do not expose thread/turns/list. Keep the
-		// bridge functional, while current builds stay on the bounded path.
-		return c.ThreadRead(ctx, threadID, true)
+		return nil, fmt.Errorf("read latest turn: %w", err)
 	}
 	thread := asMap(metadata["thread"])
 	if len(thread) == 0 {

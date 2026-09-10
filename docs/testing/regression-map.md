@@ -22,7 +22,7 @@ Required invariants:
 
 ## Sync activation, discovery, and transport
 
-ADRs: ADR-020 through ADR-027, ADR-029, ADR-032, and ADR-033.
+ADRs: ADR-020 through ADR-027, ADR-029, and ADR-032 through ADR-034.
 
 Primary suites:
 
@@ -41,6 +41,10 @@ Coverage includes:
 - startup reset to off and cleanup-only old topics/drafts;
 - generation-aware writer claims and fail-closed unknown dispatch;
 - poll/list/read behavior and non-blocking startup;
+- important App Server events coalesce into bounded latest-turn reads while
+  streaming updates stay read-free;
+- periodic summary reconciliation skips only fully delivered stable terminal
+  turns and fully reads every other tracked topic;
 - typed Telegram topic/retry failures;
 - one-second group-write pacing with no more than 20 raw attempts per rolling 60.25 seconds, bounded foreground preference, and shared `retry_after` cooldown.
 
@@ -62,8 +66,10 @@ Required scenarios:
   stays exact and stable;
 - one status message is created per turn and then edited in place across title
   changes, mirrored user messages, and direct-delivery refreshes;
-- terminal status is delivered before Final in the same per-topic sequence, so
-  no queued status update can move behind that turn's Final;
+- Telegram delivery is late-bound to the newest persisted projection, terminal
+  state cannot regress to active, and Final does not wait for a Status edit;
+- commentary blocks retain their duration and show a bounded list of associated
+  tool calls without tool output;
 - restart/reconnect does not duplicate user receipts or finals;
 - long finals preserve UTF-16 limits and number every Final chunk (`1/N` through `N/N`).
 

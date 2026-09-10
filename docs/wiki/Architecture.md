@@ -24,7 +24,7 @@ Telegram Sync forum     cron / YMessenger / Arcanum
 
 Codex App Server is authoritative for interactive state. The daemon may spawn App Server over stdio or connect to a managed Unix-socket/loopback WebSocket endpoint. Shared modes fail closed and do not spawn a private fallback.
 
-One poll session discovers and reads threads. Generation-aware writer leases serialize mutations and prevent two processes from owning the same thread.
+One poll session discovers threads and receives App Server events. Important events coalesce into bounded latest-turn reads; an infrequent summary reconciliation covers reconnects and missed events. Generation-aware writer leases serialize mutations and prevent two processes from owning the same thread.
 
 ## Telegram adapter
 
