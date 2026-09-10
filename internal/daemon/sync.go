@@ -1446,19 +1446,43 @@ func renderSyncFinal(finalText string) []model.RenderedMessage {
 	if body == "" {
 		return []model.RenderedMessage{{Text: syncFinalHeader}}
 	}
-	prefix := syncFinalHeader + "\n"
-	prefixUnits := syncUTF16Len(prefix)
 	chunks := tgformat.RenderSegments(
 		[]tgformat.Segment{tgformat.Plain(body)},
-		tgformat.TelegramMessageLimit-prefixUnits,
+		tgformat.TelegramMessageLimit-syncUTF16Len(syncFinalHeader+"\n"),
 	)
+	if len(chunks) == 1 {
+		chunks[0].Text = syncFinalHeader + "\n" + chunks[0].Text
+		for entityIndex := range chunks[0].Entities {
+			chunks[0].Entities[entityIndex].Offset += syncUTF16Len(syncFinalHeader + "\n")
+		}
+		return chunks
+	}
+
+	chunkCount := len(chunks)
+	for {
+		longestPrefix := syncFinalPartHeader(chunkCount, chunkCount) + "\n"
+		chunks = tgformat.RenderSegments(
+			[]tgformat.Segment{tgformat.Plain(body)},
+			tgformat.TelegramMessageLimit-syncUTF16Len(longestPrefix),
+		)
+		if len(chunks) == chunkCount {
+			break
+		}
+		chunkCount = len(chunks)
+	}
 	for index := range chunks {
+		prefix := syncFinalPartHeader(index+1, chunkCount) + "\n"
+		prefixUnits := syncUTF16Len(prefix)
 		chunks[index].Text = prefix + chunks[index].Text
 		for entityIndex := range chunks[index].Entities {
 			chunks[index].Entities[entityIndex].Offset += prefixUnits
 		}
 	}
 	return chunks
+}
+
+func syncFinalPartHeader(index, count int) string {
+	return fmt.Sprintf("✅ [Final %d/%d]", index, count)
 }
 
 func (s *Service) deliverSyncUserMessageLocked(ctx context.Context, forum SyncForum, topic model.SyncTopic, current appserver.ThreadReadSnapshot) (model.SyncTopic, bool) {

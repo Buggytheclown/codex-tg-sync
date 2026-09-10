@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Numbered multipart Telegram Finals as `Final 1/N` through `Final N/N` while keeping single-message Finals unchanged.
 - Added short durable Telegram terminal notices while keeping external launch
   cards updated as the request state authority.
 - Added exact-author Arcanum review auto-start with a visible-card gate before

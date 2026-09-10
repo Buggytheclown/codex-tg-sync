@@ -21,7 +21,7 @@ A topic uses compact state cards:
 ✅ [Final]
 ```
 
-The status follows current App Server state. A terminal result produces `[Final]`; long finals are split safely and every chunk retains the Final header for topic previews.
+The status follows current App Server state. A terminal result produces `[Final]`; long finals are split safely and numbered `Final 1/N` through `Final N/N`.
 
 ## Approvals and input
 

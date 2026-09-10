@@ -586,7 +586,7 @@ func TestSyncSafetyReconcileSkipsFullReadForStableTerminalTurn(t *testing.T) {
 	}
 }
 
-func TestSyncLongFinalKeepsFinalHeaderOnEveryChunk(t *testing.T) {
+func TestSyncLongFinalNumbersEveryChunk(t *testing.T) {
 	service := activeSyncService(t)
 	ctx := context.Background()
 	finalText := strings.Repeat("🙂", tgformat.TelegramMessageLimit/2+600)
@@ -612,9 +612,9 @@ func TestSyncLongFinalKeepsFinalHeaderOnEveryChunk(t *testing.T) {
 		if got := syncUTF16Len(send.text); got > tgformat.TelegramMessageLimit {
 			t.Fatalf("chunk %d UTF-16 length=%d, want <=%d", index+1, got, tgformat.TelegramMessageLimit)
 		}
-		prefix := syncFinalHeader + "\n"
+		prefix := fmt.Sprintf("✅ [Final %d/%d]\n", index+1, len(finalSends))
 		if !strings.HasPrefix(send.text, prefix) {
-			t.Fatalf("chunk %d = %q, want Final header for topic preview", index+1, send.text)
+			t.Fatalf("chunk %d = %q, want numbered Final header for topic preview", index+1, send.text)
 		}
 		delivered.WriteString(strings.TrimPrefix(send.text, prefix))
 	}

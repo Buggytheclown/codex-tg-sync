@@ -65,7 +65,7 @@ Required scenarios:
 - terminal status is delivered before Final in the same per-topic sequence, so
   no queued status update can move behind that turn's Final;
 - restart/reconnect does not duplicate user receipts or finals;
-- long finals preserve UTF-16 limits and the Final header on every chunk.
+- long finals preserve UTF-16 limits and number every Final chunk (`1/N` through `N/N`).
 
 Terminal ambiguity logic lives in `internal/daemon/terminal_gate_test.go`. Preserve defer windows, explicit interrupts, and authoritative terminal evidence.
 
