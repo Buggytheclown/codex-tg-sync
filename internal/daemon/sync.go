@@ -798,7 +798,7 @@ func (s *Service) discoverSyncThreadsLocked(ctx context.Context, state model.Syn
 	})
 	discovered, failures := 0, 0
 	for _, thread := range threads {
-		if thread.ID == "" || thread.Archived || thread.IsInternal() || thread.CreatedAt < cutoff.Unix() {
+		if thread.ID == "" || thread.Archived || thread.IsInternal() || !syncThreadActiveSince(thread, cutoff.Unix()) {
 			continue
 		}
 		if _, ok := bound[thread.ID]; ok {
@@ -824,6 +824,10 @@ func (s *Service) discoverSyncThreadsLocked(ctx context.Context, state model.Syn
 		_ = s.store.UpsertThread(ctx, thread)
 	}
 	return discovered, failures, nil
+}
+
+func syncThreadActiveSince(thread model.Thread, cutoffUnix int64) bool {
+	return thread.CreatedAt >= cutoffUnix || thread.UpdatedAt >= cutoffUnix
 }
 
 func (s *Service) subscribeSyncThreadLocked(ctx context.Context, poll Session, pollGeneration uint64, threadID string) bool {
@@ -1017,8 +1021,15 @@ func (s *Service) handleSyncPollEvent(ctx context.Context, process Session, even
 		return
 	}
 	topic, err := s.store.GetActiveSyncTopicByThread(ctx, state.SessionID, threadID)
-	if err != nil || topic == nil {
+	if err != nil {
 		s.syncMu.Unlock()
+		return
+	}
+	if topic == nil {
+		s.syncMu.Unlock()
+		if state.State == model.SyncStateActive && syncEventMayDiscoverThread(event) {
+			s.wakeSyncReconcile()
+		}
 		return
 	}
 	s.recordSyncAppServerEvent(threadID, s.now().UTC())
@@ -1108,6 +1119,12 @@ func syncEventInvalidatesSnapshot(event appserver.Event) bool {
 		return false
 	}
 	return normalized.Kind != appserver.LiveEventToolUpdated
+}
+
+func syncEventMayDiscoverThread(event appserver.Event) bool {
+	method := strings.ToLower(strings.TrimSpace(event.Method))
+	return method == "thread/started" || method == "turn/started" || method == "thread/status/changed" ||
+		strings.Contains(method, "task_started")
 }
 
 func (s *Service) markSyncThreadDirty(threadID string) {

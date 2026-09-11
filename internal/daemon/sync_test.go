@@ -387,7 +387,7 @@ func TestSyncReconcileDiscoversNewDesktopThreadExactlyOnceAndResubscribesAfterRe
 		threadListResult: map[string]any{"data": []any{
 			map[string]any{"id": "thread-1", "title": "Existing", "createdAt": float64(cutoff - 1), "updatedAt": float64(cutoff + 2)},
 			map[string]any{"id": "thread-new", "title": "Desktop task", "createdAt": float64(cutoff), "updatedAt": float64(cutoff + 1)},
-			map[string]any{"id": "thread-old", "title": "Old untracked", "createdAt": float64(cutoff - 1), "updatedAt": float64(cutoff + 3)},
+			map[string]any{"id": "thread-old", "title": "Old untracked", "createdAt": float64(cutoff - 2), "updatedAt": float64(cutoff - 1)},
 		}},
 		threadReads: map[string]map[string]any{
 			"thread-1":   syncRunningPayload("thread-1", "turn-1"),
@@ -423,6 +423,44 @@ func TestSyncReconcileDiscoversNewDesktopThreadExactlyOnceAndResubscribesAfterRe
 	service.reconcileSync(ctx)
 	if len(poll.threadResumeCalls) != 6 {
 		t.Fatalf("resume calls after reconnect=%#v, want one resubscribe per thread", poll.threadResumeCalls)
+	}
+}
+
+func TestSyncReconcileDiscoversPreActivationThreadUpdatedAfterActivation(t *testing.T) {
+	service := activeSyncService(t)
+	ctx := context.Background()
+	state, err := service.store.GetSyncState(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cutoff := parseTime(state.SnapshotAt).Unix()
+	service.mu.Lock()
+	service.poll = &stubSession{
+		threadListResult: map[string]any{"data": []any{
+			map[string]any{"id": "thread-finished", "title": "Finished quickly", "status": "completed", "createdAt": float64(cutoff - 60), "updatedAt": float64(cutoff + 1)},
+			map[string]any{"id": "thread-stale", "title": "Untouched old thread", "status": "completed", "createdAt": float64(cutoff - 60), "updatedAt": float64(cutoff - 1)},
+		}},
+		threadReads: map[string]map[string]any{
+			"thread-1":        syncRunningPayload("thread-1", "turn-1"),
+			"thread-2":        syncRunningPayload("thread-2", "turn-2"),
+			"thread-finished": syncCompletedPayload("thread-finished", "turn-finished", "done"),
+		},
+	}
+	service.pollConnected = true
+	service.mu.Unlock()
+	forum := &fakeSyncForum{nextTopicID: 20}
+	service.SetSyncForum(forum)
+
+	service.reconcileSync(ctx)
+
+	if !reflect.DeepEqual(forum.creates, []string{"Finished quickly"}) {
+		t.Fatalf("creates=%#v, want updated pre-activation thread only", forum.creates)
+	}
+	if topic, err := service.store.GetActiveSyncTopicByThread(ctx, "s", "thread-finished"); err != nil || topic == nil || topic.TopicID != 21 {
+		t.Fatalf("updated topic=%#v err=%v", topic, err)
+	}
+	if topic, err := service.store.GetActiveSyncTopicByThread(ctx, "s", "thread-stale"); err != nil || topic != nil {
+		t.Fatalf("stale topic=%#v err=%v, want no topic", topic, err)
 	}
 }
 
@@ -837,6 +875,30 @@ func TestSyncStreamingEventRecordsActivityWithoutDirtyRead(t *testing.T) {
 	service.syncDirtyMu.Unlock()
 	if dirtyCount != 0 {
 		t.Fatalf("streaming event queued %d dirty reads, want none", dirtyCount)
+	}
+}
+
+func TestSyncUnknownThreadStartEventWakesDiscovery(t *testing.T) {
+	service := activeSyncService(t)
+	process := &stubSession{}
+	service.syncMu.Lock()
+	service.syncPollEventProcess = process
+	service.syncPollEventGeneration = 7
+	service.syncMu.Unlock()
+
+	service.handleSyncPollEvent(context.Background(), process, appserver.Event{
+		Channel: "notification", Method: "turn/started", Params: map[string]any{"threadId": "thread-unknown"},
+	}, 7)
+	if len(service.syncReconcileWake) != 1 {
+		t.Fatalf("reconcile wakes=%d, want one", len(service.syncReconcileWake))
+	}
+
+	<-service.syncReconcileWake
+	service.handleSyncPollEvent(context.Background(), process, appserver.Event{
+		Channel: "notification", Method: "item/updated", Params: map[string]any{"threadId": "thread-unknown"},
+	}, 7)
+	if len(service.syncReconcileWake) != 0 {
+		t.Fatalf("streaming event queued discovery wake")
 	}
 }
 

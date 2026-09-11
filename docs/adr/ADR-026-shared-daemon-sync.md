@@ -41,9 +41,13 @@ Desktop sees without maintaining a second App Server runtime.
   still exposes terminal state when a continuation is the latest message. The
   Final delivery fingerprint advances only after every chunk is accepted;
   reconciliation retries an incomplete delivery.
-- Sync reconciliation continuously materializes newly created eligible
-  top-level Desktop threads, using App Server `createdAt` rather than treating
-  activity in an old thread as a new chat. Activation creates only a bounded recent snapshot;
+- Sync reconciliation continuously materializes eligible top-level Desktop
+  threads whose `createdAt` or `updatedAt` is at or after the activation
+  snapshot. This includes pre-existing chats used after `/sync on`, even when a
+  short turn finishes before the next list poll, while leaving untouched older
+  chats out of scope. A start/status event for an unbound thread wakes the same
+  authoritative list reconciliation; periodic reconciliation remains the
+  missed-event fallback. Activation creates only a bounded recent snapshot;
   `CTR_GO_SYNC_INITIAL_TOPIC_LIMIT` defaults to five.
 - Durable `threadId` mapping makes topic creation idempotent. New Telegram chats
   retain the draft-first `thread/start + turn/start` contract from ADR-025.

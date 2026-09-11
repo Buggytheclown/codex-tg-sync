@@ -35,7 +35,9 @@ The Bot API chat-scoped menu contains exactly:
 - Control is the General topic and is never deleted.
 - `/sync on` creates topics for the configured number of recent eligible Codex chats.
 - `/sync on` paginates the candidate list and selects waiting/running chats first, then unknown nonterminal, failed/interrupted, and completed chats; recency orders each class.
-- Active synchronization discovers later chats without replaying earlier prompts.
+- Active synchronization discovers chats created or updated after activation
+  without replaying earlier prompts; start/status events reduce discovery
+  latency and periodic reconciliation covers missed events.
 - One durable Codex `threadId` maps to one managed topic per Sync session.
 - A restart resets Sync to off, cleans old managed topics, and preserves Codex work.
 - Project/Chat creation first creates a durable topic draft. The first text message claims the draft, creates the thread, and starts one turn.

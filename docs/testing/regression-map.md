@@ -35,7 +35,7 @@ Primary suites:
 Coverage includes:
 
 - forum validation and Control preparation;
-- paginated, importance-first `/sync on` topic selection (including `notLoaded` threads with running or terminal last turns), initial topic limit, and continuous discovery;
+- paginated, importance-first `/sync on` topic selection (including `notLoaded` threads with running or terminal last turns), initial topic limit, and continuous discovery of chats created or updated after activation;
 - one topic per thread and receipt idempotency;
 - shared daemon/WebSocket reconnection without prompt replay;
 - startup reset to off and cleanup-only old topics/drafts;
@@ -43,6 +43,8 @@ Coverage includes:
 - poll/list/read behavior and non-blocking startup;
 - important App Server events coalesce into bounded latest-turn reads while
   streaming updates stay read-free;
+- start/status events for unbound threads wake authoritative list discovery,
+  while periodic discovery catches missed events and short completed turns;
 - periodic summary reconciliation skips only fully delivered stable terminal
   turns and fully reads every other tracked topic;
 - typed Telegram topic/retry failures;
