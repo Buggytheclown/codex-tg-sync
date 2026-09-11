@@ -1,8 +1,10 @@
-# codex-tg: local Codex control plane
+# codex-tg-sync
 
-`codex-tg` mirrors local Codex chats into one private Telegram forum. Each Codex thread has one topic where the operator can follow status, steer work, answer input, approve commands, stop a turn, and read the final result.
+`codex-tg-sync` mirrors local Codex chats into one private Telegram forum with topics. Each Codex thread gets its own topic where the operator can follow status, steer work, answer input, approve commands, stop a turn, and read the final result.
 
-The supported Telegram surface is Sync mode only. Direct-message observer commands and global observer panels are not supported.
+The only supported Telegram surface is Sync mode in that configured forum group. Direct messages, observer commands, and global observer panels are not supported.
+
+The repository is named `codex-tg-sync`; the command-line binary and local data directory keep their existing names: `ctr-go` and `~/.codex-tg`.
 
 ## What it does
 
@@ -17,61 +19,81 @@ The supported Telegram surface is Sync mode only. Direct-message observer comman
 - Keeps Codex App Server local; no public App Server listener is required.
 - Stores topic identity, callbacks, launch requests, delivery state, and snapshots in local SQLite.
 
-Current release: `v0.5.0`.
+This fork is currently distributed from source. It does not yet publish GitHub Release binaries.
 
 ## Requirements
 
-- OpenAI Codex CLI with `codex app-server`.
+- Git and Go `1.26` or newer.
+- OpenAI Codex CLI, signed in, with `codex app-server` available.
 - A Telegram bot token.
 - One Telegram numeric user id.
-- One private forum supergroup containing only that user and the bot.
+- One private Telegram supergroup with Topics enabled, containing only that user and the bot.
 - The bot must be an administrator with topic-management and message-deletion rights.
+
+[Codex App Server](https://developers.openai.com/codex/app-server) is currently experimental. Keep it local; do not expose it directly to the internet.
 
 ## Quickstart
 
-On macOS, install the latest package from [GitHub Releases](https://github.com/mideco-tech/codex-tg/releases/latest), then run:
+The commands below are for macOS and Linux. A Windows foreground-run example follows.
 
-```powershell
-ctr-go service install --start --start-at-login
-ctr-go doctor
+### 1. Prepare Telegram
+
+1. Create a bot with [BotFather](https://t.me/BotFather) and save its token.
+2. Create a private supergroup and enable Topics.
+3. Add only yourself and the bot to the group.
+4. Make the bot an administrator with permission to manage topics and delete messages.
+5. Record your positive numeric user id and the negative forum group id, which normally starts with `-100`.
+
+### 2. Check Codex
+
+Install and sign in to the [OpenAI Codex CLI](https://developers.openai.com/codex/cli), then verify that App Server is available:
+
+```bash
+codex --version
+codex app-server --help
 ```
 
-The wizard asks for the bot token, one allowed user id, the Sync forum group id, and local Codex paths. It writes `~/.codex-tg/config.env`, installs a user LaunchAgent, and starts the daemon.
+### 3. Download and build
 
-For a manual installation:
-
-```powershell
-ctr-go init
-ctr-go doctor
-ctr-go daemon run
+```bash
+git clone https://github.com/Buggytheclown/codex-tg-sync.git
+cd codex-tg-sync
+go build -buildvcs=false -o ctr-go ./cmd/ctr-go
 ```
 
-Build from source:
+### 4. Configure and run
 
-```powershell
-git clone https://github.com/mideco-tech/codex-tg.git
-cd codex-tg
-go run ./cmd/ctr-go init
-go run ./cmd/ctr-go doctor
-go run ./cmd/ctr-go daemon run
+On macOS, the simplest persistent setup is a user LaunchAgent:
+
+```bash
+./ctr-go service install --start --start-at-login
+./ctr-go doctor
 ```
 
-Environment-only setup:
+The six-step wizard asks for the bot token, user id, forum group id, default work directory, Codex Chats directory, and Codex binary. It writes `~/.codex-tg/config.env`, installs the LaunchAgent, and starts the daemon. Keep the cloned directory in place because the service points to the built `ctr-go` binary there.
 
-```powershell
-$env:CTR_GO_TELEGRAM_BOT_TOKEN = "<telegram-bot-token>"
-$env:CTR_GO_ALLOWED_USER_IDS = "<one-telegram-user-id>"
-$env:CTR_GO_SYNC_GROUP_ID = "<private-forum-supergroup-id>"
-$env:CTR_GO_DEFAULT_CWD = "C:\Users\you\Projects\Codex"
+To run in the foreground on macOS or Linux instead, use this path instead of `service install`:
+
+```bash
+./ctr-go init
+./ctr-go doctor
+./ctr-go daemon run
 ```
 
-Exactly one user id is required. The group id and user id are checked at startup.
+On Windows, build and run in PowerShell:
 
-## First Telegram session
+```powershell
+git clone https://github.com/Buggytheclown/codex-tg-sync.git
+cd codex-tg-sync
+go build -buildvcs=false -o ctr-go.exe ./cmd/ctr-go
+.\ctr-go.exe init
+.\ctr-go.exe doctor
+.\ctr-go.exe daemon run
+```
 
-The bot clears its default command scope and publishes commands only in the configured forum group.
+### 5. Enable Sync
 
-In the Control topic:
+For the first activation, send these commands in the forum's built-in `General` topic. A successful `/sync on` renames it to `Control`:
 
 ```text
 /sync on
@@ -79,9 +101,13 @@ In the Control topic:
 /projects
 ```
 
-`/sync on` creates topics for recent Codex chats and keeps discovering new ones. Send text inside a task topic to start or steer its turn. Use `/stop` in that topic to interrupt it.
+`/sync on` validates the private two-member forum, creates topics for recent Codex chats, and starts discovering new chats. Send plain text inside a task topic to start or steer its turn; use `/stop` there to interrupt it.
 
-Sync intentionally resets to off after a daemon restart. Run `/sync on` again after the shared App Server connection is healthy.
+Sync intentionally resets to `off` after every daemon restart. When the App Server connection is healthy again, run `/sync on` in `Control`.
+
+## First Telegram session
+
+The bot clears its default command scope and publishes commands only in the configured forum group. Use `Control` for group-level commands and task topics for plain-text Codex prompts.
 
 ## Telegram commands
 
