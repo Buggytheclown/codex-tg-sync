@@ -1915,12 +1915,14 @@ func renderSyncStatusWithFreshnessAt(snapshot appserver.ThreadReadSnapshot, fres
 		status = "unknown"
 	}
 	header := syncStatusHeader + " " + status
+	bodySeparator := "\n"
 	if duration, _ := runTimingValue(&snapshot, now); duration != "" {
 		header += " · " + duration
 	}
 	if !isTerminalStatus(snapshot.LatestTurnStatus) && (!freshness.SnapshotAt.IsZero() || !freshness.EventAt.IsZero()) {
-		header += "\n↻ snapshot " + formatSyncFreshnessTime(freshness.SnapshotAt, now) +
+		header += "\n\n↻ snapshot " + formatSyncFreshnessTime(freshness.SnapshotAt, now) +
 			" · event " + formatSyncFreshnessTime(freshness.EventAt, now)
+		bodySeparator = "\n\n"
 	}
 
 	blocks := syncStatusBlocks(snapshot.DetailItems)
@@ -1928,12 +1930,12 @@ func renderSyncStatusWithFreshnessAt(snapshot appserver.ThreadReadSnapshot, fres
 		return model.RenderedMessage{Text: header}
 	}
 	body := renderSyncStatusBlocks(snapshot, blocks, now)
-	body = trimSyncStatusBody(header, body)
-	message := model.RenderedMessage{Text: header + "\n" + body}
+	body = trimSyncStatusBody(header, bodySeparator, body)
+	message := model.RenderedMessage{Text: header + bodySeparator + body}
 	if isTerminalStatus(snapshot.LatestTurnStatus) && body != "" {
 		message.Entities = []model.MessageEntity{{
 			Type:   "expandable_blockquote",
-			Offset: syncUTF16Len(header + "\n"),
+			Offset: syncUTF16Len(header + bodySeparator),
 			Length: syncUTF16Len(body),
 		}}
 	}
@@ -2069,12 +2071,12 @@ func syncStatusBlockToolCount(snapshot appserver.ThreadReadSnapshot, block model
 	return count
 }
 
-func trimSyncStatusBody(header, body string) string {
+func trimSyncStatusBody(header, separator, body string) string {
 	body = strings.TrimSpace(body)
 	if body == "" {
 		return ""
 	}
-	budget := tgformat.TelegramMessageLimit - syncUTF16Len(header+"\n")
+	budget := tgformat.TelegramMessageLimit - syncUTF16Len(header+separator)
 	if budget <= 0 {
 		return ""
 	}

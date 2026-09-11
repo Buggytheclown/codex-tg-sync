@@ -1405,13 +1405,18 @@ func TestSyncStatusShowsFreshnessOnlyWhileActive(t *testing.T) {
 	snapshot := appserver.ThreadReadSnapshot{
 		Thread: model.Thread{Status: "inProgress"}, LatestTurnID: "turn-1", LatestTurnStatus: "inProgress",
 		LatestTurnStartedAt: now.Add(-time.Minute).Format(time.RFC3339Nano),
+		DetailItems: []model.DetailItem{{
+			ID: "commentary-1", Kind: model.DetailItemCommentary, Text: "Working",
+			StartedAt: model.TimeString(now.Add(-time.Minute).Format(time.RFC3339Nano)), CommentaryIndex: 1,
+		}},
 	}
 	freshness := syncStatusFreshness{SnapshotAt: now.Add(-2 * time.Second), EventAt: now.Add(-time.Second)}
 	message := renderSyncStatusWithFreshnessAt(snapshot, freshness, now)
 	wantFreshness := "↻ snapshot " + freshness.SnapshotAt.Local().Truncate(syncStatusTimerTick).Format("15:04:05") +
 		" · event " + freshness.EventAt.Local().Truncate(syncStatusTimerTick).Format("15:04:05")
-	if !strings.Contains(message.Text, wantFreshness) {
-		t.Fatalf("active status = %q, want freshness %q", message.Text, wantFreshness)
+	want := "⏱ [Status] inProgress · 1m\n\n" + wantFreshness + "\n\nБлок 1 · 1m\nWorking"
+	if message.Text != want {
+		t.Fatalf("active status = %q, want %q", message.Text, want)
 	}
 
 	snapshot.LatestTurnStatus = "completed"
