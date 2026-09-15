@@ -501,6 +501,105 @@ func (s *Store) GetActiveSyncTopicByThread(ctx context.Context, sessionID, threa
 	return nil, nil
 }
 
+// MarkStaleSyncTopicsForCleanup atomically claims only enough old, idle work to
+// bring the current session down to limit. Telegram deletion happens after the
+// transaction; claimed rows remain cleanup-only until it succeeds.
+func (s *Store) MarkStaleSyncTopicsForCleanup(ctx context.Context, sessionID string, cutoff model.TimeString, limit int) ([]model.SyncTopic, error) {
+	if strings.TrimSpace(sessionID) == "" || strings.TrimSpace(string(cutoff)) == "" {
+		return nil, errors.New("Sync cleanup session and cutoff are required")
+	}
+	if limit < 0 {
+		return nil, errors.New("Sync cleanup limit cannot be negative")
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer rollback(tx)
+
+	var managed int
+	err = tx.QueryRowContext(ctx, `SELECT
+		(SELECT count(*) FROM sync_topics WHERE session_id=? AND telegram_state=?) +
+		(SELECT count(*) FROM sync_topic_drafts WHERE session_id=? AND state<>?)`,
+		sessionID, model.SyncTopicConnected, sessionID, model.SyncDraftCleanup).Scan(&managed)
+	if err != nil {
+		return nil, err
+	}
+	excess := managed - limit
+	if excess <= 0 {
+		return nil, tx.Commit()
+	}
+
+	rows, err := tx.QueryContext(ctx, `SELECT kind,session_id,chat_id,topic_id,thread_id,rank,title,created_at,updated_at FROM (
+		SELECT 'topic' AS kind,session_id,chat_id,topic_id,thread_id,rank,title,created_at,updated_at
+		FROM sync_topics
+		WHERE session_id=? AND telegram_state=? AND updated_at<?
+		AND coalesce(active_turn_state,'') NOT IN (?,?,?)
+		UNION ALL
+		SELECT 'draft' AS kind,session_id,chat_id,topic_id,'' AS thread_id,rank,title,created_at,updated_at
+		FROM sync_topic_drafts
+		WHERE session_id=? AND state=? AND updated_at<?
+	) ORDER BY updated_at,topic_id LIMIT ?`,
+		sessionID, model.SyncTopicConnected, cutoff, model.SyncTurnStarting, model.SyncTurnActive, model.SyncTurnUnknown,
+		sessionID, model.SyncDraftReady, cutoff, excess)
+	if err != nil {
+		return nil, err
+	}
+	type candidate struct {
+		kind  string
+		topic model.SyncTopic
+	}
+	candidates := make([]candidate, 0, excess)
+	for rows.Next() {
+		var item candidate
+		if err := rows.Scan(&item.kind, &item.topic.SessionID, &item.topic.ChatID, &item.topic.TopicID,
+			&item.topic.ThreadID, &item.topic.Rank, &item.topic.Title, &item.topic.CreatedAt, &item.topic.UpdatedAt); err != nil {
+			_ = rows.Close()
+			return nil, err
+		}
+		candidates = append(candidates, item)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	now := model.NowString()
+	targets := make([]model.SyncTopic, 0, len(candidates))
+	for _, item := range candidates {
+		var result sql.Result
+		if item.kind == "draft" {
+			result, err = tx.ExecContext(ctx, `UPDATE sync_topic_drafts SET state=?,updated_at=?
+				WHERE session_id=? AND topic_id=? AND state=? AND updated_at<?`,
+				model.SyncDraftCleanup, now, item.topic.SessionID, item.topic.TopicID, model.SyncDraftReady, cutoff)
+		} else {
+			result, err = tx.ExecContext(ctx, `UPDATE sync_topics SET telegram_state=?,updated_at=?
+				WHERE session_id=? AND topic_id=? AND telegram_state=? AND updated_at<?
+				AND coalesce(active_turn_state,'') NOT IN (?,?,?)`,
+				model.SyncTopicCleanup, now, item.topic.SessionID, item.topic.TopicID, model.SyncTopicConnected, cutoff,
+				model.SyncTurnStarting, model.SyncTurnActive, model.SyncTurnUnknown)
+		}
+		if err != nil {
+			return nil, err
+		}
+		changed, err := result.RowsAffected()
+		if err != nil {
+			return nil, err
+		}
+		if changed == 1 {
+			item.topic.TelegramState = model.SyncTopicCleanup
+			item.topic.UpdatedAt = now
+			targets = append(targets, item.topic)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	return targets, nil
+}
+
 func (s *Store) AcceptSyncMessage(ctx context.Context, chatID, topicID, messageID int64) (model.SyncMessageReceipt, bool, error) {
 	if messageID <= 0 {
 		return model.SyncMessageReceipt{}, false, errors.New("telegram source message id is required")
@@ -820,4 +919,29 @@ func (s *Store) ListSyncCleanupTargets(ctx context.Context, sessionID string) ([
 			Rank: draft.Rank, Title: draft.Title, TelegramState: model.SyncTopicCleanup, CreatedAt: draft.CreatedAt, UpdatedAt: draft.UpdatedAt})
 	}
 	return topics, nil
+}
+
+func (s *Store) ListAllSyncCleanupTargets(ctx context.Context, chatID int64) ([]model.SyncTopic, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT session_id,chat_id,topic_id,thread_id,rank,title,created_at,updated_at FROM (
+		SELECT session_id,chat_id,topic_id,thread_id,rank,title,created_at,updated_at
+		FROM sync_topics WHERE chat_id=? AND telegram_state=?
+		UNION ALL
+		SELECT session_id,chat_id,topic_id,'' AS thread_id,rank,title,created_at,updated_at
+		FROM sync_topic_drafts WHERE chat_id=? AND state=?
+	) ORDER BY updated_at,topic_id`, chatID, model.SyncTopicCleanup, chatID, model.SyncDraftCleanup)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	targets := []model.SyncTopic{}
+	for rows.Next() {
+		var topic model.SyncTopic
+		if err := rows.Scan(&topic.SessionID, &topic.ChatID, &topic.TopicID, &topic.ThreadID,
+			&topic.Rank, &topic.Title, &topic.CreatedAt, &topic.UpdatedAt); err != nil {
+			return nil, err
+		}
+		topic.TelegramState = model.SyncTopicCleanup
+		targets = append(targets, topic)
+	}
+	return targets, rows.Err()
 }

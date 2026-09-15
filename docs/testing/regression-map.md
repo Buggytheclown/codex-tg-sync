@@ -39,6 +39,8 @@ Coverage includes:
 - one topic per thread and receipt idempotency;
 - shared daemon/WebSocket reconnection without prompt replay;
 - startup reset to off and cleanup-only old topics/drafts;
+- oldest-inactive topic retention after creation, including ready drafts,
+  unfinished-work protection, and cleanup retry across historical sessions;
 - generation-aware writer claims and fail-closed unknown dispatch;
 - poll/list/read behavior and non-blocking startup;
 - important App Server events coalesce into bounded latest-turn reads while

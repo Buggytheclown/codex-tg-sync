@@ -675,6 +675,7 @@ func IsTopicNotFound(err error) bool {
 	}
 	description := strings.ToLower(apiErr.Description)
 	return strings.Contains(description, "message thread not found") ||
+		strings.Contains(description, "topic_id_invalid") ||
 		strings.Contains(description, "topic_closed") ||
 		strings.Contains(description, "topic was deleted")
 }

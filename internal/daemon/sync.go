@@ -24,6 +24,8 @@ const (
 	syncControlTopicID         = int64(1)
 	syncGeneralSendTopicID     = int64(0)
 	syncActivationDeliveryKind = "sync_activation"
+	syncTopicRetentionLimit    = 10
+	syncTopicInactiveAge       = 24 * time.Hour
 )
 
 // SyncForum is deliberately scoped to the configured Sync group. Its
@@ -505,7 +507,7 @@ func (s *Service) activateSync(ctx context.Context, userID int64) (*DirectRespon
 	if err := forum.PrepareSyncControl(ctx); err != nil {
 		return nil, fmt.Errorf("prepare Sync Control: %w", err)
 	}
-	s.cleanupSyncTopics(ctx, state.SessionID)
+	s.cleanupSyncTopics(ctx)
 	s.clearSyncEventActivity()
 
 	poll, err := s.controlReadSession(ctx)
@@ -567,6 +569,7 @@ func (s *Service) activateSync(ctx context.Context, userID int64) (*DirectRespon
 		summary.Created++
 		summary.Items[rank].Telegram = "connected"
 		_ = s.store.UpsertThread(ctx, thread)
+		s.pruneSyncTopics(ctx, sessionID)
 	}
 	summaryJSON, _ := json.Marshal(summary)
 	eventID := "sync-activation:" + sessionID
@@ -822,6 +825,7 @@ func (s *Service) discoverSyncThreadsLocked(ctx context.Context, state model.Syn
 		bound[thread.ID] = struct{}{}
 		discovered++
 		_ = s.store.UpsertThread(ctx, thread)
+		s.pruneSyncTopics(ctx, state.SessionID)
 	}
 	return discovered, failures, nil
 }
@@ -1740,27 +1744,58 @@ func (s *Service) refreshSyncDirectDelivery(ctx context.Context, chatID, topicID
 	s.processSyncSnapshotLocked(ctx, state, forum, *topic, current, "sync_direct_delivery")
 }
 
-func (s *Service) cleanupSyncTopics(ctx context.Context, sessionID string) {
-	if strings.TrimSpace(sessionID) == "" {
-		return
-	}
+func (s *Service) cleanupSyncTopics(ctx context.Context) {
 	forum := s.getSyncForum()
 	if forum == nil {
 		return
 	}
-	topics, _ := s.store.ListSyncCleanupTargets(ctx, sessionID)
+	topics, err := s.store.ListAllSyncCleanupTargets(ctx, s.cfg.SyncGroupID)
+	if err != nil {
+		s.logLifecycle("sync_cleanup_list_failed", lifecycleFields{"error": err})
+		return
+	}
+	s.deleteSyncCleanupTargets(ctx, forum, topics)
+}
+
+func (s *Service) pruneSyncTopics(ctx context.Context, sessionID string) {
+	if strings.TrimSpace(sessionID) == "" {
+		return
+	}
+	s.cleanupSyncTopics(ctx)
+	forum := s.getSyncForum()
+	if forum == nil {
+		return
+	}
+	cutoff := model.TimeString(s.now().UTC().Add(-syncTopicInactiveAge).Format(time.RFC3339Nano))
+	topics, err := s.store.MarkStaleSyncTopicsForCleanup(ctx, sessionID, cutoff, syncTopicRetentionLimit)
+	if err != nil {
+		s.logLifecycle("sync_topic_prune_failed", lifecycleFields{"session_id": sessionID, "error": err})
+		return
+	}
+	s.deleteSyncCleanupTargets(ctx, forum, topics)
+}
+
+func (s *Service) deleteSyncCleanupTargets(ctx context.Context, forum SyncForum, topics []model.SyncTopic) {
 	for _, topic := range topics {
 		if isSyncControlTopic(topic.TopicID) {
 			continue
 		}
-		if topic.TelegramState == model.SyncTopicCleanup && forum.DeleteSyncTopic(ctx, topic.TopicID) == nil {
-			_ = s.store.DeleteSyncTopic(ctx, sessionID, topic.TopicID)
+		if topic.TelegramState != model.SyncTopicCleanup {
+			continue
+		}
+		if err := forum.DeleteSyncTopic(ctx, topic.TopicID); err != nil {
+			s.logLifecycle("sync_cleanup_delete_failed", lifecycleFields{"session_id": topic.SessionID, "topic_id": topic.TopicID, "error": err})
+			continue
+		}
+		if err := s.store.DeleteSyncTopic(ctx, topic.SessionID, topic.TopicID); err != nil {
+			s.logLifecycle("sync_cleanup_forget_failed", lifecycleFields{"session_id": topic.SessionID, "topic_id": topic.TopicID, "error": err})
 		}
 	}
 }
 
-// FinishStartup runs after the Telegram bot is ready. It cleans the previous
-// Sync session and reports a missing shared App Server once per process start.
+// FinishStartup runs after the Telegram bot is ready. It retries durable topic
+// cleanup from every session and reports a missing shared App Server once per
+// process start.
 func (s *Service) FinishStartup(ctx context.Context) {
 	s.mu.Lock()
 	if s.startupFinished {
@@ -1768,18 +1803,16 @@ func (s *Service) FinishStartup(ctx context.Context) {
 		return
 	}
 	s.startupFinished = true
-	cleanupSessionID := s.startupCleanupSessionID
-	s.startupCleanupSessionID = ""
 	done := s.startupDone
 	s.mu.Unlock()
 	s.spawn(ctx, func(ctx context.Context) {
 		defer close(done)
-		s.finishStartup(ctx, cleanupSessionID)
+		s.finishStartup(ctx)
 	})
 }
 
-func (s *Service) finishStartup(ctx context.Context, cleanupSessionID string) {
-	s.cleanupSyncTopics(ctx, cleanupSessionID)
+func (s *Service) finishStartup(ctx context.Context) {
+	s.cleanupSyncTopics(ctx)
 	s.ensurePollSession(ctx)
 
 	s.mu.RLock()

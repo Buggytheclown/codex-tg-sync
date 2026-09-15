@@ -175,6 +175,10 @@ func TestTelegramAPIErrorClassifiesTopicAndRetryFailures(t *testing.T) {
 	if !IsTopicNotFound(err) {
 		t.Fatalf("IsTopicNotFound(%v) = false", err)
 	}
+	invalidTopicErr := decodeAPIResponse("deleteForumTopic", []byte(`{"ok":false,"error_code":400,"description":"Bad Request: TOPIC_ID_INVALID"}`), nil)
+	if !IsTopicNotFound(invalidTopicErr) {
+		t.Fatalf("IsTopicNotFound(%v) = false", invalidTopicErr)
+	}
 	var apiErr *APIError
 	if !errors.As(err, &apiErr) || apiErr.Method != "sendMessage" || apiErr.Code != 400 {
 		t.Fatalf("APIError = %#v", apiErr)

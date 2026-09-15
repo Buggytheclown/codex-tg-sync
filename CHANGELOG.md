@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Pruned the oldest managed Telegram topics inactive for more than 24 hours
+  after new-topic creation when Sync grows beyond ten, while preserving
+  unfinished work and retrying cleanup left by older Sync sessions.
 - Replaced partial live-event snapshot mutation with coalesced, bounded
   latest-turn reads and a monotonic late-bound Telegram projection.
 - Kept commentary-block timing, replaced noisy tool labels with complete

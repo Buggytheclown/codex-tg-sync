@@ -88,6 +88,7 @@ func (s *Service) dispatchExternalLaunchRequest(ctx context.Context, requestID s
 	if response != nil && strings.TrimSpace(response.ThreadID) != "" && strings.TrimSpace(response.TurnID) != "" && dispatchErr == nil {
 		_, _ = s.store.CompleteExternalLaunchRequest(ctx, request.ID, model.ExternalLaunchSessionStarted,
 			response.ThreadID, response.TurnID, "", "")
+		s.pruneSyncTopics(ctx, state.SessionID)
 		s.queueExternalReplyFromStoredSnapshot(ctx, response.ThreadID)
 		s.finishExternalLaunchDispatch()
 		return

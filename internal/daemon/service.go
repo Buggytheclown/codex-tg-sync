@@ -108,7 +108,6 @@ type Service struct {
 	phase                        string
 	lastError                    string
 	pollConnected                bool
-	startupCleanupSessionID      string
 	startupFinished              bool
 	startupDone                  chan struct{}
 	lastPollHeartbeat            time.Time
@@ -251,7 +250,6 @@ func (s *Service) Start(ctx context.Context) error {
 	s.phase = "ready"
 	s.lastError = ""
 	s.pollConnected = false
-	s.startupCleanupSessionID = ""
 	s.startupFinished = false
 	s.startupDone = make(chan struct{})
 	s.mu.Unlock()
@@ -269,7 +267,7 @@ func (s *Service) Start(ctx context.Context) error {
 	_, actionCardRecoveryErr := s.store.RefreshExternalLaunchActionCards(runCtx)
 	_, ackRecoveryErr := s.store.RecoverSendingExternalAcks(runCtx)
 	_, replyRecoveryErr := s.store.RecoverSendingExternalReplies(runCtx)
-	cleanupSessionID, resetErr := s.store.ResetSyncOnStartup(runCtx)
+	_, resetErr := s.store.ResetSyncOnStartup(runCtx)
 	err := errors.Join(repairResetErr, deliveryRetirementErr, recoveryErr, terminalRecoveryErr, actionCardRecoveryErr, ackRecoveryErr, replyRecoveryErr, resetErr)
 	if err != nil {
 		cancel()
@@ -286,9 +284,6 @@ func (s *Service) Start(ctx context.Context) error {
 		_ = s.store.SetState(context.Background(), "daemon.last_error", sanitizeDiagnosticString(err.Error()))
 		return fmt.Errorf("recover durable startup state: %w", err)
 	}
-	s.mu.Lock()
-	s.startupCleanupSessionID = cleanupSessionID
-	s.mu.Unlock()
 	s.spawn(runCtx, s.ensureSessions)
 	s.spawn(runCtx, s.indexLoop)
 	s.spawn(runCtx, s.pollLoop)
@@ -659,7 +654,7 @@ func (s *Service) softResetSyncAfterTransportLoss(ctx context.Context, cause err
 		return
 	}
 	_ = s.syncWriter.ForceClose()
-	s.cleanupSyncTopics(ctx, sessionID)
+	s.cleanupSyncTopics(ctx)
 	s.logLifecycle("sync_transport_reset", lifecycleFields{"session_id": sessionID, "error": cause})
 }
 

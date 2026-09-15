@@ -40,6 +40,11 @@ The Bot API chat-scoped menu contains exactly:
   latency and periodic reconciliation covers missed events.
 - One durable Codex `threadId` maps to one managed topic per Sync session.
 - A restart resets Sync to off, cleans old managed topics, and preserves Codex work.
+- New topic creation prunes the oldest managed topics inactive for more than 24
+  hours until ten remain, when enough safe terminal topics or ready drafts
+  exist. Active, starting, and unknown work is preserved even above the limit.
+- Cleanup is durable across failures and retried for historical Sync sessions
+  in the configured group.
 - Project/Chat creation first creates a durable topic draft. The first text message claims the draft, creates the thread, and starts one turn.
 - Duplicate Telegram message ids are idempotent.
 - Plain text in a bound topic steers a genuinely active turn; otherwise it starts a new turn only after authoritative re-read.

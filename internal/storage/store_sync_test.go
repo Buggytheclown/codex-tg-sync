@@ -3,10 +3,140 @@ package storage
 import (
 	"context"
 	"path/filepath"
+	"reflect"
 	"testing"
+	"time"
 
 	"github.com/mideco-tech/codex-tg/internal/model"
 )
+
+func TestMarkStaleSyncTopicsForCleanupSelectsOldestSafeWorkToReachLimit(t *testing.T) {
+	t.Parallel()
+	store := openTestStore(t)
+	ctx := context.Background()
+	if err := store.BeginSyncActivation(ctx, "session-1", -1001); err != nil {
+		t.Fatal(err)
+	}
+	for index := 0; index < 11; index++ {
+		topicID := int64(11 + index)
+		state := model.SyncTurnTerminal
+		if topicID == 14 {
+			state = model.SyncTurnActive
+		}
+		if err := store.UpsertSyncTopic(ctx, model.SyncTopic{SessionID: "session-1", ChatID: -1001,
+			TopicID: topicID, ThreadID: "thread-" + string(rune('a'+index)), Rank: index + 1,
+			Title: "Topic", TelegramState: model.SyncTopicConnected, ActiveTurnState: state}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := store.FinishSyncActivation(ctx, "session-1", `{}`, true); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.CreateSyncTopicDraft(ctx, model.SyncTopicDraft{SessionID: "session-1", ChatID: -1001,
+		TopicID: 30, Rank: 12, Title: "Draft", CWD: "/tmp/project"}); err != nil {
+		t.Fatal(err)
+	}
+	base := time.Date(2026, 9, 15, 12, 0, 0, 0, time.UTC)
+	old := map[int64]time.Duration{30: -96 * time.Hour, 11: -72 * time.Hour, 12: -48 * time.Hour, 14: -120 * time.Hour}
+	for topicID, offset := range old {
+		table := "sync_topics"
+		if topicID == 30 {
+			table = "sync_topic_drafts"
+		}
+		if _, err := store.db.ExecContext(ctx, "UPDATE "+table+" SET updated_at=? WHERE session_id=? AND topic_id=?",
+			base.Add(offset).Format(time.RFC3339Nano), "session-1", topicID); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	targets, err := store.MarkStaleSyncTopicsForCleanup(ctx, "session-1",
+		model.TimeString(base.Add(-24*time.Hour).Format(time.RFC3339Nano)), 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := make([]int64, 0, len(targets))
+	for _, target := range targets {
+		got = append(got, target.TopicID)
+	}
+	if want := []int64{30, 11}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("cleanup targets=%v, want %v", got, want)
+	}
+	topics, err := store.ListSyncTopics(ctx, "session-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	states := map[int64]string{}
+	for _, topic := range topics {
+		states[topic.TopicID] = topic.TelegramState
+	}
+	if states[11] != model.SyncTopicCleanup || states[12] != model.SyncTopicConnected || states[14] != model.SyncTopicConnected {
+		t.Fatalf("topic states=%v", states)
+	}
+	drafts, err := store.ListSyncTopicDrafts(ctx, "session-1")
+	if err != nil || len(drafts) != 1 || drafts[0].State != model.SyncDraftCleanup {
+		t.Fatalf("drafts=%#v err=%v", drafts, err)
+	}
+}
+
+func TestMarkStaleSyncTopicsForCleanupLeavesSessionOverLimitWithoutEnoughSafeWork(t *testing.T) {
+	t.Parallel()
+	store := openTestStore(t)
+	ctx := context.Background()
+	for index := 0; index < 12; index++ {
+		state := model.SyncTurnActive
+		if index == 0 {
+			state = model.SyncTurnTerminal
+		}
+		if err := store.UpsertSyncTopic(ctx, model.SyncTopic{SessionID: "session-1", ChatID: -1001,
+			TopicID: int64(11 + index), ThreadID: "thread-" + string(rune('a'+index)),
+			TelegramState: model.SyncTopicConnected, ActiveTurnState: state}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	base := time.Date(2026, 9, 15, 12, 0, 0, 0, time.UTC)
+	if _, err := store.db.ExecContext(ctx, `UPDATE sync_topics SET updated_at=?`, base.Add(-48*time.Hour).Format(time.RFC3339Nano)); err != nil {
+		t.Fatal(err)
+	}
+	targets, err := store.MarkStaleSyncTopicsForCleanup(ctx, "session-1",
+		model.TimeString(base.Add(-24*time.Hour).Format(time.RFC3339Nano)), 10)
+	if err != nil || len(targets) != 1 || targets[0].TopicID != 11 {
+		t.Fatalf("targets=%#v err=%v", targets, err)
+	}
+}
+
+func TestListAllSyncCleanupTargetsIncludesOlderSessionsAndDrafts(t *testing.T) {
+	t.Parallel()
+	store := openTestStore(t)
+	ctx := context.Background()
+	if err := store.UpsertSyncTopic(ctx, model.SyncTopic{SessionID: "old-session", ChatID: -1001,
+		TopicID: 11, ThreadID: "old-thread", TelegramState: model.SyncTopicCleanup}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.UpsertSyncTopic(ctx, model.SyncTopic{SessionID: "current-session", ChatID: -1001,
+		TopicID: 12, ThreadID: "current-thread", TelegramState: model.SyncTopicConnected}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.UpsertSyncTopic(ctx, model.SyncTopic{SessionID: "other-chat-session", ChatID: -2002,
+		TopicID: 14, ThreadID: "other-chat-thread", TelegramState: model.SyncTopicCleanup}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.db.ExecContext(ctx, `INSERT INTO sync_topic_drafts(session_id,chat_id,topic_id,rank,title,cwd,state,created_at,updated_at)
+		VALUES (?,?,?,?,?,?,?,?,?)`, "older-draft-session", -1001, 13, 0, "Draft", "/tmp/project", model.SyncDraftCleanup,
+		model.NowString(), model.NowString()); err != nil {
+		t.Fatal(err)
+	}
+	targets, err := store.ListAllSyncCleanupTargets(ctx, -1001)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := make([]int64, 0, len(targets))
+	for _, target := range targets {
+		got = append(got, target.TopicID)
+	}
+	if want := []int64{11, 13}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("cleanup targets=%v, want %v", got, want)
+	}
+}
 
 func TestSyncStatusTurnMigrationAdoptsExistingRenderedTurn(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "legacy.sqlite")

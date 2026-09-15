@@ -27,6 +27,7 @@ type fakeSyncForum struct {
 	sendErrAt      int
 	sendErr        error
 	editErr        error
+	deleteErr      error
 	rejectOversize bool
 	renameErr      error
 	creates        []string
@@ -128,7 +129,7 @@ func (f *fakeSyncForum) DeleteSyncTopic(_ context.Context, topicID int64) error 
 		f.onDelete()
 	}
 	f.deletes = append(f.deletes, topicID)
-	return nil
+	return f.deleteErr
 }
 func (f *fakeSyncForum) SendSyncMessage(_ context.Context, topicID int64, message model.RenderedMessage, options model.SendOptions) (int64, error) {
 	id := int64(100 + len(f.sends))
@@ -2739,6 +2740,103 @@ func TestSyncProjectPickerCreatesThreadThenTopicThenDurableBinding(t *testing.T)
 	}
 	if len(writer.threadSetNameCalls) != 1 || writer.threadSetNameCalls[0].threadID != "new-thread" || writer.threadSetNameCalls[0].name != "first prompt" {
 		t.Fatalf("thread names=%#v", writer.threadSetNameCalls)
+	}
+}
+
+func TestSyncProjectTopicCreationPrunesOldestInactiveTopic(t *testing.T) {
+	service := activeSyncService(t)
+	ctx := context.Background()
+	service.now = func() time.Time { return time.Now().UTC().Add(48 * time.Hour) }
+	for index := 0; index < 8; index++ {
+		topicID := int64(13 + index)
+		if err := service.store.UpsertSyncTopic(ctx, model.SyncTopic{SessionID: "s", ChatID: -1001,
+			TopicID: topicID, ThreadID: fmt.Sprintf("extra-thread-%d", index), Rank: index + 3,
+			Title: "Extra", TelegramState: model.SyncTopicConnected, ActiveTurnState: model.SyncTurnTerminal}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	forum := &fakeSyncForum{nextTopicID: 20}
+	service.SetSyncForum(forum)
+	menu, err := service.HandleMessageWithID(ctx, -1001, 1, 700, 123456789, "/projects", 0)
+	if err != nil || menu == nil || len(menu.Buttons) == 0 {
+		t.Fatalf("menu=%#v err=%v", menu, err)
+	}
+	created, err := service.HandleCallback(ctx, -1001, 1, 900, 123456789, menu.Buttons[0][0].CallbackData)
+	if err != nil || created == nil || !strings.Contains(created.Text, "ready") {
+		t.Fatalf("created=%#v err=%v", created, err)
+	}
+	if !reflect.DeepEqual(forum.deletes, []int64{11}) {
+		t.Fatalf("deleted topics=%v, want [11]", forum.deletes)
+	}
+	topics, err := service.store.ListSyncTopics(ctx, "s")
+	if err != nil || len(topics) != 9 {
+		t.Fatalf("topics=%#v err=%v", topics, err)
+	}
+	drafts, err := service.store.ListSyncTopicDrafts(ctx, "s")
+	if err != nil || len(drafts) != 1 || drafts[0].TopicID != 21 {
+		t.Fatalf("drafts=%#v err=%v", drafts, err)
+	}
+}
+
+func TestSyncProjectTopicCreationSucceedsWhenPruneDeletionFails(t *testing.T) {
+	service := activeSyncService(t)
+	ctx := context.Background()
+	service.now = func() time.Time { return time.Now().UTC().Add(48 * time.Hour) }
+	for index := 0; index < 8; index++ {
+		if err := service.store.UpsertSyncTopic(ctx, model.SyncTopic{SessionID: "s", ChatID: -1001,
+			TopicID: int64(13 + index), ThreadID: fmt.Sprintf("extra-thread-%d", index), Rank: index + 3,
+			Title: "Extra", TelegramState: model.SyncTopicConnected, ActiveTurnState: model.SyncTurnTerminal}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	forum := &fakeSyncForum{nextTopicID: 20, deleteErr: errors.New("temporary delete failure")}
+	service.SetSyncForum(forum)
+	menu, err := service.HandleMessageWithID(ctx, -1001, 1, 700, 123456789, "/projects", 0)
+	if err != nil || menu == nil || len(menu.Buttons) == 0 {
+		t.Fatalf("menu=%#v err=%v", menu, err)
+	}
+	created, err := service.HandleCallback(ctx, -1001, 1, 900, 123456789, menu.Buttons[0][0].CallbackData)
+	if err != nil || created == nil || !strings.Contains(created.Text, "ready") {
+		t.Fatalf("created=%#v err=%v", created, err)
+	}
+	topics, err := service.store.ListSyncTopics(ctx, "s")
+	if err != nil || len(topics) != 10 {
+		t.Fatalf("topics=%#v err=%v", topics, err)
+	}
+	if topics[0].TopicID != 11 || topics[0].TelegramState != model.SyncTopicCleanup {
+		t.Fatalf("oldest topic=%#v, want durable cleanup", topics[0])
+	}
+	drafts, err := service.store.ListSyncTopicDrafts(ctx, "s")
+	if err != nil || len(drafts) != 1 || drafts[0].TopicID != 21 {
+		t.Fatalf("drafts=%#v err=%v", drafts, err)
+	}
+}
+
+func TestCleanupSyncTopicsRetriesTargetsFromOlderSessions(t *testing.T) {
+	service := newTestService(t)
+	ctx := context.Background()
+	if err := service.store.UpsertSyncTopic(ctx, model.SyncTopic{SessionID: "old-session", ChatID: -1001,
+		TopicID: 41, ThreadID: "old-thread", TelegramState: model.SyncTopicCleanup}); err != nil {
+		t.Fatal(err)
+	}
+	forum := &fakeSyncForum{deleteErr: errors.New("temporary delete failure")}
+	service.SetSyncForum(forum)
+	service.cleanupSyncTopics(ctx)
+	if !reflect.DeepEqual(forum.deletes, []int64{41}) {
+		t.Fatalf("deleted topics=%v, want [41]", forum.deletes)
+	}
+	topics, err := service.store.ListSyncTopics(ctx, "old-session")
+	if err != nil || len(topics) != 1 || topics[0].TelegramState != model.SyncTopicCleanup {
+		t.Fatalf("topics after failed delete=%#v err=%v", topics, err)
+	}
+	forum.deleteErr = nil
+	service.cleanupSyncTopics(ctx)
+	if !reflect.DeepEqual(forum.deletes, []int64{41, 41}) {
+		t.Fatalf("retried topics=%v, want [41 41]", forum.deletes)
+	}
+	topics, err = service.store.ListSyncTopics(ctx, "old-session")
+	if err != nil || len(topics) != 0 {
+		t.Fatalf("topics=%#v err=%v", topics, err)
 	}
 }
 
