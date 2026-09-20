@@ -31,8 +31,10 @@ the first prompt.
   precise `no rollout found` resume failure and only when they have no rendered
   turn. Sync converts that binding to a claimed draft and continues the same
   source message through the new first-turn path.
-- The first prompt produces a short Telegram-safe title. Sync renames the topic
-  immediately and asks App Server to use the same thread name best-effort.
+- The first prompt produces a short Telegram-safe title. Sync starts and
+  durably records the turn first, asks App Server to use the same thread name
+  best-effort, and schedules Telegram rename through normal post-response
+  delivery reconciliation.
 - `/sync off` treats ready drafts as cleanup targets. A starting or
   ownership-unknown draft blocks safe off just like unfinished bound work.
 - Sync Control fallback help lists `/projects` and `/newchat` alongside the
@@ -50,8 +52,8 @@ the first prompt.
 
 - Project callback creates one Telegram draft and performs no App Server call.
 - First draft prompt performs `thread/start` followed by `turn/start` on one
-  writer, creates the durable binding, records the source receipt, and renames
-  the topic.
+  writer, creates the durable binding, records the source receipt, and leaves
+  Telegram rename to post-response reconciliation.
 - Duplicate callbacks and duplicate source messages cannot create another
   thread.
 - `no rollout found` on a legacy empty binding recovers through a replacement

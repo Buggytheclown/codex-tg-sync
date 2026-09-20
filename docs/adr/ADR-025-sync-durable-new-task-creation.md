@@ -33,8 +33,9 @@ back safely when a later Telegram operation fails.
   ownership-unknown and is never replayed.
 - Pre-migration empty bindings recover only from the precise `no rollout found`
   resume failure and only when no turn was ever rendered.
-- The first prompt supplies a short initial name for the Telegram topic and,
-  best-effort, the Codex thread.
+- The first prompt starts and durably records its turn before presentation work.
+  It supplies a short initial name for the Codex thread best-effort; the normal
+  asynchronous delivery reconciliation applies the same Telegram topic name.
 
 ## Consequences
 

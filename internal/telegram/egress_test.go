@@ -137,6 +137,83 @@ func TestEgressGovernorLimitsRawGroupWritesPerRollingMinute(t *testing.T) {
 	}
 }
 
+func TestEgressGovernorBackgroundCapDoesNotBlockForeground(t *testing.T) {
+	clock := newFakeEgressClock()
+	governor := newEgressGovernorWithClock(defaultTelegramGroupWriteInterval, clock)
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	governor.Start(ctx)
+
+	for index := 0; index < defaultTelegramBackgroundWriteLimit; index++ {
+		started := make(chan struct{}, 1)
+		done := runEgressOperation(governor, ctx, egressOperation{priority: egressBackground, retry429: true}, func() error {
+			started <- struct{}{}
+			return nil
+		})
+		if index > 0 {
+			waitForCondition(t, func() bool { return clock.timerCount() > 0 })
+			clock.Advance(defaultTelegramGroupWriteInterval)
+		}
+		receiveSignal(t, started)
+		if err := receiveError(t, done); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	backgroundStarted := make(chan struct{}, 1)
+	backgroundDone := runEgressOperation(governor, ctx, egressOperation{priority: egressBackground, retry429: true}, func() error {
+		backgroundStarted <- struct{}{}
+		return nil
+	})
+	waitForCondition(t, func() bool { return clock.timerCount() > 0 })
+
+	foregroundStarted := make(chan struct{}, 1)
+	foregroundDone := runEgressOperation(governor, ctx, egressOperation{priority: egressForeground, retry429: true}, func() error {
+		foregroundStarted <- struct{}{}
+		return nil
+	})
+	clock.Advance(defaultTelegramGroupWriteInterval)
+	receiveSignal(t, foregroundStarted)
+	assertNoSignal(t, backgroundStarted)
+	if err := receiveError(t, foregroundDone); err != nil {
+		t.Fatal(err)
+	}
+
+	remaining := defaultTelegramGroupWriteWindow - time.Duration(defaultTelegramBackgroundWriteLimit)*defaultTelegramGroupWriteInterval
+	clock.Advance(remaining)
+	receiveSignal(t, backgroundStarted)
+	if err := receiveError(t, backgroundDone); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestEgressGovernorObservesQueueWaitByOperation(t *testing.T) {
+	clock := newFakeEgressClock()
+	governor := newEgressGovernorWithClock(defaultTelegramGroupWriteInterval, clock)
+	observed := make(chan egressObservation, 2)
+	governor.observe = func(value egressObservation) { observed <- value }
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	governor.Start(ctx)
+
+	first := runEgressOperation(governor, ctx, egressOperation{name: egressOperationSendMessage, priority: egressForeground, retry429: true}, func() error { return nil })
+	if err := receiveError(t, first); err != nil {
+		t.Fatal(err)
+	}
+	<-observed
+
+	second := runEgressOperation(governor, ctx, egressOperation{name: egressOperationDeleteForumTopic, priority: egressBackground, retry429: true}, func() error { return nil })
+	waitForCondition(t, func() bool { return clock.timerCount() > 0 })
+	clock.Advance(defaultTelegramGroupWriteInterval)
+	if err := receiveError(t, second); err != nil {
+		t.Fatal(err)
+	}
+	got := <-observed
+	if got.Operation != egressOperationDeleteForumTopic || got.Priority != "background" || got.QueueWait != defaultTelegramGroupWriteInterval {
+		t.Fatalf("observation = %#v", got)
+	}
+}
+
 func TestEgressGovernorBoundsForegroundPriority(t *testing.T) {
 	governor := newEgressGovernor(0)
 	ctx, cancel := context.WithCancel(context.Background())

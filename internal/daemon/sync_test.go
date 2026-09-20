@@ -66,6 +66,26 @@ type syncWriterSession struct {
 	events chan appserver.Event
 }
 
+type orderedDraftSession struct {
+	*stubSession
+	order []string
+}
+
+func (s *orderedDraftSession) ThreadStart(ctx context.Context, cwd string, options appserver.ThreadStartOptions) (map[string]any, error) {
+	s.order = append(s.order, "thread/start")
+	return s.stubSession.ThreadStart(ctx, cwd, options)
+}
+
+func (s *orderedDraftSession) TurnStart(ctx context.Context, threadID, message, cwd string, options appserver.TurnStartOptions) (map[string]any, error) {
+	s.order = append(s.order, "turn/start")
+	return s.stubSession.TurnStart(ctx, threadID, message, cwd, options)
+}
+
+func (s *orderedDraftSession) ThreadSetName(ctx context.Context, threadID, name string) (map[string]any, error) {
+	s.order = append(s.order, "thread/setName")
+	return s.stubSession.ThreadSetName(ctx, threadID, name)
+}
+
 func (s *syncWriterSession) Subscribe() <-chan appserver.Event { return s.events }
 
 type pagedThreadListSession struct {
@@ -2687,7 +2707,7 @@ func TestSyncStartupDoesNotWarnWhenSharedDaemonConnects(t *testing.T) {
 
 func TestSyncProjectPickerCreatesThreadThenTopicThenDurableBinding(t *testing.T) {
 	service := activeSyncService(t)
-	writer := &stubSession{threadStartResult: map[string]any{"thread": map[string]any{"id": "new-thread", "title": "New task", "cwd": "/tmp/project", "updatedAt": float64(100)}}}
+	writer := &orderedDraftSession{stubSession: &stubSession{threadStartResult: map[string]any{"thread": map[string]any{"id": "new-thread", "title": "New task", "cwd": "/tmp/project", "updatedAt": float64(100)}}}}
 	service.liveFactory = func() Session { return writer }
 	ctx := context.Background()
 	forum := &fakeSyncForum{nextTopicID: 20}
@@ -2735,11 +2755,21 @@ func TestSyncProjectPickerCreatesThreadThenTopicThenDurableBinding(t *testing.T)
 	if err != nil || len(topics) != 3 || topics[2].ThreadID != "new-thread" || topics[2].TopicID != 21 {
 		t.Fatalf("topics=%#v err=%v", topics, err)
 	}
+	if len(forum.renames) != 0 {
+		t.Fatalf("first prompt synchronously renamed Telegram topic: %#v", forum.renames)
+	}
+	if !firstPrompt.ScheduleSyncDelivery {
+		t.Fatal("first prompt did not schedule post-response reconciliation")
+	}
+	service.runSyncDelivery(ctx, "new-thread")
 	if len(forum.renames) != 1 || forum.renames[0].topicID != 21 || forum.renames[0].title != "first prompt" {
-		t.Fatalf("renames=%#v", forum.renames)
+		t.Fatalf("reconciled renames=%#v", forum.renames)
 	}
 	if len(writer.threadSetNameCalls) != 1 || writer.threadSetNameCalls[0].threadID != "new-thread" || writer.threadSetNameCalls[0].name != "first prompt" {
 		t.Fatalf("thread names=%#v", writer.threadSetNameCalls)
+	}
+	if !reflect.DeepEqual(writer.order, []string{"thread/start", "turn/start", "thread/setName"}) {
+		t.Fatalf("App Server call order=%v", writer.order)
 	}
 }
 
@@ -2765,16 +2795,87 @@ func TestSyncProjectTopicCreationPrunesOldestInactiveTopic(t *testing.T) {
 	if err != nil || created == nil || !strings.Contains(created.Text, "ready") {
 		t.Fatalf("created=%#v err=%v", created, err)
 	}
+	topics, err := service.store.ListSyncTopics(ctx, "s")
+	if err != nil || len(topics) != 10 || topics[0].TopicID != 11 || topics[0].TelegramState != model.SyncTopicCleanup {
+		t.Fatalf("topics=%#v err=%v", topics, err)
+	}
+	if len(forum.deletes) != 0 {
+		t.Fatalf("pruning blocked /newchat with deletes=%v", forum.deletes)
+	}
+	if !created.ScheduleSyncCleanup {
+		t.Fatal("ready response did not schedule durable cleanup")
+	}
+	service.cleanupSyncTopics(ctx)
 	if !reflect.DeepEqual(forum.deletes, []int64{11}) {
 		t.Fatalf("deleted topics=%v, want [11]", forum.deletes)
-	}
-	topics, err := service.store.ListSyncTopics(ctx, "s")
-	if err != nil || len(topics) != 9 {
-		t.Fatalf("topics=%#v err=%v", topics, err)
 	}
 	drafts, err := service.store.ListSyncTopicDrafts(ctx, "s")
 	if err != nil || len(drafts) != 1 || drafts[0].TopicID != 21 {
 		t.Fatalf("drafts=%#v err=%v", drafts, err)
+	}
+}
+
+func TestSyncProjectTopicCreationDoesNotWaitForPruneDeletion(t *testing.T) {
+	service := activeSyncService(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	service.now = func() time.Time { return time.Now().UTC().Add(48 * time.Hour) }
+	for index := 0; index < 8; index++ {
+		if err := service.store.UpsertSyncTopic(ctx, model.SyncTopic{SessionID: "s", ChatID: -1001,
+			TopicID: int64(13 + index), ThreadID: fmt.Sprintf("extra-thread-%d", index), Rank: index + 3,
+			Title: "Extra", TelegramState: model.SyncTopicConnected, ActiveTurnState: model.SyncTurnTerminal}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	deleteStarted := make(chan struct{})
+	releaseDelete := make(chan struct{})
+	defer close(releaseDelete)
+	forum := &fakeSyncForum{nextTopicID: 20, onDelete: func() {
+		select {
+		case <-deleteStarted:
+		default:
+			close(deleteStarted)
+		}
+		<-releaseDelete
+	}}
+	service.SetSyncForum(forum)
+	service.spawn(ctx, service.syncCleanupLoop)
+
+	menu, err := service.HandleMessageWithID(ctx, -1001, 1, 700, 123456789, "/projects", 0)
+	if err != nil || menu == nil || len(menu.Buttons) == 0 {
+		t.Fatalf("menu=%#v err=%v", menu, err)
+	}
+	result := make(chan *DirectResponse, 1)
+	errs := make(chan error, 1)
+	go func() {
+		created, createErr := service.HandleCallback(ctx, -1001, 1, 900, 123456789, menu.Buttons[0][0].CallbackData)
+		result <- created
+		errs <- createErr
+	}()
+	select {
+	case created := <-result:
+		if err := <-errs; err != nil || created == nil || !strings.Contains(created.Text, "ready") {
+			t.Fatalf("created=%#v err=%v", created, err)
+		}
+		select {
+		case <-deleteStarted:
+			t.Fatal("cleanup started before the ready response was delivered")
+		default:
+		}
+		if err := service.RegisterDirectDelivery(ctx, -1001, 1, 901, created); err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("/newchat waited for background topic deletion")
+	}
+	select {
+	case <-deleteStarted:
+	case <-time.After(time.Second):
+		t.Fatal("background cleanup was not started")
+	}
+	topics, err := service.store.ListSyncTopics(ctx, "s")
+	if err != nil || len(topics) != 10 || topics[0].TelegramState != model.SyncTopicCleanup {
+		t.Fatalf("durable cleanup topics=%#v err=%v", topics, err)
 	}
 }
 
@@ -2864,8 +2965,12 @@ func TestSyncExistingEmptyTopicRecoversNoRolloutOnNextPrompt(t *testing.T) {
 	if err != nil || topic == nil || topic.ThreadID != "replacement-thread" {
 		t.Fatalf("topic=%#v err=%v", topic, err)
 	}
+	if len(forum.renames) != 0 {
+		t.Fatalf("replacement prompt synchronously renamed Telegram topic: %#v", forum.renames)
+	}
+	service.runSyncDelivery(context.Background(), "replacement-thread")
 	if len(forum.renames) != 1 || forum.renames[0].title != "replacement prompt" {
-		t.Fatalf("renames=%#v", forum.renames)
+		t.Fatalf("reconciled renames=%#v", forum.renames)
 	}
 }
 

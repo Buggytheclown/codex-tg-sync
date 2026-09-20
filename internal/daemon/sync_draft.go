@@ -84,16 +84,6 @@ func (s *Service) startClaimedSyncDraftLocked(ctx context.Context, draft model.S
 	receipt.ThreadID = thread.ID
 	s.syncLeases[thread.ID] = lease
 	s.installSyncWriterLocked(lease)
-	if forum := s.getSyncForum(); forum != nil {
-		if forum.RenameSyncTopic(ctx, draft.TopicID, title) == nil {
-			_ = s.store.UpdateSyncTopicTitle(ctx, draft.SessionID, draft.TopicID, title)
-		}
-	}
-	if namer, ok := any(lease.Process).(interface {
-		ThreadSetName(context.Context, string, string) (map[string]any, error)
-	}); ok {
-		_, _ = namer.ThreadSetName(ctx, thread.ID, title)
-	}
 	turnOptions := s.turnStartOptions(ctx, "", &thread)
 	turnOptions.ApprovalPolicy = permissions.ApprovalPolicy
 	turnOptions.ApprovalsReviewer = permissions.ApprovalsReviewer
@@ -113,7 +103,7 @@ func (s *Service) startClaimedSyncDraftLocked(ctx context.Context, draft model.S
 		}
 		delete(s.syncLeases, thread.ID)
 		_ = s.syncWriter.Abort(lease)
-		if err := s.store.DematerializeSyncTopicDraft(ctx, draft, receipt, thread.ID, title, lease.Generation); err != nil {
+		if err := s.store.DematerializeSyncTopicDraft(ctx, draft, receipt, thread.ID, draft.Title, lease.Generation); err != nil {
 			return nil, err
 		}
 		return &DirectResponse{Text: fmt.Sprintf("Sync rejected the first prompt; send a new message to retry: %v", turnErr)}, nil
@@ -128,10 +118,18 @@ func (s *Service) startClaimedSyncDraftLocked(ctx context.Context, draft model.S
 		_ = s.store.MarkSyncDispatchFailure(ctx, receipt, model.SyncReceiptUnknown, model.SyncTurnUnknown, lease.Generation)
 		return &DirectResponse{Text: "Sync dispatched the request but could not persist confirmation; outcome is unknown."}, nil
 	}
+	if namer, ok := any(lease.Process).(interface {
+		ThreadSetName(context.Context, string, string) (map[string]any, error)
+	}); ok {
+		_, _ = namer.ThreadSetName(ctx, thread.ID, title)
+	}
 	_ = s.markTelegramOriginTurnFromTelegram(ctx, thread.ID, turnID, draft.ChatID, draft.TopicID)
 	s.ensureStartedTurnSnapshot(ctx, &thread, turnID)
 	s.startSyncTelegramOriginHotPoll(ctx, thread.ID, turnID)
-	return &DirectResponse{Text: fmt.Sprintf("Sync turn started: %s", turnID), ThreadID: thread.ID, TurnID: turnID}, nil
+	return &DirectResponse{
+		Text: fmt.Sprintf("Sync turn started: %s", turnID), ThreadID: thread.ID, TurnID: turnID,
+		ScheduleSyncDelivery: true,
+	}, nil
 }
 
 func syncPromptTopicTitle(text string) string {

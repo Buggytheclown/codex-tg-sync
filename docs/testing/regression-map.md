@@ -40,7 +40,8 @@ Coverage includes:
 - shared daemon/WebSocket reconnection without prompt replay;
 - startup reset to off and cleanup-only old topics/drafts;
 - oldest-inactive topic retention after creation, including ready drafts,
-  unfinished-work protection, and cleanup retry across historical sessions;
+  unfinished-work protection, asynchronous deletion outside `/newchat`, and
+  cleanup retry across historical sessions;
 - generation-aware writer claims and fail-closed unknown dispatch;
 - poll/list/read behavior and non-blocking startup;
 - important App Server events coalesce into bounded latest-turn reads while
@@ -51,6 +52,7 @@ Coverage includes:
   turns and fully reads every other tracked topic;
 - typed Telegram topic/retry failures;
 - one-second group-write pacing with no more than 20 raw attempts per rolling 60.25 seconds, bounded foreground preference, and shared `retry_after` cooldown.
+- a separate 12-attempt background cap that never prevents an eligible foreground write, plus per-operation queue-wait diagnostics.
 
 ## Prompt, steer, stop, and lifecycle
 
@@ -59,6 +61,7 @@ Primary suite: `internal/daemon/sync_test.go`.
 Required scenarios:
 
 - first topic prompt resumes/starts exactly one turn;
+- first draft prompt starts its turn before Telegram topic rename; reconciliation performs the rename asynchronously;
 - duplicate message ids do not replay;
 - active topic text steers the current turn;
 - stale-active rejection re-reads authority before replacement start;

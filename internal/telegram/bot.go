@@ -49,6 +49,7 @@ func NewBot(cfg config.Config, service *daemon.Service, logger *log.Logger) (*Bo
 		service: service,
 		logger:  logger,
 	}
+	bot.egress.observe = bot.logEgressObservation
 	service.SetSyncForum(bot)
 	return bot, nil
 }
@@ -68,7 +69,7 @@ func (b *Bot) ValidateSyncGroup(ctx context.Context, allowedUserID int64) error 
 }
 
 func (b *Bot) PrepareSyncControl(ctx context.Context) error {
-	err := b.groupWrite(ctx, model.SendOptions{}, true, func() error {
+	err := b.groupWrite(ctx, egressOperationEditGeneralTopic, model.SendOptions{}, true, func() error {
 		attemptCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
 		defer cancel()
 		return b.client.EditGeneralForumTopic(attemptCtx, b.cfg.SyncGroupID, "Control")
@@ -89,7 +90,7 @@ func (b *Bot) CreateLaunchTopic(ctx context.Context, title string) (int64, error
 
 func (b *Bot) createSyncTopic(ctx context.Context, title string, retry429 bool) (int64, error) {
 	var topic *ForumTopic
-	err := b.groupWrite(ctx, model.SendOptions{}, retry429, func() error {
+	err := b.groupWrite(ctx, egressOperationCreateForumTopic, model.SendOptions{}, retry429, func() error {
 		attemptCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
 		defer cancel()
 		var err error
@@ -114,7 +115,7 @@ func (b *Bot) createSyncTopic(ctx context.Context, title string, retry429 bool) 
 }
 
 func (b *Bot) RenameSyncTopic(ctx context.Context, topicID int64, title string) error {
-	err := b.groupWrite(ctx, model.SendOptions{Background: true}, true, func() error {
+	err := b.groupWrite(ctx, egressOperationEditForumTopic, model.SendOptions{Background: true}, true, func() error {
 		attemptCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
 		defer cancel()
 		return b.client.EditForumTopic(attemptCtx, b.cfg.SyncGroupID, topicID, title)
@@ -126,7 +127,7 @@ func (b *Bot) RenameSyncTopic(ctx context.Context, topicID int64, title string) 
 }
 
 func (b *Bot) DeleteSyncTopic(ctx context.Context, topicID int64) error {
-	err := b.groupWrite(ctx, model.SendOptions{Background: true}, true, func() error {
+	err := b.groupWrite(ctx, egressOperationDeleteForumTopic, model.SendOptions{Background: true}, true, func() error {
 		attemptCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
 		defer cancel()
 		return b.client.DeleteForumTopic(attemptCtx, b.cfg.SyncGroupID, topicID)
@@ -139,7 +140,7 @@ func (b *Bot) DeleteSyncTopic(ctx context.Context, topicID int64) error {
 
 func (b *Bot) SendSyncMessage(ctx context.Context, topicID int64, rendered model.RenderedMessage, options model.SendOptions) (int64, error) {
 	var message *Message
-	err := b.groupWrite(ctx, options, true, func() error {
+	err := b.groupWrite(ctx, egressOperationSendMessage, options, true, func() error {
 		attemptCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
 		defer cancel()
 		var err error
@@ -157,7 +158,7 @@ func (b *Bot) SendSyncMessage(ctx context.Context, topicID int64, rendered model
 
 func (b *Bot) SendSyncActionMessage(ctx context.Context, topicID int64, text string, buttons [][]model.ButtonSpec) (int64, error) {
 	var message *Message
-	err := b.groupWrite(ctx, model.SendOptions{}, true, func() error {
+	err := b.groupWrite(ctx, egressOperationSendMessage, model.SendOptions{}, true, func() error {
 		attemptCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
 		defer cancel()
 		var err error
@@ -174,7 +175,7 @@ func (b *Bot) SendSyncActionMessage(ctx context.Context, topicID int64, text str
 }
 
 func (b *Bot) EditSyncMessage(ctx context.Context, topicID, messageID int64, rendered model.RenderedMessage, options model.SendOptions) error {
-	return b.groupWrite(ctx, options, true, func() error {
+	return b.groupWrite(ctx, egressOperationEditMessage, options, true, func() error {
 		attemptCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
 		defer cancel()
 		_, err := b.client.EditRenderedMessageText(attemptCtx, b.cfg.SyncGroupID, messageID, rendered, nil)
@@ -270,7 +271,7 @@ func (b *Bot) SendRenderedMessages(ctx context.Context, chatID, topicID int64, m
 			markup = toInlineKeyboard(buttons)
 		}
 		var message *Message
-		err := b.groupWrite(ctx, options, true, func() error {
+		err := b.groupWrite(ctx, egressOperationSendMessage, options, true, func() error {
 			attemptCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
 			defer cancel()
 			var err error
@@ -279,7 +280,7 @@ func (b *Bot) SendRenderedMessages(ctx context.Context, chatID, topicID int64, m
 		})
 		if err != nil {
 			rendered.Entities = nil
-			err = b.groupWrite(ctx, options, true, func() error {
+			err = b.groupWrite(ctx, egressOperationSendMessage, options, true, func() error {
 				attemptCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
 				defer cancel()
 				var err error
@@ -302,7 +303,7 @@ func (b *Bot) EditMessage(ctx context.Context, chatID, topicID, messageID int64,
 	if len(chunks) != 1 {
 		return fmt.Errorf("telegram editMessageText requires a single text chunk, got %d", len(chunks))
 	}
-	return b.groupWrite(ctx, model.SendOptions{}, true, func() error {
+	return b.groupWrite(ctx, egressOperationEditMessage, model.SendOptions{}, true, func() error {
 		attemptCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
 		defer cancel()
 		_, err := b.client.EditMessageText(attemptCtx, chatID, messageID, chunks[0], toInlineKeyboard(buttons))
@@ -315,7 +316,7 @@ func (b *Bot) EditRenderedMessage(ctx context.Context, chatID, topicID, messageI
 		rendered.Text = " "
 		rendered.Entities = nil
 	}
-	err := b.groupWrite(ctx, model.SendOptions{}, true, func() error {
+	err := b.groupWrite(ctx, egressOperationEditMessage, model.SendOptions{}, true, func() error {
 		attemptCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
 		defer cancel()
 		_, err := b.client.EditRenderedMessageText(attemptCtx, chatID, messageID, rendered, toInlineKeyboard(buttons))
@@ -325,7 +326,7 @@ func (b *Bot) EditRenderedMessage(ctx context.Context, chatID, topicID, messageI
 		return nil
 	}
 	rendered.Entities = nil
-	fallbackErr := b.groupWrite(ctx, model.SendOptions{}, true, func() error {
+	fallbackErr := b.groupWrite(ctx, egressOperationEditMessage, model.SendOptions{}, true, func() error {
 		attemptCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
 		defer cancel()
 		_, err := b.client.EditRenderedMessageText(attemptCtx, chatID, messageID, rendered, toInlineKeyboard(buttons))
@@ -347,7 +348,7 @@ func (b *Bot) SendDocument(ctx context.Context, chatID, topicID int64, fileName,
 
 func (b *Bot) SendDocumentData(ctx context.Context, chatID, topicID int64, fileName string, data []byte, caption string, options model.SendOptions) (int64, error) {
 	var message *Message
-	err := b.groupWrite(ctx, options, true, func() error {
+	err := b.groupWrite(ctx, egressOperationSendDocument, options, true, func() error {
 		attemptCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
 		defer cancel()
 		var err error
@@ -368,7 +369,7 @@ func (b *Bot) SendDocumentData(ctx context.Context, chatID, topicID int64, fileN
 }
 
 func (b *Bot) DeleteMessage(ctx context.Context, chatID, topicID, messageID int64) error {
-	return b.groupWrite(ctx, model.SendOptions{Background: true}, true, func() error {
+	return b.groupWrite(ctx, egressOperationDeleteMessage, model.SendOptions{Background: true}, true, func() error {
 		attemptCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 		defer cancel()
 		return b.client.DeleteMessage(attemptCtx, chatID, messageID)
@@ -538,7 +539,7 @@ func (b *Bot) sendTextChunks(ctx context.Context, chatID, topicID int64, chunks 
 			markup = toInlineKeyboard(buttons)
 		}
 		var message *Message
-		err := b.groupWrite(ctx, options, true, func() error {
+		err := b.groupWrite(ctx, egressOperationSendMessage, options, true, func() error {
 			attemptCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
 			defer cancel()
 			var err error
@@ -555,7 +556,7 @@ func (b *Bot) sendTextChunks(ctx context.Context, chatID, topicID int64, chunks 
 	return messageID, nil
 }
 
-func (b *Bot) groupWrite(ctx context.Context, options model.SendOptions, retry429 bool, attempt func() error) error {
+func (b *Bot) groupWrite(ctx context.Context, operation egressOperationName, options model.SendOptions, retry429 bool, attempt func() error) error {
 	if b.egress == nil {
 		return attempt()
 	}
@@ -563,7 +564,15 @@ func (b *Bot) groupWrite(ctx context.Context, options model.SendOptions, retry42
 	if options.Background {
 		priority = egressBackground
 	}
-	return b.egress.Do(ctx, egressOperation{priority: priority, retry429: retry429}, attempt)
+	return b.egress.Do(ctx, egressOperation{name: operation, priority: priority, retry429: retry429}, attempt)
+}
+
+func (b *Bot) logEgressObservation(value egressObservation) {
+	if b == nil || b.logger == nil {
+		return
+	}
+	b.logger.Printf("telegram_egress operation=%s priority=%s queue_wait_ms=%d api_duration_ms=%d outcome=%s",
+		value.Operation, value.Priority, value.QueueWait.Milliseconds(), value.APIDuration.Milliseconds(), value.Outcome)
 }
 
 func (b *Bot) criticalWrite(ctx context.Context, attempt func() error) error {

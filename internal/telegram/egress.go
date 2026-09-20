@@ -9,11 +9,12 @@ import (
 )
 
 const (
-	defaultTelegramGroupWriteInterval = time.Second
-	defaultTelegramGroupWriteLimit    = 20
-	defaultTelegramGroupWriteWindow   = 60*time.Second + 250*time.Millisecond
-	defaultTelegramRetryAfter         = 5 * time.Second
-	foregroundWriteBurst              = 4
+	defaultTelegramGroupWriteInterval   = time.Second
+	defaultTelegramGroupWriteLimit      = 20
+	defaultTelegramBackgroundWriteLimit = 12
+	defaultTelegramGroupWriteWindow     = 60*time.Second + 250*time.Millisecond
+	defaultTelegramRetryAfter           = 5 * time.Second
+	foregroundWriteBurst                = 4
 )
 
 type egressPriority uint8
@@ -24,14 +25,38 @@ const (
 )
 
 type egressOperation struct {
+	name     egressOperationName
 	priority egressPriority
 	retry429 bool
+}
+
+type egressOperationName string
+
+const (
+	egressOperationUnknown          egressOperationName = "unknown"
+	egressOperationEditGeneralTopic egressOperationName = "edit_general_topic"
+	egressOperationCreateForumTopic egressOperationName = "create_forum_topic"
+	egressOperationEditForumTopic   egressOperationName = "edit_forum_topic"
+	egressOperationDeleteForumTopic egressOperationName = "delete_forum_topic"
+	egressOperationSendMessage      egressOperationName = "send_message"
+	egressOperationEditMessage      egressOperationName = "edit_message"
+	egressOperationSendDocument     egressOperationName = "send_document"
+	egressOperationDeleteMessage    egressOperationName = "delete_message"
+)
+
+type egressObservation struct {
+	Operation   egressOperationName
+	Priority    string
+	QueueWait   time.Duration
+	APIDuration time.Duration
+	Outcome     string
 }
 
 type egressRequest struct {
 	ctx       context.Context
 	op        egressOperation
 	attempt   func() error
+	queuedAt  time.Time
 	notBefore time.Time
 	result    chan error
 }
@@ -52,6 +77,7 @@ type egressGovernor struct {
 	incoming chan *egressRequest
 	wake     chan struct{}
 	done     chan struct{}
+	observe  func(egressObservation)
 
 	startOnce sync.Once
 	mu        sync.Mutex
@@ -94,7 +120,10 @@ func (g *egressGovernor) Do(ctx context.Context, operation egressOperation, atte
 	if g == nil {
 		return attempt()
 	}
-	request := &egressRequest{ctx: ctx, op: operation, attempt: attempt, result: make(chan error, 1)}
+	if operation.name == "" {
+		operation.name = egressOperationUnknown
+	}
+	request := &egressRequest{ctx: ctx, op: operation, attempt: attempt, queuedAt: g.clock.Now(), result: make(chan error, 1)}
 	select {
 	case g.incoming <- request:
 	case <-ctx.Done():
@@ -133,6 +162,7 @@ func (g *egressGovernor) run(ctx context.Context) {
 	foregroundStreak := 0
 	nextWriteAt := time.Time{}
 	writeAttempts := make([]time.Time, 0, defaultTelegramGroupWriteLimit)
+	backgroundAttempts := make([]time.Time, 0, defaultTelegramBackgroundWriteLimit)
 
 	finishPending := func(err error) {
 		for _, queue := range [][]*egressRequest{foreground, background} {
@@ -168,9 +198,12 @@ func (g *egressGovernor) run(ctx context.Context) {
 		background = pruneCanceledEgressRequests(background)
 		now := g.clock.Now()
 		writeAttempts = pruneEgressAttempts(writeAttempts, now, defaultTelegramGroupWriteWindow)
+		backgroundAttempts = pruneEgressAttempts(backgroundAttempts, now, defaultTelegramGroupWriteWindow)
 		windowGate := nextEgressWindowAt(writeAttempts, defaultTelegramGroupWriteLimit, defaultTelegramGroupWriteWindow)
-		gate := latestTime(latestTime(nextWriteAt, windowGate), g.cooldownUntil())
-		request, fromBackground := selectEgressRequest(now, gate, foreground, background, foregroundStreak)
+		foregroundGate := latestTime(latestTime(nextWriteAt, windowGate), g.cooldownUntil())
+		backgroundWindowGate := nextEgressWindowAt(backgroundAttempts, defaultTelegramBackgroundWriteLimit, defaultTelegramGroupWriteWindow)
+		backgroundGate := latestTime(foregroundGate, backgroundWindowGate)
+		request, fromBackground := selectEgressRequest(now, foregroundGate, backgroundGate, foreground, background, foregroundStreak)
 		if request != nil {
 			if fromBackground {
 				background = background[1:]
@@ -182,11 +215,22 @@ func (g *egressGovernor) run(ctx context.Context) {
 			attemptAt := g.clock.Now()
 			nextWriteAt = attemptAt.Add(g.interval)
 			writeAttempts = append(writeAttempts, attemptAt)
+			if fromBackground {
+				backgroundAttempts = append(backgroundAttempts, attemptAt)
+			}
 			err := request.attempt()
+			finishedAt := g.clock.Now()
+			outcome := "success"
+			if err != nil {
+				outcome = "error"
+			}
 			if delay, ok := telegramRetryAfter(err); ok {
+				outcome = "retry_after"
 				retryAt := g.clock.Now().Add(delay)
 				g.noteCooldown(retryAt)
+				g.observeAttempt(request, attemptAt, finishedAt, outcome)
 				if request.op.retry429 && request.ctx.Err() == nil {
+					request.queuedAt = g.clock.Now()
 					request.notBefore = retryAt
 					if fromBackground {
 						background = append([]*egressRequest{request}, background...)
@@ -195,12 +239,14 @@ func (g *egressGovernor) run(ctx context.Context) {
 					}
 					continue
 				}
+			} else {
+				g.observeAttempt(request, attemptAt, finishedAt, outcome)
 			}
 			finishEgressRequest(request, err)
 			continue
 		}
 
-		waitUntil, hasPending := nextEgressReadyAt(gate, foreground, background)
+		waitUntil, hasPending := nextEgressReadyAt(foregroundGate, backgroundGate, foreground, background)
 		if !hasPending {
 			select {
 			case <-ctx.Done():
@@ -252,12 +298,9 @@ func nextEgressWindowAt(attempts []time.Time, limit int, window time.Duration) t
 	return attempts[len(attempts)-limit].Add(window)
 }
 
-func selectEgressRequest(now, gate time.Time, foreground, background []*egressRequest, foregroundStreak int) (*egressRequest, bool) {
-	if now.Before(gate) {
-		return nil, false
-	}
-	foregroundReady := len(foreground) > 0 && !now.Before(foreground[0].notBefore)
-	backgroundReady := len(background) > 0 && !now.Before(background[0].notBefore)
+func selectEgressRequest(now, foregroundGate, backgroundGate time.Time, foreground, background []*egressRequest, foregroundStreak int) (*egressRequest, bool) {
+	foregroundReady := len(foreground) > 0 && !now.Before(latestTime(foregroundGate, foreground[0].notBefore))
+	backgroundReady := len(background) > 0 && !now.Before(latestTime(backgroundGate, background[0].notBefore))
 	if backgroundReady && (!foregroundReady || foregroundStreak >= foregroundWriteBurst) {
 		return background[0], true
 	}
@@ -270,11 +313,15 @@ func selectEgressRequest(now, gate time.Time, foreground, background []*egressRe
 	return nil, false
 }
 
-func nextEgressReadyAt(gate time.Time, foreground, background []*egressRequest) (time.Time, bool) {
+func nextEgressReadyAt(foregroundGate, backgroundGate time.Time, foreground, background []*egressRequest) (time.Time, bool) {
 	var next time.Time
-	for _, queue := range [][]*egressRequest{foreground, background} {
+	for index, queue := range [][]*egressRequest{foreground, background} {
 		if len(queue) == 0 {
 			continue
+		}
+		gate := foregroundGate
+		if index == 1 {
+			gate = backgroundGate
 		}
 		readyAt := latestTime(gate, queue[0].notBefore)
 		if next.IsZero() || readyAt.Before(next) {
@@ -282,6 +329,30 @@ func nextEgressReadyAt(gate time.Time, foreground, background []*egressRequest) 
 		}
 	}
 	return next, !next.IsZero()
+}
+
+func (g *egressGovernor) observeAttempt(request *egressRequest, startedAt, finishedAt time.Time, outcome string) {
+	if g == nil || g.observe == nil || request == nil {
+		return
+	}
+	priority := "foreground"
+	if request.op.priority == egressBackground {
+		priority = "background"
+	}
+	g.observe(egressObservation{
+		Operation:   request.op.name,
+		Priority:    priority,
+		QueueWait:   maxDuration(0, startedAt.Sub(request.queuedAt)),
+		APIDuration: maxDuration(0, finishedAt.Sub(startedAt)),
+		Outcome:     outcome,
+	})
+}
+
+func maxDuration(left, right time.Duration) time.Duration {
+	if right > left {
+		return right
+	}
+	return left
 }
 
 func pruneCanceledEgressRequests(queue []*egressRequest) []*egressRequest {

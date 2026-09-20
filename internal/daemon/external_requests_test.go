@@ -679,8 +679,8 @@ func TestDispatchExternalLaunchRequestCreatesSyncThreadTurnAndTopic(t *testing.T
 	if userMessages != 1 {
 		t.Fatalf("initial Sync user messages=%d sends=%#v, want exactly one", userMessages, forum.sends)
 	}
-	if len(forum.renames) != 1 || forum.renames[0].title != request.SafePreview {
-		t.Fatalf("Sync topic renames=%#v, want safe preview title", forum.renames)
+	if len(forum.renames) != 0 {
+		t.Fatalf("external dispatch synchronously renamed Sync topic: %#v", forum.renames)
 	}
 	topics, err := service.store.ListSyncTopics(context.Background(), "s")
 	if err != nil || len(topics) != 3 || topics[2].ThreadID != "external-thread" || topics[2].TopicID != 21 {

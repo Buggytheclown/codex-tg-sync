@@ -1745,6 +1745,8 @@ func (s *Service) refreshSyncDirectDelivery(ctx context.Context, chatID, topicID
 }
 
 func (s *Service) cleanupSyncTopics(ctx context.Context) {
+	s.syncCleanupMu.Lock()
+	defer s.syncCleanupMu.Unlock()
 	forum := s.getSyncForum()
 	if forum == nil {
 		return
@@ -1758,21 +1760,40 @@ func (s *Service) cleanupSyncTopics(ctx context.Context) {
 }
 
 func (s *Service) pruneSyncTopics(ctx context.Context, sessionID string) {
-	if strings.TrimSpace(sessionID) == "" {
-		return
+	if s.markStaleSyncTopicsForCleanup(ctx, sessionID) {
+		s.wakeSyncCleanup()
 	}
-	s.cleanupSyncTopics(ctx)
-	forum := s.getSyncForum()
-	if forum == nil {
-		return
+}
+
+func (s *Service) markStaleSyncTopicsForCleanup(ctx context.Context, sessionID string) bool {
+	if strings.TrimSpace(sessionID) == "" {
+		return false
 	}
 	cutoff := model.TimeString(s.now().UTC().Add(-syncTopicInactiveAge).Format(time.RFC3339Nano))
-	topics, err := s.store.MarkStaleSyncTopicsForCleanup(ctx, sessionID, cutoff, syncTopicRetentionLimit)
+	_, err := s.store.MarkStaleSyncTopicsForCleanup(ctx, sessionID, cutoff, syncTopicRetentionLimit)
 	if err != nil {
 		s.logLifecycle("sync_topic_prune_failed", lifecycleFields{"session_id": sessionID, "error": err})
-		return
+		return false
 	}
-	s.deleteSyncCleanupTargets(ctx, forum, topics)
+	return true
+}
+
+func (s *Service) wakeSyncCleanup() {
+	select {
+	case s.syncCleanupWake <- struct{}{}:
+	default:
+	}
+}
+
+func (s *Service) syncCleanupLoop(ctx context.Context) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-s.syncCleanupWake:
+			s.cleanupSyncTopics(ctx)
+		}
+	}
 }
 
 func (s *Service) deleteSyncCleanupTargets(ctx context.Context, forum SyncForum, topics []model.SyncTopic) {

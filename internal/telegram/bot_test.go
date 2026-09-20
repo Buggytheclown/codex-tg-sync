@@ -1,6 +1,7 @@
 package telegram
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -41,6 +42,26 @@ func TestSanitizeTelegramLogErrorRedactsBotTokenURL(t *testing.T) {
 	}
 	if !strings.Contains(got, "bot<redacted>") {
 		t.Fatalf("sanitizeTelegramLogError = %q, want redacted marker", got)
+	}
+}
+
+func TestBotLogsEgressQueueWaitByBoundedOperation(t *testing.T) {
+	t.Parallel()
+
+	var output bytes.Buffer
+	bot := &Bot{logger: log.New(&output, "", 0)}
+	bot.logEgressObservation(egressObservation{
+		Operation: egressOperationDeleteForumTopic, Priority: "background",
+		QueueWait: 3 * time.Second, APIDuration: 25 * time.Millisecond, Outcome: "success",
+	})
+	got := output.String()
+	for _, want := range []string{
+		"telegram_egress", "operation=delete_forum_topic", "priority=background",
+		"queue_wait_ms=3000", "api_duration_ms=25", "outcome=success",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("egress diagnostic %q does not contain %q", got, want)
+		}
 	}
 }
 

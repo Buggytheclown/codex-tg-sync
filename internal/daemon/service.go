@@ -37,13 +37,15 @@ type ExternalReplySender interface {
 }
 
 type DirectResponse struct {
-	Text         string
-	CallbackText string
-	Buttons      [][]model.ButtonSpec
-	ThreadID     string
-	TurnID       string
-	ItemID       string
-	EventID      string
+	Text                 string
+	CallbackText         string
+	Buttons              [][]model.ButtonSpec
+	ThreadID             string
+	TurnID               string
+	ItemID               string
+	EventID              string
+	ScheduleSyncDelivery bool
+	ScheduleSyncCleanup  bool
 }
 
 func silentSendOptions() model.SendOptions {
@@ -92,6 +94,8 @@ type Service struct {
 	syncDeliveryJobs             chan string
 	syncDeliveryPending          map[string]bool
 	syncDeliveryQueued           map[string]bool
+	syncCleanupMu                sync.Mutex
+	syncCleanupWake              chan struct{}
 	sender                       Sender
 	externalReplySender          ExternalReplySender
 	logger                       *log.Logger
@@ -144,6 +148,7 @@ func New(cfg config.Config) (*Service, error) {
 		syncDeliveryJobs:    make(chan string, 256),
 		syncDeliveryPending: map[string]bool{},
 		syncDeliveryQueued:  map[string]bool{},
+		syncCleanupWake:     make(chan struct{}, 1),
 		logger:              discardDiagnosticLogger(),
 		diagnosticBy:        map[string]int{},
 		diagnosticLast:      map[string]time.Time{},
@@ -293,6 +298,7 @@ func (s *Service) Start(ctx context.Context) error {
 	s.spawn(runCtx, s.syncDirtyLoop)
 	s.spawn(runCtx, s.syncDeliveryLoop)
 	s.spawn(runCtx, s.syncDeliveryLoop)
+	s.spawn(runCtx, s.syncCleanupLoop)
 	s.spawn(runCtx, s.controlLoop)
 	return nil
 }
@@ -371,6 +377,12 @@ func (s *Service) HandleCallback(ctx context.Context, chatID, topicID, messageID
 func (s *Service) RegisterDirectDelivery(ctx context.Context, chatID, topicID, messageID int64, response *DirectResponse) error {
 	if response != nil {
 		s.refreshSyncDirectDelivery(ctx, chatID, topicID, response)
+		if response.ScheduleSyncDelivery {
+			s.enqueueSyncDelivery(response.ThreadID)
+		}
+		if response.ScheduleSyncCleanup {
+			s.wakeSyncCleanup()
+		}
 	}
 	return nil
 }

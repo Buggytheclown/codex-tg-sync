@@ -75,6 +75,9 @@ func (s *Service) createSyncNewTaskLocked(ctx context.Context, state model.SyncS
 		_ = forum.DeleteSyncTopic(ctx, topicID)
 		return nil, err
 	}
-	s.pruneSyncTopics(ctx, state.SessionID)
-	return &DirectResponse{Text: fmt.Sprintf("Sync task ready in topic %d. Open it and send the first prompt as a new message.", topicID), CallbackText: "Sync task created."}, nil
+	cleanupReady := s.markStaleSyncTopicsForCleanup(ctx, state.SessionID)
+	return &DirectResponse{
+		Text:         fmt.Sprintf("Sync task ready in topic %d. Open it and send the first prompt as a new message.", topicID),
+		CallbackText: "Sync task created.", ScheduleSyncCleanup: cleanupReady,
+	}, nil
 }
