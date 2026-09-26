@@ -655,6 +655,34 @@ func TestSyncPassiveSyncSendsSilentStatusAndNotifyingFinal(t *testing.T) {
 	}
 }
 
+func TestSyncWaitsForTerminalTurnBeforeSendingFinal(t *testing.T) {
+	service := activeSyncService(t)
+	ctx := context.Background()
+	running := syncRunningPayloadWithCommentary("thread-1", "turn-1", "Working")
+	turn := running["thread"].(map[string]any)["turns"].([]any)[0].(map[string]any)
+	turn["items"] = append(turn["items"].([]any), map[string]any{
+		"id": "early-final", "type": "agentMessage", "phase": "final_answer", "text": "Premature answer",
+	})
+	poll := &stubSession{threadReads: map[string]map[string]any{"thread-1": running}}
+	service.poll, service.pollConnected = poll, true
+	forum := &fakeSyncForum{}
+	service.SetSyncForum(forum)
+
+	service.reconcileSync(ctx)
+	if len(forum.sends) != 1 || !strings.HasPrefix(forum.sends[0].text, syncStatusHeader+" inProgress") {
+		t.Fatalf("sends=%#v, want only an active status", forum.sends)
+	}
+	if topic, err := service.store.GetActiveSyncTopic(ctx, -1001, 11); err != nil || topic == nil || topic.LastFinalFP != "" {
+		t.Fatalf("topic=%#v err=%v, want pending final", topic, err)
+	}
+
+	poll.threadReads["thread-1"] = syncCompletedPayload("thread-1", "turn-1", "Actual answer")
+	service.reconcileSync(ctx)
+	if len(forum.sends) != 2 || forum.sends[1].text != syncFinalHeader+"\nActual answer" {
+		t.Fatalf("sends=%#v, want final after completion", forum.sends)
+	}
+}
+
 func TestSyncSafetyReconcileSkipsFullReadForStableTerminalTurn(t *testing.T) {
 	service := newTestService(t)
 	service.cfg.SyncGroupID = -1001
@@ -1560,6 +1588,22 @@ func TestSyncProjectionDoesNotRegressTerminalTurn(t *testing.T) {
 	merged := monotonicSyncSnapshot(&previous, stale)
 	if merged.LatestTurnStatus != "completed" || merged.LatestFinalFP != "final-fp" || merged.LatestFinalText != "done" {
 		t.Fatalf("terminal projection regressed: %#v", merged)
+	}
+}
+
+func TestSyncProjectionAcceptsNewUserMessageInSameTurn(t *testing.T) {
+	previous := appserver.CompactSnapshot(nil, appserver.ThreadReadSnapshot{
+		Thread: model.Thread{ID: "thread-1", Status: "completed"}, LatestTurnID: "turn-1", LatestTurnStatus: "completed",
+		LatestUserMessageFP: "user-1", LatestFinalFP: "final-1", LatestFinalText: "Old answer",
+	}, time.Now())
+	current := appserver.ThreadReadSnapshot{
+		Thread: model.Thread{ID: "thread-1", Status: "inProgress"}, LatestTurnID: "turn-1", LatestTurnStatus: "inProgress",
+		LatestUserMessageFP: "user-2",
+	}
+
+	merged := monotonicSyncSnapshot(&previous, current)
+	if merged.LatestTurnStatus != "inProgress" || merged.LatestFinalFP != "" || merged.LatestUserMessageFP != "user-2" {
+		t.Fatalf("new user message did not reopen the same turn: %#v", merged)
 	}
 }
 

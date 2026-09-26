@@ -602,7 +602,7 @@ func TestSnapshotFromThreadReadKeepsAgentMessagePhasesAndFinalAnswerOnly(t *test
 	}
 }
 
-func TestSnapshotFromThreadReadTreatsFinalAnswerAsCompletedWhenStatusIsStale(t *testing.T) {
+func TestSnapshotFromThreadReadDoesNotCompleteActiveTurnFromFinalAnswer(t *testing.T) {
 	t.Parallel()
 
 	snapshot := SnapshotFromThreadRead(map[string]any{
@@ -634,17 +634,42 @@ func TestSnapshotFromThreadReadTreatsFinalAnswerAsCompletedWhenStatusIsStale(t *
 		},
 	})
 
-	if got, want := snapshot.LatestTurnStatus, "completed"; got != want {
+	if got, want := snapshot.LatestTurnStatus, "inProgress"; got != want {
 		t.Fatalf("LatestTurnStatus = %q, want %q", got, want)
 	}
-	if got := snapshot.Thread.ActiveTurnID; got != "" {
-		t.Fatalf("Thread.ActiveTurnID = %q, want empty", got)
+	if got, want := snapshot.Thread.ActiveTurnID, "turn-stale"; got != want {
+		t.Fatalf("Thread.ActiveTurnID = %q, want %q", got, want)
 	}
-	if got, want := snapshot.Thread.Status, "completed"; got != want {
+	if got, want := snapshot.Thread.Status, "inProgress"; got != want {
 		t.Fatalf("Thread.Status = %q, want %q", got, want)
 	}
 	if got, want := snapshot.LatestFinalText, "Done."; got != want {
 		t.Fatalf("LatestFinalText = %q, want %q", got, want)
+	}
+}
+
+func TestSnapshotFromThreadReadDoesNotReuseFinalBeforeLatestUserMessage(t *testing.T) {
+	t.Parallel()
+
+	snapshot := SnapshotFromThreadRead(map[string]any{
+		"id": "thread-1", "status": "inProgress", "activeTurnId": "turn-1",
+		"turns": []any{map[string]any{
+			"id": "turn-1", "status": "inProgress", "items": []any{
+				map[string]any{"id": "user-1", "type": "userMessage", "content": []any{map[string]any{"type": "text", "text": "First question"}}},
+				map[string]any{"id": "final-1", "type": "agentMessage", "phase": "final_answer", "text": "First answer"},
+				map[string]any{"id": "user-2", "type": "userMessage", "content": []any{map[string]any{"type": "text", "text": "Follow-up"}}},
+				map[string]any{"id": "progress-2", "type": "agentMessage", "phase": "commentary", "text": "Working"},
+			},
+		}},
+	})
+	if snapshot.LatestFinalFP != "" || snapshot.LatestFinalText != "" {
+		t.Fatalf("earlier final was reused after a new user message: %#v", snapshot)
+	}
+	if snapshot.LatestTurnStatus != "inProgress" {
+		t.Fatalf("LatestTurnStatus = %q, want inProgress", snapshot.LatestTurnStatus)
+	}
+	if snapshot.LatestUserMessageText != "Follow-up" {
+		t.Fatalf("LatestUserMessageText = %q, want follow-up", snapshot.LatestUserMessageText)
 	}
 }
 

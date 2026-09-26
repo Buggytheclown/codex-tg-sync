@@ -1333,10 +1333,12 @@ func monotonicSyncSnapshot(previous *model.ThreadSnapshotState, current appserve
 		}
 		return current
 	}
-	if isTerminalStatus(prior.LatestTurnStatus) && !isTerminalStatus(current.LatestTurnStatus) {
+	newUserMessage := current.LatestUserMessageFP != "" && prior.LatestUserMessageFP != "" &&
+		current.LatestUserMessageFP != prior.LatestUserMessageFP
+	if isTerminalStatus(prior.LatestTurnStatus) && !isTerminalStatus(current.LatestTurnStatus) && !newUserMessage {
 		return prior
 	}
-	if current.LatestFinalFP == "" && prior.LatestFinalFP != "" {
+	if current.LatestFinalFP == "" && prior.LatestFinalFP != "" && !newUserMessage {
 		current.LatestFinalFP = prior.LatestFinalFP
 		current.LatestFinalText = prior.LatestFinalText
 	}
@@ -1436,7 +1438,6 @@ func (s *Service) deliverSyncSnapshot(ctx context.Context, forum SyncForum, topi
 		return
 	}
 	topic, _ = s.deliverSyncStatus(ctx, forum, topic, current, observedAt, freshness)
-	_, _ = s.deliverSyncFinal(ctx, forum, topic, current)
 }
 
 func syncTurnUserPresentationReady(topic model.SyncTopic, current appserver.ThreadReadSnapshot) bool {

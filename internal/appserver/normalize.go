@@ -188,14 +188,11 @@ func SnapshotFromThreadRead(result map[string]any) ThreadReadSnapshot {
 }
 
 func normalizeFinalizedTurn(snapshot *ThreadReadSnapshot) {
-	if snapshot == nil || strings.TrimSpace(snapshot.LatestFinalFP) == "" {
+	if snapshot == nil || strings.TrimSpace(snapshot.LatestFinalFP) == "" || !terminalTurnStatus(snapshot.LatestTurnStatus) {
 		return
 	}
 	if snapshot.WaitingOnApproval || snapshot.WaitingOnReply {
 		return
-	}
-	if !terminalTurnStatus(snapshot.LatestTurnStatus) {
-		snapshot.LatestTurnStatus = "completed"
 	}
 	if strings.TrimSpace(snapshot.Thread.ActiveTurnID) == strings.TrimSpace(snapshot.LatestTurnID) {
 		snapshot.Thread.ActiveTurnID = ""
@@ -1038,6 +1035,13 @@ func collectAgentMessageEntriesFromItems(raw any, limit int) []AgentMessageEntry
 }
 
 func latestFinalAgentMessage(items []any) (string, string) {
+	for index := len(items) - 1; index >= 0; index-- {
+		item, _ := items[index].(map[string]any)
+		if strings.TrimSpace(stringValue(item["type"], "")) == "userMessage" {
+			items = items[index+1:]
+			break
+		}
+	}
 	entries := collectAgentMessageEntriesFromItems(items, len(items))
 	if len(entries) == 0 {
 		return "", ""
