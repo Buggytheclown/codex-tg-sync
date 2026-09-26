@@ -101,7 +101,7 @@ For the first activation, send these commands in the forum's built-in `General` 
 /projects
 ```
 
-`/sync on` validates the private two-member forum, creates topics for recent Codex chats, and starts discovering new chats. Send plain text inside a task topic to start or steer its turn; use `/stop` there to interrupt it.
+`/sync on` validates the private two-member forum, creates topics for Codex chats active in the last 24 hours, and starts discovering new chats. Sync remains on even when no chat is currently fresh. Inactive chat topics are removed after 24 hours; all chat history remains in Codex. Send plain text inside a task topic to start or steer its turn; use `/stop` there to interrupt it.
 
 Sync intentionally resets to `off` after every daemon restart. When the App Server connection is healthy again, run `/sync on` in `Control`.
 

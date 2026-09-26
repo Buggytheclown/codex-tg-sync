@@ -178,10 +178,11 @@ func (f *fakeSyncForum) SendSyncActionMessage(_ context.Context, topicID int64, 
 func TestSyncPartialActivationOwnsGroupAndDisablesLegacyObserver(t *testing.T) {
 	service := newTestService(t)
 	service.cfg.SyncGroupID = -1001
+	recent := float64(time.Now().Unix())
 	poll := &stubSession{threadListResult: map[string]any{"data": []any{
-		map[string]any{"id": "thread-old", "title": "Old", "updatedAt": float64(10)},
-		map[string]any{"id": "thread-new", "title": "New", "updatedAt": float64(20)},
-		map[string]any{"id": "thread-archived", "title": "Archived", "updatedAt": float64(30), "archived": true},
+		map[string]any{"id": "thread-old", "title": "Old", "updatedAt": recent - 20},
+		map[string]any{"id": "thread-new", "title": "New", "updatedAt": recent - 10},
+		map[string]any{"id": "thread-archived", "title": "Archived", "updatedAt": recent, "archived": true},
 	}}}
 	service.poll = poll
 	service.pollConnected = true
@@ -215,10 +216,11 @@ func TestSyncPartialActivationOwnsGroupAndDisablesLegacyObserver(t *testing.T) {
 func TestSyncActivationStopsAfterUnknownTopicOutcomeAndQueuesControlSummary(t *testing.T) {
 	service := newTestService(t)
 	service.cfg.SyncGroupID = -1001
+	recent := float64(time.Now().Unix())
 	service.poll = &stubSession{threadListResult: map[string]any{"data": []any{
-		map[string]any{"id": "thread-first", "title": "First", "updatedAt": float64(30)},
-		map[string]any{"id": "thread-unknown", "title": "Unknown", "updatedAt": float64(20)},
-		map[string]any{"id": "thread-skipped", "title": "Skipped", "updatedAt": float64(10)},
+		map[string]any{"id": "thread-first", "title": "First", "updatedAt": recent - 10},
+		map[string]any{"id": "thread-unknown", "title": "Unknown", "updatedAt": recent - 20},
+		map[string]any{"id": "thread-skipped", "title": "Skipped", "updatedAt": recent - 30},
 	}}}
 	service.pollConnected = true
 	forum := &fakeSyncForum{
@@ -263,10 +265,11 @@ func TestSyncActivationStopsAfterUnknownTopicOutcomeAndQueuesControlSummary(t *t
 
 func TestSyncActivationContinuesAfterDefinitiveTopicFailure(t *testing.T) {
 	service := newTestService(t)
+	recent := float64(time.Now().Unix())
 	service.poll = &stubSession{threadListResult: map[string]any{"data": []any{
-		map[string]any{"id": "thread-first", "title": "First", "updatedAt": float64(30)},
-		map[string]any{"id": "thread-failed", "title": "Failed", "updatedAt": float64(20)},
-		map[string]any{"id": "thread-third", "title": "Third", "updatedAt": float64(10)},
+		map[string]any{"id": "thread-first", "title": "First", "updatedAt": recent - 10},
+		map[string]any{"id": "thread-failed", "title": "Failed", "updatedAt": recent - 20},
+		map[string]any{"id": "thread-third", "title": "Third", "updatedAt": recent - 30},
 	}}}
 	service.pollConnected = true
 	forum := &fakeSyncForum{
@@ -299,11 +302,12 @@ func TestSyncActivationUsesConfiguredInitialTopicLimit(t *testing.T) {
 	service := newTestService(t)
 	service.cfg.SyncGroupID = -1001
 	service.cfg.SyncInitialTopicLimit = 5
+	recent := float64(time.Now().Unix())
 	items := make([]any, 0, 7)
 	statuses := []string{"completed", "waitingOnApproval", "notLoaded", "notLoaded", "", "completed", "notLoaded"}
 	for i := 1; i <= 7; i++ {
 		item := map[string]any{
-			"id": fmt.Sprintf("thread-%d", i), "title": fmt.Sprintf("Thread %d", i), "updatedAt": float64(i), "status": statuses[i-1],
+			"id": fmt.Sprintf("thread-%d", i), "title": fmt.Sprintf("Thread %d", i), "updatedAt": recent - float64(8-i), "status": statuses[i-1],
 		}
 		if turnStatus := map[int]string{3: "inProgress", 4: "failed", 7: "completed"}[i]; turnStatus != "" {
 			item["turns"] = []any{map[string]any{"id": "turn-" + turnStatus, "status": turnStatus}}
@@ -363,16 +367,17 @@ func TestSyncActivationFindsRunningThreadOnLaterListPage(t *testing.T) {
 	service := newTestService(t)
 	service.cfg.SyncGroupID = -1001
 	service.cfg.SyncInitialTopicLimit = 1
+	recent := float64(time.Now().Unix())
 	poll := &pagedThreadListSession{
 		stubSession: &stubSession{},
 		pages: map[string]map[string]any{
 			"": {
-				"data":       []any{map[string]any{"id": "completed-new", "title": "Completed New", "status": "completed", "updatedAt": float64(900)}},
+				"data":       []any{map[string]any{"id": "completed-new", "title": "Completed New", "status": "completed", "updatedAt": recent}},
 				"nextCursor": "page-2",
 			},
 			"page-2": {
 				"data": []any{map[string]any{
-					"id": "running-old", "title": "Running Old", "status": "notLoaded", "updatedAt": float64(100),
+					"id": "running-old", "title": "Running Old", "status": "notLoaded", "updatedAt": recent - 100,
 					"turns": []any{map[string]any{"id": "active-turn", "status": "inProgress"}},
 				}},
 			},
@@ -408,7 +413,7 @@ func TestSyncReconcileDiscoversNewDesktopThreadExactlyOnceAndResubscribesAfterRe
 		threadListResult: map[string]any{"data": []any{
 			map[string]any{"id": "thread-1", "title": "Existing", "createdAt": float64(cutoff - 1), "updatedAt": float64(cutoff + 2)},
 			map[string]any{"id": "thread-new", "title": "Desktop task", "createdAt": float64(cutoff), "updatedAt": float64(cutoff + 1)},
-			map[string]any{"id": "thread-old", "title": "Old untracked", "createdAt": float64(cutoff - 2), "updatedAt": float64(cutoff - 1)},
+			map[string]any{"id": "thread-old", "title": "Old untracked", "createdAt": float64(cutoff - int64(syncTopicInactiveAge.Seconds()) - 2), "updatedAt": float64(cutoff - int64(syncTopicInactiveAge.Seconds()) - 1)},
 		}},
 		threadReads: map[string]map[string]any{
 			"thread-1":   syncRunningPayload("thread-1", "turn-1"),
@@ -459,7 +464,7 @@ func TestSyncReconcileDiscoversPreActivationThreadUpdatedAfterActivation(t *test
 	service.poll = &stubSession{
 		threadListResult: map[string]any{"data": []any{
 			map[string]any{"id": "thread-finished", "title": "Finished quickly", "status": "completed", "createdAt": float64(cutoff - 60), "updatedAt": float64(cutoff + 1)},
-			map[string]any{"id": "thread-stale", "title": "Untouched old thread", "status": "completed", "createdAt": float64(cutoff - 60), "updatedAt": float64(cutoff - 1)},
+			map[string]any{"id": "thread-stale", "title": "Untouched old thread", "status": "completed", "createdAt": float64(cutoff - int64(syncTopicInactiveAge.Seconds()) - 60), "updatedAt": float64(cutoff - int64(syncTopicInactiveAge.Seconds()) - 1)},
 		}},
 		threadReads: map[string]map[string]any{
 			"thread-1":        syncRunningPayload("thread-1", "turn-1"),
@@ -548,12 +553,14 @@ func TestSyncUnknownTopicAndCallbacksFailClosed(t *testing.T) {
 	}
 }
 
-func TestSyncZeroTopicActivationReturnsToOff(t *testing.T) {
+func TestSyncZeroFreshTopicActivationStaysOn(t *testing.T) {
 	service := newTestService(t)
 	service.cfg.SyncGroupID = -1001
-	service.poll = &stubSession{threadListResult: map[string]any{"data": []any{map[string]any{"id": "thread-1", "title": "One", "updatedAt": float64(10)}}}}
+	poll := &stubSession{threadListResult: map[string]any{"data": []any{map[string]any{"id": "thread-1", "title": "One", "updatedAt": float64(10)}}}}
+	service.poll = poll
 	service.pollConnected = true
-	service.SetSyncForum(&fakeSyncForum{createErrAt: 1})
+	forum := &fakeSyncForum{}
+	service.SetSyncForum(forum)
 	sender := &recordingSender{}
 	service.SetSender(sender)
 	ctx := context.Background()
@@ -566,8 +573,40 @@ func TestSyncZeroTopicActivationReturnsToOff(t *testing.T) {
 		t.Fatalf("Control deliveries=%#v", sender.messages)
 	}
 	state, _ := service.store.GetSyncState(ctx)
-	if state.State != model.SyncStateOff {
+	if state.State != model.SyncStateActive || len(forum.creates) != 0 {
 		t.Fatalf("state=%#v", state)
+	}
+	poll.threadListResult = map[string]any{"data": []any{map[string]any{
+		"id": "thread-new", "title": "Fresh chat", "createdAt": float64(time.Now().Unix()), "updatedAt": float64(time.Now().Unix()),
+	}}}
+	poll.threadReads = map[string]map[string]any{"thread-new": syncCompletedPayload("thread-new", "turn-new", "done")}
+	service.reconcileSync(ctx)
+	if !reflect.DeepEqual(forum.creates, []string{"Fresh chat"}) {
+		t.Fatalf("creates after fresh chat=%#v", forum.creates)
+	}
+}
+
+func TestSyncPeriodicReconcilePrunesInactiveTopicWithoutNewChat(t *testing.T) {
+	service := activeSyncService(t)
+	ctx := context.Background()
+	if err := service.store.UpsertThread(ctx, model.Thread{ID: "thread-1", Title: "Old", UpdatedAt: time.Now().Add(-25 * time.Hour).Unix()}); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.store.UpsertThread(ctx, model.Thread{ID: "thread-2", Title: "Fresh", UpdatedAt: time.Now().Unix()}); err != nil {
+		t.Fatal(err)
+	}
+	service.poll = &stubSession{threadListResult: map[string]any{"data": []any{}}}
+	service.pollConnected = true
+	forum := &fakeSyncForum{}
+	service.SetSyncForum(forum)
+	service.reconcileSync(ctx)
+	topics, err := service.store.ListSyncTopics(ctx, "s")
+	if err != nil || len(topics) != 2 || topics[0].TelegramState != model.SyncTopicCleanup || topics[1].TelegramState != model.SyncTopicConnected {
+		t.Fatalf("topics=%#v err=%v", topics, err)
+	}
+	service.cleanupSyncTopics(ctx)
+	if !reflect.DeepEqual(forum.deletes, []int64{11}) {
+		t.Fatalf("deletes=%v, want only old topic", forum.deletes)
 	}
 }
 
@@ -2776,12 +2815,24 @@ func TestSyncProjectPickerCreatesThreadThenTopicThenDurableBinding(t *testing.T)
 func TestSyncProjectTopicCreationPrunesOldestInactiveTopic(t *testing.T) {
 	service := activeSyncService(t)
 	ctx := context.Background()
-	service.now = func() time.Time { return time.Now().UTC().Add(48 * time.Hour) }
 	for index := 0; index < 8; index++ {
 		topicID := int64(13 + index)
 		if err := service.store.UpsertSyncTopic(ctx, model.SyncTopic{SessionID: "s", ChatID: -1001,
 			TopicID: topicID, ThreadID: fmt.Sprintf("extra-thread-%d", index), Rank: index + 3,
 			Title: "Extra", TelegramState: model.SyncTopicConnected, ActiveTurnState: model.SyncTurnTerminal}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, thread := range []model.Thread{
+		{ID: "thread-1", Title: "Topic", CWD: "/tmp/project", UpdatedAt: time.Now().Add(-48 * time.Hour).Unix()},
+		{ID: "thread-2", Title: "Topic", CWD: "/tmp/project", UpdatedAt: time.Now().Unix()},
+	} {
+		if err := service.store.UpsertThread(ctx, thread); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for index := 0; index < 8; index++ {
+		if err := service.store.UpsertThread(ctx, model.Thread{ID: fmt.Sprintf("extra-thread-%d", index), UpdatedAt: time.Now().Unix()}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -2819,7 +2870,9 @@ func TestSyncProjectTopicCreationDoesNotWaitForPruneDeletion(t *testing.T) {
 	service := activeSyncService(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
-	service.now = func() time.Time { return time.Now().UTC().Add(48 * time.Hour) }
+	if err := service.store.UpsertThread(ctx, model.Thread{ID: "thread-1", Title: "Topic", CWD: "/tmp/project", UpdatedAt: time.Now().Add(-48 * time.Hour).Unix()}); err != nil {
+		t.Fatal(err)
+	}
 	for index := 0; index < 8; index++ {
 		if err := service.store.UpsertSyncTopic(ctx, model.SyncTopic{SessionID: "s", ChatID: -1001,
 			TopicID: int64(13 + index), ThreadID: fmt.Sprintf("extra-thread-%d", index), Rank: index + 3,
