@@ -22,9 +22,10 @@ only for the Sync chat. Startup enforces a delivery allowlist: `health`,
 group remain active. Supported deliveries interrupted in `processing` are
 returned to `retry` during startup.
 
-After a new managed topic is persisted, Sync keeps at most ten current topics
-when safe inactive work exists. It marks the oldest topic or ready draft whose
-stored activity is older than 24 hours as cleanup-only until the limit is met.
+Sync creates topics only for Codex chats created or updated in the last 24 hours.
+It periodically marks topics whose Codex chats have been inactive for 24 hours,
+and ready empty drafts of that age, as cleanup-only. Sync stays active when the
+initial fresh-chat snapshot is empty, so later chats can be discovered.
 Starting, active, and unknown work is never selected. Telegram deletion remains
 two-phase, and startup retries cleanup rows from every historical Sync session
 for the configured group.

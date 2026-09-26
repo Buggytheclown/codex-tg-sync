@@ -24,7 +24,6 @@ const (
 	syncControlTopicID         = int64(1)
 	syncGeneralSendTopicID     = int64(0)
 	syncActivationDeliveryKind = "sync_activation"
-	syncTopicRetentionLimit    = 10
 	syncTopicInactiveAge       = 24 * time.Hour
 )
 
@@ -519,8 +518,9 @@ func (s *Service) activateSync(ctx context.Context, userID int64) (*DirectRespon
 		return nil, fmt.Errorf("Sync activation thread/list: %w", err)
 	}
 	filtered := threads[:0]
+	cutoff := s.now().UTC().Add(-syncTopicInactiveAge).Unix()
 	for _, thread := range threads {
-		if thread.ID != "" && !thread.Archived && !thread.IsInternal() {
+		if thread.ID != "" && !thread.Archived && !thread.IsInternal() && syncThreadActiveSince(thread, cutoff) {
 			filtered = append(filtered, thread)
 		}
 	}
@@ -569,7 +569,6 @@ func (s *Service) activateSync(ctx context.Context, userID int64) (*DirectRespon
 		summary.Created++
 		summary.Items[rank].Telegram = "connected"
 		_ = s.store.UpsertThread(ctx, thread)
-		s.pruneSyncTopics(ctx, sessionID)
 	}
 	summaryJSON, _ := json.Marshal(summary)
 	eventID := "sync-activation:" + sessionID
@@ -580,12 +579,11 @@ func (s *Service) activateSync(ctx context.Context, userID int64) (*DirectRespon
 		Status: model.DeliveryStatusPending, AvailableAt: model.NowString(), PayloadJSON: string(payloadJSON),
 		CreatedAt: model.NowString(), UpdatedAt: model.NowString(),
 	}
-	if err := s.store.FinishSyncActivationWithDelivery(ctx, sessionID, string(summaryJSON), summary.Created > 0, delivery); err != nil {
+	if err := s.store.FinishSyncActivationWithDelivery(ctx, sessionID, string(summaryJSON), true, delivery); err != nil {
 		return nil, err
 	}
-	if summary.Created > 0 {
-		_ = s.syncWriter.AcceptNewWork()
-	}
+	_ = s.syncWriter.AcceptNewWork()
+	s.pruneSyncTopics(ctx, sessionID)
 	return nil, nil
 }
 
@@ -741,6 +739,7 @@ func (s *Service) reconcileSyncLocked(ctx context.Context) (reconcileSyncResult,
 		}
 		s.processSyncSnapshotLocked(ctx, state, forum, topic, current, "sync_poll")
 	}
+	s.pruneSyncTopics(ctx, state.SessionID)
 	return result, discoveryErr
 }
 
@@ -767,10 +766,7 @@ func syncStoredTerminalPresentationDelivered(previous *model.ThreadSnapshotState
 }
 
 func (s *Service) discoverSyncThreadsLocked(ctx context.Context, state model.SyncState, forum SyncForum, poll Session, topics []model.SyncTopic) (int, int, error) {
-	cutoff := parseTime(state.SnapshotAt)
-	if cutoff.IsZero() {
-		return 0, 0, errors.New("Sync activation cutoff is unavailable")
-	}
+	cutoff := s.now().UTC().Add(-syncTopicInactiveAge).Unix()
 	result, err := poll.ThreadList(ctx, syncRecentThreadLimit, "")
 	if err != nil {
 		return 0, 0, fmt.Errorf("Sync discovery thread/list: %w", err)
@@ -801,9 +797,10 @@ func (s *Service) discoverSyncThreadsLocked(ctx context.Context, state model.Syn
 	})
 	discovered, failures := 0, 0
 	for _, thread := range threads {
-		if thread.ID == "" || thread.Archived || thread.IsInternal() || !syncThreadActiveSince(thread, cutoff.Unix()) {
+		if thread.ID == "" || thread.Archived || thread.IsInternal() || !syncThreadActiveSince(thread, cutoff) {
 			continue
 		}
+		_ = s.store.UpsertThread(ctx, thread)
 		if _, ok := bound[thread.ID]; ok {
 			continue
 		}
@@ -824,8 +821,6 @@ func (s *Service) discoverSyncThreadsLocked(ctx context.Context, state model.Syn
 		}
 		bound[thread.ID] = struct{}{}
 		discovered++
-		_ = s.store.UpsertThread(ctx, thread)
-		s.pruneSyncTopics(ctx, state.SessionID)
 	}
 	return discovered, failures, nil
 }
@@ -1770,7 +1765,7 @@ func (s *Service) markStaleSyncTopicsForCleanup(ctx context.Context, sessionID s
 		return false
 	}
 	cutoff := model.TimeString(s.now().UTC().Add(-syncTopicInactiveAge).Format(time.RFC3339Nano))
-	_, err := s.store.MarkStaleSyncTopicsForCleanup(ctx, sessionID, cutoff, syncTopicRetentionLimit)
+	_, err := s.store.MarkStaleSyncTopicsForCleanup(ctx, sessionID, cutoff)
 	if err != nil {
 		s.logLifecycle("sync_topic_prune_failed", lifecycleFields{"session_id": sessionID, "error": err})
 		return false

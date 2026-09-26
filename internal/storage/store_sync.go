@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"strings"
+	"time"
 
 	"github.com/mideco-tech/codex-tg/internal/model"
 )
@@ -501,15 +502,16 @@ func (s *Store) GetActiveSyncTopicByThread(ctx context.Context, sessionID, threa
 	return nil, nil
 }
 
-// MarkStaleSyncTopicsForCleanup atomically claims only enough old, idle work to
-// bring the current session down to limit. Telegram deletion happens after the
+// MarkStaleSyncTopicsForCleanup claims idle topics whose Codex thread has been
+// inactive since cutoff, plus old empty drafts. Telegram deletion follows the
 // transaction; claimed rows remain cleanup-only until it succeeds.
-func (s *Store) MarkStaleSyncTopicsForCleanup(ctx context.Context, sessionID string, cutoff model.TimeString, limit int) ([]model.SyncTopic, error) {
+func (s *Store) MarkStaleSyncTopicsForCleanup(ctx context.Context, sessionID string, cutoff model.TimeString) ([]model.SyncTopic, error) {
 	if strings.TrimSpace(sessionID) == "" || strings.TrimSpace(string(cutoff)) == "" {
 		return nil, errors.New("Sync cleanup session and cutoff are required")
 	}
-	if limit < 0 {
-		return nil, errors.New("Sync cleanup limit cannot be negative")
+	cutoffTime, err := time.Parse(time.RFC3339Nano, string(cutoff))
+	if err != nil {
+		return nil, err
 	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -517,31 +519,20 @@ func (s *Store) MarkStaleSyncTopicsForCleanup(ctx context.Context, sessionID str
 	}
 	defer rollback(tx)
 
-	var managed int
-	err = tx.QueryRowContext(ctx, `SELECT
-		(SELECT count(*) FROM sync_topics WHERE session_id=? AND telegram_state=?) +
-		(SELECT count(*) FROM sync_topic_drafts WHERE session_id=? AND state<>?)`,
-		sessionID, model.SyncTopicConnected, sessionID, model.SyncDraftCleanup).Scan(&managed)
-	if err != nil {
-		return nil, err
-	}
-	excess := managed - limit
-	if excess <= 0 {
-		return nil, tx.Commit()
-	}
-
 	rows, err := tx.QueryContext(ctx, `SELECT kind,session_id,chat_id,topic_id,thread_id,rank,title,created_at,updated_at FROM (
-		SELECT 'topic' AS kind,session_id,chat_id,topic_id,thread_id,rank,title,created_at,updated_at
-		FROM sync_topics
-		WHERE session_id=? AND telegram_state=? AND updated_at<?
-		AND coalesce(active_turn_state,'') NOT IN (?,?,?)
+		SELECT 'topic' AS kind,st.session_id,st.chat_id,st.topic_id,st.thread_id,st.rank,st.title,st.created_at,st.updated_at,
+			CASE WHEN t.updated_at > 0 THEN t.updated_at ELSE unixepoch(st.updated_at) END AS activity_at
+		FROM sync_topics st LEFT JOIN threads t ON t.thread_id=st.thread_id
+		WHERE st.session_id=? AND st.telegram_state=?
+		AND coalesce(st.active_turn_state,'') NOT IN (?,?,?)
 		UNION ALL
-		SELECT 'draft' AS kind,session_id,chat_id,topic_id,'' AS thread_id,rank,title,created_at,updated_at
+		SELECT 'draft' AS kind,session_id,chat_id,topic_id,'' AS thread_id,rank,title,created_at,updated_at,
+			unixepoch(updated_at) AS activity_at
 		FROM sync_topic_drafts
-		WHERE session_id=? AND state=? AND updated_at<?
-	) ORDER BY updated_at,topic_id LIMIT ?`,
-		sessionID, model.SyncTopicConnected, cutoff, model.SyncTurnStarting, model.SyncTurnActive, model.SyncTurnUnknown,
-		sessionID, model.SyncDraftReady, cutoff, excess)
+		WHERE session_id=? AND state=?
+	) WHERE activity_at<? ORDER BY activity_at,topic_id`,
+		sessionID, model.SyncTopicConnected, model.SyncTurnStarting, model.SyncTurnActive, model.SyncTurnUnknown,
+		sessionID, model.SyncDraftReady, cutoffTime.Unix())
 	if err != nil {
 		return nil, err
 	}
@@ -549,7 +540,7 @@ func (s *Store) MarkStaleSyncTopicsForCleanup(ctx context.Context, sessionID str
 		kind  string
 		topic model.SyncTopic
 	}
-	candidates := make([]candidate, 0, excess)
+	candidates := make([]candidate, 0)
 	for rows.Next() {
 		var item candidate
 		if err := rows.Scan(&item.kind, &item.topic.SessionID, &item.topic.ChatID, &item.topic.TopicID,
@@ -576,9 +567,9 @@ func (s *Store) MarkStaleSyncTopicsForCleanup(ctx context.Context, sessionID str
 				model.SyncDraftCleanup, now, item.topic.SessionID, item.topic.TopicID, model.SyncDraftReady, cutoff)
 		} else {
 			result, err = tx.ExecContext(ctx, `UPDATE sync_topics SET telegram_state=?,updated_at=?
-				WHERE session_id=? AND topic_id=? AND telegram_state=? AND updated_at<?
+				WHERE session_id=? AND topic_id=? AND telegram_state=?
 				AND coalesce(active_turn_state,'') NOT IN (?,?,?)`,
-				model.SyncTopicCleanup, now, item.topic.SessionID, item.topic.TopicID, model.SyncTopicConnected, cutoff,
+				model.SyncTopicCleanup, now, item.topic.SessionID, item.topic.TopicID, model.SyncTopicConnected,
 				model.SyncTurnStarting, model.SyncTurnActive, model.SyncTurnUnknown)
 		}
 		if err != nil {

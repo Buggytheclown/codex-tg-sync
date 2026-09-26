@@ -10,7 +10,7 @@ import (
 	"github.com/mideco-tech/codex-tg/internal/model"
 )
 
-func TestMarkStaleSyncTopicsForCleanupSelectsOldestSafeWorkToReachLimit(t *testing.T) {
+func TestMarkStaleSyncTopicsForCleanupClaimsAllOldIdleWork(t *testing.T) {
 	t.Parallel()
 	store := openTestStore(t)
 	ctx := context.Background()
@@ -50,7 +50,7 @@ func TestMarkStaleSyncTopicsForCleanupSelectsOldestSafeWorkToReachLimit(t *testi
 	}
 
 	targets, err := store.MarkStaleSyncTopicsForCleanup(ctx, "session-1",
-		model.TimeString(base.Add(-24*time.Hour).Format(time.RFC3339Nano)), 10)
+		model.TimeString(base.Add(-24*time.Hour).Format(time.RFC3339Nano)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -58,7 +58,7 @@ func TestMarkStaleSyncTopicsForCleanupSelectsOldestSafeWorkToReachLimit(t *testi
 	for _, target := range targets {
 		got = append(got, target.TopicID)
 	}
-	if want := []int64{30, 11}; !reflect.DeepEqual(got, want) {
+	if want := []int64{30, 11, 12}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("cleanup targets=%v, want %v", got, want)
 	}
 	topics, err := store.ListSyncTopics(ctx, "session-1")
@@ -69,7 +69,7 @@ func TestMarkStaleSyncTopicsForCleanupSelectsOldestSafeWorkToReachLimit(t *testi
 	for _, topic := range topics {
 		states[topic.TopicID] = topic.TelegramState
 	}
-	if states[11] != model.SyncTopicCleanup || states[12] != model.SyncTopicConnected || states[14] != model.SyncTopicConnected {
+	if states[11] != model.SyncTopicCleanup || states[12] != model.SyncTopicCleanup || states[14] != model.SyncTopicConnected {
 		t.Fatalf("topic states=%v", states)
 	}
 	drafts, err := store.ListSyncTopicDrafts(ctx, "session-1")
@@ -78,7 +78,7 @@ func TestMarkStaleSyncTopicsForCleanupSelectsOldestSafeWorkToReachLimit(t *testi
 	}
 }
 
-func TestMarkStaleSyncTopicsForCleanupLeavesSessionOverLimitWithoutEnoughSafeWork(t *testing.T) {
+func TestMarkStaleSyncTopicsForCleanupProtectsActiveWork(t *testing.T) {
 	t.Parallel()
 	store := openTestStore(t)
 	ctx := context.Background()
@@ -98,7 +98,40 @@ func TestMarkStaleSyncTopicsForCleanupLeavesSessionOverLimitWithoutEnoughSafeWor
 		t.Fatal(err)
 	}
 	targets, err := store.MarkStaleSyncTopicsForCleanup(ctx, "session-1",
-		model.TimeString(base.Add(-24*time.Hour).Format(time.RFC3339Nano)), 10)
+		model.TimeString(base.Add(-24*time.Hour).Format(time.RFC3339Nano)))
+	if err != nil || len(targets) != 1 || targets[0].TopicID != 11 {
+		t.Fatalf("targets=%#v err=%v", targets, err)
+	}
+}
+
+func TestMarkStaleSyncTopicsForCleanupUsesCodexActivity(t *testing.T) {
+	t.Parallel()
+	store := openTestStore(t)
+	ctx := context.Background()
+	base := time.Date(2026, 9, 15, 12, 0, 0, 0, time.UTC)
+	for _, item := range []struct {
+		topicID   int64
+		threadID  string
+		activity  time.Time
+		topicTime time.Time
+	}{
+		{11, "old-thread", base.Add(-48 * time.Hour), base},
+		{12, "fresh-thread", base, base.Add(-48 * time.Hour)},
+	} {
+		if err := store.UpsertSyncTopic(ctx, model.SyncTopic{SessionID: "session-1", ChatID: -1001,
+			TopicID: item.topicID, ThreadID: item.threadID, TelegramState: model.SyncTopicConnected}); err != nil {
+			t.Fatal(err)
+		}
+		if err := store.UpsertThread(ctx, model.Thread{ID: item.threadID, UpdatedAt: item.activity.Unix()}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := store.db.ExecContext(ctx, `UPDATE sync_topics SET updated_at=? WHERE topic_id=?`,
+			item.topicTime.Format(time.RFC3339Nano), item.topicID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	targets, err := store.MarkStaleSyncTopicsForCleanup(ctx, "session-1",
+		model.TimeString(base.Add(-24*time.Hour).Format(time.RFC3339Nano)))
 	if err != nil || len(targets) != 1 || targets[0].TopicID != 11 {
 		t.Fatalf("targets=%#v err=%v", targets, err)
 	}

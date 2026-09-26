@@ -35,11 +35,11 @@ Primary suites:
 Coverage includes:
 
 - forum validation and Control preparation;
-- paginated, importance-first `/sync on` topic selection (including `notLoaded` threads with running or terminal last turns), initial topic limit, and continuous discovery of chats created or updated after activation;
+- paginated, importance-first `/sync on` topic selection (including `notLoaded` threads with running or terminal last turns), initial topic limit, empty active Sync, and continuous discovery of chats created or updated in the last 24 hours;
 - one topic per thread and receipt idempotency;
 - shared daemon/WebSocket reconnection without prompt replay;
 - startup reset to off and cleanup-only old topics/drafts;
-- oldest-inactive topic retention after creation, including ready drafts,
+- periodic 24-hour inactivity cleanup by Codex thread activity, including ready drafts,
   unfinished-work protection, asynchronous deletion outside `/newchat`, and
   cleanup retry across historical sessions;
 - generation-aware writer claims and fail-closed unknown dispatch;
