@@ -94,6 +94,26 @@ func TestPollOnceCreatesDisplayMetadataAndExactReviewPrompt(t *testing.T) {
 	}
 }
 
+func TestPollOnceSkipsPullRequestsAuthoredByReviewer(t *testing.T) {
+	t.Parallel()
+	client := &fakeAssignedClient{requests: []PullRequest{
+		{ID: 12345678, Author: " @Tidjei ", Summary: "Own pull request"},
+		{ID: 12345679, Author: "alice", Summary: "Another author's pull request"},
+	}}
+	sink := &dedupeRequestSink{}
+	poller := NewPoller(client, sink, Config{Login: "tidjei", CWD: "/project", TelegramTopicID: 77})
+
+	if created, err := poller.PollOnce(context.Background()); err != nil || created != 1 {
+		t.Fatalf("PollOnce created=%d err=%v", created, err)
+	}
+	if _, exists := sink.requests[Source+"|12345678"]; exists {
+		t.Fatal("own PR was queued for review")
+	}
+	if _, exists := sink.requests[Source+"|12345679"]; !exists {
+		t.Fatal("another author's PR was not queued")
+	}
+}
+
 func TestPollOnceAutoStartsOnlyExactConfiguredAuthors(t *testing.T) {
 	t.Parallel()
 	client := &fakeAssignedClient{requests: []PullRequest{

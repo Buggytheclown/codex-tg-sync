@@ -136,6 +136,7 @@ func runDaemon(cfg config.Config) error {
 	}{
 		{source: ymessenger.Source, interval: cfg.YMessengerPollInterval, enabled: cfg.YMessengerEnabled},
 		{source: arcanumreview.Source, interval: cfg.ArcanumReviewPollInterval, enabled: cfg.ArcanumReviewEnabled},
+		{source: arcanumreview.ChangesSource, interval: cfg.ArcanumReviewPollInterval, enabled: cfg.ArcanumReviewEnabled},
 		{source: cronpoller.Source, interval: cronpoller.DefaultPollInterval, enabled: true},
 	} {
 		if err := service.RegisterExternalPoller(ctx, poller.source, poller.interval, poller.enabled); err != nil {
@@ -144,6 +145,7 @@ func runDaemon(cfg config.Config) error {
 	}
 	startYMessengerPoller(ctx, cfg, service, logger)
 	startArcanumReviewPoller(ctx, cfg, service, logger)
+	startArcanumChangesPoller(ctx, cfg, service, logger)
 	startCronPoller(ctx, cfg, service, logger)
 	service.FinishStartup(ctx)
 	logger.Printf("ctr-go daemon running with %s", bot.String())
@@ -208,6 +210,25 @@ func startArcanumReviewPoller(ctx context.Context, cfg config.Config, sink arcan
 	})
 	if logger != nil {
 		logger.Printf("Arcanum review requests enabled for %s (poll interval %s)", cfg.ArcanumReviewLogin, cfg.ArcanumReviewPollInterval)
+	}
+	return true
+}
+
+func startArcanumChangesPoller(ctx context.Context, cfg config.Config, sink arcanumreview.RequestSink, logger *log.Logger) bool {
+	if !cfg.ArcanumReviewEnabled {
+		return false
+	}
+	client := arcanumreview.NewCLIClient(cfg.ArcanumYABin, nil)
+	poller := arcanumreview.NewChangesPoller(client, sink, arcanumreview.Config{
+		Login: cfg.ArcanumReviewLogin, CWD: cfg.ArcanumReviewCWD, TelegramTopicID: cfg.ExternalRequestsTopicID,
+	})
+	go poller.Run(ctx, cfg.ArcanumReviewPollInterval, func(err error) {
+		if logger != nil {
+			logger.Printf("Arcanum changes poll failed: %s", telegram.SanitizeLogError(err))
+		}
+	})
+	if logger != nil {
+		logger.Printf("Arcanum changes requests enabled for %s (poll interval %s)", cfg.ArcanumReviewLogin, cfg.ArcanumReviewPollInterval)
 	}
 	return true
 }

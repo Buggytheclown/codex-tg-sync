@@ -13,7 +13,7 @@ The repository is named `codex-tg-sync`; the command-line binary and local data 
 - Renders compact `[User]`, `[Status]`, `[Approval]`, `[Input]`, and `[Final]` cards.
 - Edits resolved approval/input cards in place and removes their buttons.
 - Creates project-backed topic drafts with `/projects` and dated chats with `/newchat`.
-- Collects durable launch requests from cron, Yandex Messenger, and assigned Arcanum reviews.
+- Collects durable launch requests from cron, Yandex Messenger, assigned Arcanum reviews, and feedback on the operator's PRs.
 - Shows active launch requests with `/requests` and poller state with `/pollers`.
 - Sends short terminal notifications back to configured external sources.
 - Keeps Codex App Server local; no public App Server listener is required.
@@ -153,7 +153,7 @@ All sources enter the same durable request lifecycle. The Requests topic shows a
 
 Cron schedules live in `~/.codex-tg/cron.json`.
 
-Assigned Arcanum review polling uses the authenticated `ya tool gena-arcanum-cli`. Authors in `CTR_GO_ARCANUM_REVIEW_AUTO_START_AUTHORS` auto-start after their visible request card is created; other authors require `Start`.
+Arcanum polling uses the authenticated `ya tool gena-arcanum-cli`. Assigned PRs authored by the configured reviewer are skipped. Other assigned PRs require `Start`, unless their authors are listed in `CTR_GO_ARCANUM_REVIEW_AUTO_START_AUTHORS`. The same setting also polls the reviewer's own open, published PRs in `Waiting for changes` and automatically starts one Codex task per PR to summarize the feedback after its Requests card is visible.
 
 Yandex Messenger requests can require Telegram approval or auto-start according to configuration. When a launched turn reaches a terminal state, the adapter sends a short terminal reply back to the originating Messenger thread.
 

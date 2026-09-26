@@ -108,6 +108,7 @@ Cron, Yandex Messenger, and Arcanum review pollers insert requests through the s
 - Ambiguous thread creation is never replayed automatically.
 - Terminal Codex state closes the request and queues a short terminal reply when the source supports replies.
 - Arcanum authors in `CTR_GO_ARCANUM_REVIEW_AUTO_START_AUTHORS` auto-start after card creation; other authors require approval.
+- Arcanum assigned reviews skip PRs authored by the configured reviewer. Own PRs in `Waiting for changes` auto-start one feedback summary per PR after card creation.
 - Poller status is durable enough to show enabled state, current work, last attempt/success, and consecutive failures.
 
 ## Storage compatibility

@@ -49,6 +49,9 @@ func TestArcanumReviewPollerRemainsDisabledByDefault(t *testing.T) {
 	if started := startArcanumReviewPoller(context.Background(), config.Config{}, nil, nil); started {
 		t.Fatal("Arcanum review poller started without enabled config")
 	}
+	if started := startArcanumChangesPoller(context.Background(), config.Config{}, nil, nil); started {
+		t.Fatal("Arcanum changes poller started without enabled config")
+	}
 }
 
 func TestRunInitWritesPrivateConfigAndRefusesOverwrite(t *testing.T) {

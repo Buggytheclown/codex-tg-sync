@@ -27,6 +27,10 @@ type AssignedClient interface {
 	ListAssigned(ctx context.Context, login string) ([]PullRequest, error)
 }
 
+type WaitingChangesClient interface {
+	ListAuthoredWaitingForChanges(ctx context.Context, login string) ([]PullRequest, error)
+}
+
 type CommandRunner interface {
 	Run(ctx context.Context, name string, args ...string) ([]byte, error)
 }
@@ -68,11 +72,18 @@ func NewCLIClient(yaBin string, runner CommandRunner) *CLIClient {
 }
 
 func (c *CLIClient) ListAssigned(ctx context.Context, login string) ([]PullRequest, error) {
+	return c.search(ctx, login, "open(true);published(true);assignee("+strings.TrimSpace(login)+")")
+}
+
+func (c *CLIClient) ListAuthoredWaitingForChanges(ctx context.Context, login string) ([]PullRequest, error) {
+	return c.search(ctx, login, "open(true);published(true);author("+strings.TrimSpace(login)+");common_status(waiting_for_changes)")
+}
+
+func (c *CLIClient) search(ctx context.Context, login, query string) ([]PullRequest, error) {
 	login = strings.TrimSpace(login)
 	if c == nil || c.runner == nil || c.yaBin == "" || !loginPattern.MatchString(login) {
 		return nil, errors.New("Arcanum review client requires ya binary and a valid login")
 	}
-	query := "open(true);published(true);assignee(" + login + ")"
 	args := []string{
 		"tool", "gena-arcanum-cli", "--json", "pr", "search",
 		"--query", query,

@@ -53,6 +53,9 @@ func (p *Poller) PollOnce(ctx context.Context) (int, error) {
 	}
 	requests := make([]model.ExternalLaunchRequest, 0, len(pullRequests))
 	for _, pullRequest := range pullRequests {
+		if normalizeAuthor(pullRequest.Author) == normalizeAuthor(p.config.Login) {
+			continue
+		}
 		externalID := strconv.FormatInt(pullRequest.ID, 10)
 		if _, ok := p.seen[externalID]; ok {
 			continue

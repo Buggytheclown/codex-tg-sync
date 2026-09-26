@@ -8,9 +8,13 @@ start the same read-only Codex review command each time.
 ## Goal
 
 - Poll open published Arcanum pull requests assigned to one configured login.
-- Create one durable Telegram launch request per pull request.
+- Exclude PRs authored by that login from assigned-review requests.
+- Poll that login's open published PRs in `Waiting for changes` and automatically
+  start one Codex feedback summary per PR, including PRs already in that state
+  when polling starts.
+- Create one durable Telegram launch request per source and pull request.
 - Show the PR author, summary, and URL in the shared Requests topic.
-- Send only the exact `$arc-pr-review <PR URL>` invocation to Codex.
+- Send only the exact `$arc-pr-review <PR URL>` invocation for assigned-review requests.
 - Keep Telegram approval as the default while allowing exact configured author
   logins to auto-start future requests after card visibility.
 - Report sustained polling failures and recoveries in the same Requests topic.
@@ -18,7 +22,7 @@ start the same read-only Codex review command each time.
 ## Non-goals
 
 - Posting review comments, approving, or otherwise mutating the pull request.
-- Creating more than one launch request for later PR iterations or reassignment.
+- Creating more than one launch request per source for later PR iterations or reassignment.
 - Parsing the Arcanum web UI or introducing a generic plugin framework.
 - Returning the final answer to Arcanum.
 
@@ -33,9 +37,12 @@ start` card and become claimable only after Telegram visibility is persisted.
 ## Domain Model
 
 - Source identity: `arcanum_review`.
+- Feedback-summary source identity: `arcanum_changes`; both sources use the
+  configured login and poll interval.
 - External identity: decimal PR id.
 - `Sender`, `Title`, `SourceURL`, and `SafePreview` are Telegram-only metadata.
 - `Prompt` is exactly `$arc-pr-review [<URL>](<URL>)`.
+- Feedback-summary `Prompt` is exactly `<URL> кратко расскажи суть замечаний`.
 - `CTR_GO_ARCANUM_REVIEW_AUTO_START_AUTHORS` applies exact normalized login
   matching to future requests only.
 - SQLite `(source, external_id)` remains the restart-safe idempotency authority;
@@ -67,3 +74,6 @@ owns the Telegram card.
 - [x] The adapter is optional and disabled by default.
 - [x] Sustained polling failures and recoveries are delivered to Requests.
 - [x] Trusted future PR authors may auto-start only after their card is visible.
+- [x] The configured reviewer's own PRs are skipped by the assigned-review poller.
+- [x] Own PRs in `Waiting for changes` start one feedback-summary task after
+      their card is visible, regardless of later diff iterations.

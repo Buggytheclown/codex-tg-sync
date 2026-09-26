@@ -145,6 +145,9 @@ Required scenarios:
 - only admission-valid callbacks are pre-acknowledged, before business handling and regardless of group cooldown;
 - `createForumTopic` `429` performs one launch-owned attempt and leaves a failed card with Retry/Close;
 - auto-start author policy applies only to new Arcanum requests;
+- Arcanum assigned-review polling skips PRs authored by the configured login;
+- own PRs in `Waiting for changes` create one automatic feedback summary per PR,
+  including after a daemon restart;
 - start claims once and ambiguous thread creation is not replayed;
 - terminal state closes the request and external reply delivery is retryable/idempotent;
 - `/requests` enters through public Sync Control routing and lists active requests;

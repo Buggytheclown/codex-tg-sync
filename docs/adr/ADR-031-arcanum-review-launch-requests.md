@@ -17,6 +17,13 @@ responsibilities.
 ## Decision
 
 - `internal/arcanumreview` is an optional in-process source adapter.
+- The assigned-review source skips PRs whose author matches the configured
+  reviewer's login, even when Arcanum also assigns that login as reviewer.
+- A second source, `arcanum_changes`, searches
+  `open(true);published(true);author(<configured-login>);common_status(waiting_for_changes)`.
+  It creates one automatic Codex task per PR with the prompt
+  `<URL> кратко расскажи суть замечаний`. It shares the existing Arcanum
+  enable flag, poll interval, working directory, and Requests topic.
 - The adapter invokes the official `gena-arcanum-cli` through a configured `ya`
   binary and searches with
   `open(true);published(true);assignee(<configured-login>)`.
@@ -26,10 +33,11 @@ responsibilities.
 - The configured executable itself must be readable by the service. In
   particular, an otherwise valid symlink into a macOS privacy-protected
   `Documents` tree may require copying the bootstrap to a service-owned path.
-- Polling is sequential and defaults to once per minute. The adapter is
+- Each source polls sequentially and defaults to once per minute. The adapter is
   disabled by default and requires an absolute working directory, the shared
   external Requests topic, and Sync group configuration when enabled.
-- PR identity is its decimal id under source `arcanum_review`. The existing
+- PR identity is its decimal id under source `arcanum_review` or
+  `arcanum_changes`. The existing
   unique `(source, external_id)` constraint is the restart-safe idempotency
   authority for every request state.
 - An in-memory monotonic seen set suppresses repeated SQLite writes while the
@@ -68,10 +76,14 @@ cursor. This is necessary because an older PR may be assigned after newer PR
 ids already exist. Repeated snapshots are cheap and safe, and the official CLI
 continues to own internal authentication.
 
-One PR creates at most one durable launch request. A later iteration,
+One PR creates at most one durable launch request per source. A later iteration,
 unassignment/reassignment, title edit, or re-publication does not create a new
 request or mutate the original card. Supporting per-iteration review requests
 would require a different external identity contract.
+
+The feedback-summary source includes PRs already in `Waiting for changes` on
+its first poll. The two source identities have independent deduplication, so a
+previously queued assigned-review request does not suppress a feedback summary.
 
 The configured working directory must allow the `arc-pr-review` skill to create
 its isolated temporary Arc mount when one is necessary. The skill remains

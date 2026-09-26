@@ -51,6 +51,29 @@ func TestCLIClientListsAssignedPullRequestsWithExactQuery(t *testing.T) {
 	}
 }
 
+func TestCLIClientListsAuthoredWaitingForChangesWithExactQuery(t *testing.T) {
+	t.Parallel()
+	runner := &recordingCommandRunner{output: []byte(`{"review_requests":[{"id":12345678,"author":{"name":"tidjei"},"summary":"Fix feedback"}]}`)}
+	client := NewCLIClient("ya", runner)
+
+	requests, err := client.ListAuthoredWaitingForChanges(context.Background(), "tidjei")
+	if err != nil {
+		t.Fatalf("ListAuthoredWaitingForChanges failed: %v", err)
+	}
+	wantArgs := []string{
+		"tool", "gena-arcanum-cli", "--json", "pr", "search",
+		"--query", "open(true);published(true);author(tidjei);common_status(waiting_for_changes)",
+		"--limit", "100", "--all", "--order=-updated_at",
+		"--fields", "review_requests(id,url,author(name),summary),total_count",
+	}
+	if runner.name != "ya" || !reflect.DeepEqual(runner.args, wantArgs) {
+		t.Fatalf("command = %q %#v, want %q %#v", runner.name, runner.args, "ya", wantArgs)
+	}
+	if len(requests) != 1 || requests[0].ID != 12345678 || requests[0].Author != "tidjei" {
+		t.Fatalf("requests = %#v", requests)
+	}
+}
+
 func TestCLIClientRejectsMalformedAssignedPullRequest(t *testing.T) {
 	t.Parallel()
 	runner := &recordingCommandRunner{output: []byte(`{"review_requests":[{"id":12345678,"author":{},"summary":"Title"}]}`)}
