@@ -14,7 +14,7 @@ start the same read-only Codex review command each time.
   when polling starts.
 - Create one durable Telegram launch request per source and pull request.
 - Show the PR author, summary, and URL in the shared Requests topic.
-- Send only the exact `$arc-pr-review <PR URL>` invocation for assigned-review requests.
+- Send only the exact `$arc-pr-review-stefania <PR URL>` invocation for assigned-review requests.
 - Keep Telegram approval as the default while allowing exact configured author
   logins to auto-start future requests after card visibility.
 - Report sustained polling failures and recoveries in the same Requests topic.
@@ -41,7 +41,7 @@ start` card and become claimable only after Telegram visibility is persisted.
   configured login and poll interval.
 - External identity: decimal PR id.
 - `Sender`, `Title`, `SourceURL`, and `SafePreview` are Telegram-only metadata.
-- `Prompt` is exactly `$arc-pr-review [<URL>](<URL>)`.
+- `Prompt` is exactly `$arc-pr-review-stefania [<URL>](<URL>)`.
 - Feedback-summary `Prompt` is exactly `<URL> кратко расскажи суть замечаний`.
 - `CTR_GO_ARCANUM_REVIEW_AUTO_START_AUTHORS` applies exact normalized login
   matching to future requests only.
@@ -70,7 +70,7 @@ owns the Telegram card.
 - [x] The current assigned PR creates one Requests card on the first poll.
 - [x] Repeated polls and daemon restarts do not create duplicate cards.
 - [x] The card shows author, title, and source URL.
-- [x] Codex receives only the exact arc-pr-review invocation.
+- [x] Codex receives only the exact arc-pr-review-stefania invocation.
 - [x] The adapter is optional and disabled by default.
 - [x] Sustained polling failures and recoveries are delivered to Requests.
 - [x] Trusted future PR authors may auto-start only after their card is visible.

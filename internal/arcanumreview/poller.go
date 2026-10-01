@@ -102,7 +102,7 @@ func (p *Poller) Run(ctx context.Context, interval time.Duration, onError func(e
 func requestForPullRequest(pullRequest PullRequest, config Config) model.ExternalLaunchRequest {
 	externalID := strconv.FormatInt(pullRequest.ID, 10)
 	url := fmt.Sprintf("https://a.yandex-team.ru/review/%d", pullRequest.ID)
-	prompt := "$arc-pr-review [" + url + "](" + url + ")"
+	prompt := "$arc-pr-review-stefania [" + url + "](" + url + ")"
 	now := model.NowString()
 	return model.ExternalLaunchRequest{
 		ID: Source + ":" + externalID, Source: Source, ExternalID: externalID,

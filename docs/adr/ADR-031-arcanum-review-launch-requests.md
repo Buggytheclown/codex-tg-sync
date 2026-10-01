@@ -7,7 +7,7 @@
 ## Context
 
 An operator wants each newly assigned open Arcadia pull request to enter the
-existing durable Telegram launch flow and start the installed `$arc-pr-review`
+existing durable Telegram launch flow and start the installed `$arc-pr-review-stefania`
 skill. Most authors require explicit approval, while a small operator-owned
 allowlist may auto-start without making the launch invisible. Parsing the
 Arcanum web UI is fragile, while owning another OAuth implementation or a
@@ -47,7 +47,7 @@ responsibilities.
 - Telegram display metadata and executable prompt remain separate. `Sender`
   contains the PR author, `Title` the PR summary, `SourceURL` the canonical PR
   URL, and `SafePreview` a short review action. `Prompt` contains only the exact
-  `$arc-pr-review [<URL>](<URL>)` invocation.
+  `$arc-pr-review-stefania [<URL>](<URL>)` invocation.
 - The generic external request card renders `Source`, `From`, `Title`, `Status`,
   `Link`, and `Request`. Source adapters do not render Telegram text or own
   callback/status behavior.
@@ -85,7 +85,7 @@ The feedback-summary source includes PRs already in `Waiting for changes` on
 its first poll. The two source identities have independent deduplication, so a
 previously queued assigned-review request does not suppress a feedback summary.
 
-The configured working directory must allow the `arc-pr-review` skill to create
+The configured working directory must allow the `arc-pr-review-stefania` skill to create
 its isolated temporary Arc mount when one is necessary. The skill remains
 read-only with respect to the reviewed PR and the user's primary Arc checkout.
 

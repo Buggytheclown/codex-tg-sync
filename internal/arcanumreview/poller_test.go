@@ -79,7 +79,7 @@ func TestPollOnceCreatesDisplayMetadataAndExactReviewPrompt(t *testing.T) {
 	}
 	request := sink.requests[Source+"|12345678"]
 	wantURL := "https://a.yandex-team.ru/review/12345678"
-	wantPrompt := "$arc-pr-review [" + wantURL + "](" + wantURL + ")"
+	wantPrompt := "$arc-pr-review-stefania [" + wantURL + "](" + wantURL + ")"
 	if request.ID != Source+":12345678" || request.Source != Source || request.ExternalID != "12345678" {
 		t.Fatalf("identity = %#v", request)
 	}
