@@ -55,6 +55,26 @@ count in each owning commentary-block header. Individual tool labels and tool
 output remain excluded. Counts are computed before compact detail truncation and
 merged monotonically within a turn.
 
+Commentary and plan blocks are retained for the whole latest turn. The compact
+64-detail tail applies only to other non-output details, so tool activity cannot
+evict a Status block or its inferred start time. Total compact projection size
+can grow with the number of Status blocks; Telegram text is bounded separately.
+Same-turn detail merging uses the current source order, inserting previously
+observed but missing runs next to shared identities. Full reads repair legacy
+scrambled order. IDs identify blocks; a positive turn-global commentary index
+is the fallback for ID-less blocks and supplies their displayed number.
+
+Healthy block starts survive text changes and persisted JSON reloads. Legacy
+decreasing block indices, reversed starts, or starts outside the turn interval
+trigger one deterministic reconstruction of the inferred timeline. Lost exact
+timestamps cannot be recovered. The repaired estimates are saved and remain
+stable on later reads. Recovery occurs on the next full read; fully delivered
+terminal topics are not force-read solely to migrate their history.
+Incomplete observations retain prior items and turn-global indices; arbitrary
+partial wire histories that locally renumber commentary are not supported.
+If an incomplete read still leaves decreasing block indices, timing recovery
+waits for a read that restores the order instead of repeating on every poll.
+
 Active and waiting Status cards also show the local time of the latest successful
 bounded snapshot read and the latest valid per-thread App Server event. Event
 activity is ephemeral in-memory diagnostic state: streaming events update that
@@ -88,6 +108,10 @@ frozen.
   idempotent on retry.
 - Each commentary block shows its complete monotonic tool count without labels
   or output, including when compact detail history is truncated.
+- Tool-heavy turns and more than 64 Status blocks retain stable source order,
+  global numbering, inferred starts, and the same Status message anchor across
+  repeated reads. Legacy scrambled snapshots recover once without losing
+  healthy timing anchors when only a prefix was omitted.
 - Active freshness distinguishes the latest successful snapshot read from the
   latest valid App Server event without turning streaming deltas into reads or
   durable writes.

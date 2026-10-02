@@ -3,9 +3,11 @@ package appserver
 import (
 	"encoding/json"
 	"fmt"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/mideco-tech/codex-tg/internal/model"
 )
@@ -749,8 +751,62 @@ func TestCompactSnapshotKeepsToolCountBeyondDetailLimit(t *testing.T) {
 	if got, want := observed.ToolCallCounts[1], compactSnapshotDetailLimit+12; got != want {
 		t.Fatalf("ToolCallCounts[1] = %d, want %d", got, want)
 	}
-	if len(observed.DetailItems) != compactSnapshotDetailLimit {
-		t.Fatalf("len(DetailItems) = %d, want compact limit %d", len(observed.DetailItems), compactSnapshotDetailLimit)
+	if len(observed.DetailItems) != compactSnapshotDetailLimit+1 || observed.DetailItems[0].ID != "agent-1" {
+		t.Fatalf("compact snapshot lost commentary or exceeded the non-status limit: %#v", observed.DetailItems)
+	}
+}
+
+func TestCompactSnapshotKeepsAllStatusBlocksBeyondDetailLimit(t *testing.T) {
+	t.Parallel()
+	current := ThreadReadSnapshot{LatestTurnID: "turn-1", LatestTurnStatus: "inProgress"}
+	for index := range compactSnapshotDetailLimit + 12 {
+		kind := model.DetailItemCommentary
+		if index%2 == 0 {
+			kind = model.DetailItemPlan
+		}
+		current.DetailItems = append(current.DetailItems,
+			model.DetailItem{ID: fmt.Sprintf("block-%d", index), Kind: kind, CommentaryIndex: index + 1, Text: "Working"},
+			model.DetailItem{ID: fmt.Sprintf("tool-%d", index), Kind: model.DetailItemTool, Output: "discard output"},
+			model.DetailItem{ID: fmt.Sprintf("output-%d", index), Kind: model.DetailItemOutput, Text: "discard output"},
+		)
+	}
+	state := CompactSnapshot(nil, current, time.Date(2026, 10, 2, 12, 0, 0, 0, time.UTC))
+	observed := unmarshalCompactSnapshot(t, state)
+	blocks, other := 0, 0
+	for _, item := range observed.DetailItems {
+		if item.Kind == model.DetailItemOutput || item.Output != "" {
+			t.Fatal("compact snapshot retained tool output")
+		}
+		if item.Kind == model.DetailItemCommentary || item.Kind == model.DetailItemPlan {
+			if item.ID != fmt.Sprintf("block-%d", blocks) {
+				t.Fatalf("block %d is out of order: %#v", blocks, item)
+			}
+			blocks++
+		} else {
+			other++
+		}
+	}
+	if blocks != compactSnapshotDetailLimit+12 || other != compactSnapshotDetailLimit {
+		t.Fatalf("retained blocks=%d other=%d", blocks, other)
+	}
+}
+
+func TestCompactSnapshotDoesNotMutateAuthoritativeRead(t *testing.T) {
+	t.Parallel()
+	text := strings.Repeat("😀", compactSnapshotFieldLimit/2)
+	current := ThreadReadSnapshot{LatestTurnID: "turn-1", LatestTurnStatus: "inProgress",
+		DetailItems:         []model.DetailItem{{ID: "block-1", Kind: model.DetailItemCommentary, Text: text}, {ID: "tool-1", Kind: model.DetailItemTool, Output: "discard"}},
+		LatestAgentMessages: []string{text}, LatestAgentMessageEntries: []AgentMessageEntry{{Text: text}},
+	}
+	before, _ := json.Marshal(current)
+	compact := CompactSnapshot(nil, current, time.Date(2026, 10, 2, 12, 0, 0, 0, time.UTC))
+	after, _ := json.Marshal(current)
+	if !reflect.DeepEqual(before, after) {
+		t.Fatal("compaction mutated the authoritative input")
+	}
+	observed := unmarshalCompactSnapshot(t, compact)
+	if value := observed.DetailItems[0].Text; !utf8.ValidString(value) || len(value) >= len(text) || !strings.Contains(value, "truncated") {
+		t.Fatal("field compaction failed to preserve valid UTF-8")
 	}
 }
 

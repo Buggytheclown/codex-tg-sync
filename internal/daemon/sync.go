@@ -1374,26 +1374,54 @@ func mergeSyncDetailItems(previous, current []model.DetailItem) []model.DetailIt
 		if len(current) == 0 {
 			return append([]model.DetailItem(nil), previous...)
 		}
-		return current
+		return append([]model.DetailItem(nil), current...)
 	}
-	out := append([]model.DetailItem(nil), previous...)
-	indexes := make(map[string]int, len(out))
-	for index, item := range out {
-		if key := syncDetailItemKey(item, index); key != "" {
-			indexes[key] = index
-		}
+	prior := make(map[string]model.DetailItem, len(previous))
+	for index, item := range previous {
+		prior[syncDetailItemKey(item, index)] = item
 	}
+	// A complete read restores the source order even if the saved tail was
+	// scrambled. Incomplete reads keep missing runs near their shared anchors.
+	ordered := make([]model.DetailItem, 0, len(current))
+	keys := make([]string, 0, len(current))
+	indexes := make(map[string]int, len(current))
 	for index, item := range current {
 		key := syncDetailItemKey(item, index)
-		if previousIndex, ok := indexes[key]; ok {
-			if item.StartedAt == "" {
-				item.StartedAt = out[previousIndex].StartedAt
-			}
-			out[previousIndex] = item
+		if item.StartedAt == "" {
+			item.StartedAt = prior[key].StartedAt
+		}
+		if currentIndex, ok := indexes[key]; ok {
+			ordered[currentIndex] = item
 			continue
 		}
-		indexes[key] = len(out)
+		indexes[key] = len(ordered)
+		keys = append(keys, key)
+		ordered = append(ordered, item)
+	}
+	before := make(map[string][]model.DetailItem)
+	var pending []model.DetailItem
+	lastAnchor := ""
+	for index, item := range previous {
+		key := syncDetailItemKey(item, index)
+		if _, shared := indexes[key]; shared {
+			before[key] = append(before[key], pending...)
+			pending = nil
+			lastAnchor = key
+			continue
+		}
+		pending = append(pending, item)
+	}
+	out := make([]model.DetailItem, 0, len(previous)+len(current))
+	if lastAnchor == "" {
+		out = append(out, pending...)
+	}
+	for index, item := range ordered {
+		key := keys[index]
+		out = append(out, before[key]...)
 		out = append(out, item)
+		if key == lastAnchor {
+			out = append(out, pending...)
+		}
 	}
 	return out
 }
@@ -1401,6 +1429,9 @@ func mergeSyncDetailItems(previous, current []model.DetailItem) []model.DetailIt
 func syncDetailItemKey(item model.DetailItem, index int) string {
 	if id := strings.TrimSpace(item.ID); id != "" {
 		return item.Kind + ":" + id
+	}
+	if (item.Kind == model.DetailItemCommentary || item.Kind == model.DetailItemPlan) && item.CommentaryIndex > 0 {
+		return fmt.Sprintf("%s:index:%d", item.Kind, item.CommentaryIndex)
 	}
 	return fmt.Sprintf("%s:%d:%d", item.Kind, item.CommentaryIndex, index)
 }
@@ -2098,7 +2129,11 @@ func renderSyncStatusBlocks(snapshot appserver.ThreadReadSnapshot, blocks []mode
 		if endedAt.Before(starts[index]) {
 			endedAt = starts[index]
 		}
-		blockHeader := fmt.Sprintf("Блок %d · %s", index+1, formatToolDuration(endedAt.Sub(starts[index])))
+		blockNumber := block.CommentaryIndex
+		if blockNumber <= 0 {
+			blockNumber = index + 1
+		}
+		blockHeader := fmt.Sprintf("Блок %d · %s", blockNumber, formatToolDuration(endedAt.Sub(starts[index])))
 		if toolCount := syncStatusBlockToolCount(snapshot, block, index); toolCount > 0 {
 			blockHeader += fmt.Sprintf(" · tools %d", toolCount)
 		}

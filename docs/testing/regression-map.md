@@ -79,6 +79,13 @@ Required scenarios:
   Status or Final, while Telegram-origin input uses its already-visible original;
 - commentary blocks retain their duration and show the complete monotonic count
   of associated tool calls without labels or output;
+- tool-heavy turns retain every commentary/plan block independently of the
+  64-detail non-status tail; repeated full reads preserve source order, global
+  block numbers, and timing, while incomplete reads retain missing items near
+  shared identities without locally renumbering their commentary indices;
+- legacy scrambled projections recover their order and inferred timing once
+  on the next full read, while healthy retained timing anchors survive prefix
+  restoration; regression fixtures live in `sync_status_stability_test.go`;
 - active Status shows latest successful snapshot-read and valid App Server-event
   times, while streaming events update only ephemeral activity and stay read-free;
 - restart/reconnect does not duplicate user receipts or finals;

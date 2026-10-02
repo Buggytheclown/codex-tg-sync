@@ -327,6 +327,10 @@ func DiffSnapshot(previous *model.ThreadSnapshotState, current ThreadReadSnapsho
 }
 
 func CompactSnapshot(previous *model.ThreadSnapshotState, current ThreadReadSnapshot, polledAt time.Time) model.ThreadSnapshotState {
+	// Timing and field bounds must not change the caller's authoritative read.
+	current.DetailItems = append([]model.DetailItem(nil), current.DetailItems...)
+	current.LatestAgentMessages = append([]string(nil), current.LatestAgentMessages...)
+	current.LatestAgentMessageEntries = append([]AgentMessageEntry(nil), current.LatestAgentMessageEntries...)
 	applyLatestTurnTiming(previous, &current, polledAt)
 	applyStatusBlockTiming(previous, &current, polledAt)
 	applyLatestToolTiming(previous, &current, polledAt)
@@ -376,9 +380,21 @@ func boundCompactSnapshot(snapshot *ThreadReadSnapshot) {
 	// outputs here rewrites large blobs on every event-triggered refresh without
 	// improving the projection, so discard them before persistence.
 	snapshot.LatestToolOutput = ""
+	otherCount := 0
+	for _, item := range snapshot.DetailItems {
+		if item.Kind != model.DetailItemOutput && item.Kind != model.DetailItemCommentary && item.Kind != model.DetailItemPlan {
+			otherCount++
+		}
+	}
+	skipOther := max(0, otherCount-compactSnapshotDetailLimit)
 	details := snapshot.DetailItems[:0]
 	for _, item := range snapshot.DetailItems {
 		if item.Kind == model.DetailItemOutput {
+			continue
+		}
+		// Tool churn cannot evict the identity or timing of a Status block.
+		if item.Kind != model.DetailItemCommentary && item.Kind != model.DetailItemPlan && skipOther > 0 {
+			skipOther--
 			continue
 		}
 		item.Text = truncateSnapshotText(item.Text, compactSnapshotFieldLimit)
@@ -386,9 +402,6 @@ func boundCompactSnapshot(snapshot *ThreadReadSnapshot) {
 		details = append(details, item)
 	}
 	snapshot.DetailItems = details
-	if len(snapshot.DetailItems) > compactSnapshotDetailLimit {
-		snapshot.DetailItems = snapshot.DetailItems[len(snapshot.DetailItems)-compactSnapshotDetailLimit:]
-	}
 	for index := range snapshot.LatestAgentMessages {
 		snapshot.LatestAgentMessages[index] = truncateSnapshotText(snapshot.LatestAgentMessages[index], compactSnapshotFieldLimit)
 	}
@@ -441,7 +454,20 @@ func applyStatusBlockTiming(previous *model.ThreadSnapshotState, current *Thread
 		sameTurn = strings.TrimSpace(previousSnapshot.LatestTurnID) == strings.TrimSpace(current.LatestTurnID)
 	}
 	previousStarts := map[string]time.Time{}
-	if sameTurn {
+	// An incomplete read may leave legacy order unresolved. Re-estimating it
+	// on every poll would move the starts again; wait for canonical block order.
+	repairTiming := sameTurn && !statusBlockIndicesDecrease(current.DetailItems) &&
+		(statusBlockIndicesDecrease(previousSnapshot.DetailItems) ||
+			statusBlockStartsCorrupt(previousSnapshot.DetailItems, turnStart, renderEnd) ||
+			statusBlockStartsCorrupt(current.DetailItems, turnStart, renderEnd))
+	if repairTiming {
+		// Ordered merge may already have copied legacy starts into current.
+		// Recover this inferred timeline once, then persist the repaired starts.
+		for _, index := range blockIndexes {
+			current.DetailItems[index].StartedAt = ""
+		}
+	}
+	if sameTurn && !repairTiming {
 		for _, item := range previousSnapshot.DetailItems {
 			key := statusBlockTimingKey(item)
 			if key == "" {
@@ -527,6 +553,36 @@ func applyStatusBlockTiming(previous *model.ThreadSnapshotState, current *Thread
 	for blockIndex, itemIndex := range blockIndexes {
 		current.DetailItems[itemIndex].StartedAt = model.TimeString(starts[blockIndex].UTC().Format(time.RFC3339Nano))
 	}
+}
+
+func statusBlockIndicesDecrease(items []model.DetailItem) bool {
+	lastIndex := 0
+	for _, item := range items {
+		if statusBlockTimingKey(item) == "" || item.CommentaryIndex <= 0 {
+			continue
+		}
+		if item.CommentaryIndex < lastIndex {
+			return true
+		}
+		lastIndex = item.CommentaryIndex
+	}
+	return false
+}
+
+func statusBlockStartsCorrupt(items []model.DetailItem, turnStart, turnEnd time.Time) bool {
+	var lastStart time.Time
+	for _, item := range items {
+		if statusBlockTimingKey(item) == "" {
+			continue
+		}
+		if start, ok := parseOptionalSnapshotTime(string(item.StartedAt)); ok {
+			if start.Before(turnStart) || start.After(turnEnd) || (!lastStart.IsZero() && start.Before(lastStart)) {
+				return true
+			}
+			lastStart = start
+		}
+	}
+	return false
 }
 
 func statusBlockTimingKey(item model.DetailItem) string {
