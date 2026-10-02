@@ -26,7 +26,12 @@ Sync creates topics only for Codex chats created or updated in the last 24 hours
 It periodically marks topics whose Codex chats have been inactive for 24 hours,
 and ready empty drafts of that age, as cleanup-only. Sync stays active when the
 initial fresh-chat snapshot is empty, so later chats can be discovered.
-Starting, active, and unknown work is never selected. Telegram deletion remains
+Local Telegram starting, active, and unknown ownership is never selected. Passive
+Desktop work may lose its expired topic even while nonterminal; new source activity
+recreates its presentation without replaying commands or touching Codex work.
+There is no overall count cap. Activation and discovery paginate, with the
+configured initial limit also bounding creation attempts per reconciliation.
+Telegram deletion remains
 two-phase, and startup retries cleanup rows from every historical Sync session
 for the configured group.
 

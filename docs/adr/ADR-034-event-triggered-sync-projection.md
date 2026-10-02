@@ -33,13 +33,23 @@ gaps, and missed subscriptions. It probes tracked topics with the summary view,
 skips fully delivered stable terminal turns, and loads a full latest turn for
 every other topic. Discovery remains part of this infrequent pass.
 
+First catch-up shows the current User and Status but does not notify a completed
+Final whose authoritative thread update predates activation. Its fingerprint is
+absorbed and its Status turn reserved so the compact terminal card can still be
+created and retried if its send fails. Missing timestamps and same-second
+boundaries use normal delivery.
+A previously observed active turn and later results still deliver Final normally.
+This initial catch-up policy does not change source replies or Codex history.
+
 The persisted per-thread projection is monotonic within a turn. Terminal state
 cannot return to active, Final and User content is sticky, and already observed
 detail items are upserted rather than erased by an incomplete read.
 
 The in-memory Telegram delivery queue contains only a coalesced thread key.
 Workers load the latest persisted projection immediately before rendering, so a
-queued active snapshot cannot overtake terminal state. User, Status, and Final
+queued active snapshot cannot overtake terminal state. A projection observed
+before the current Sync activation cannot populate its topics; reconciliation
+must first persist a current-session observation. User, Status, and Final
 attempts keep independent fingerprints. A new Codex-origin turn is not presented
 until its authoritative User item is available and successfully delivered;
 Telegram-origin turns may proceed immediately because their original Telegram

@@ -513,7 +513,7 @@ func (s *Service) activateSync(ctx context.Context, userID int64) (*DirectRespon
 	if err != nil {
 		return nil, err
 	}
-	threads, err := listSyncActivationThreads(ctx, poll)
+	threads, err := listSyncThreads(ctx, poll)
 	if err != nil {
 		return nil, fmt.Errorf("Sync activation thread/list: %w", err)
 	}
@@ -539,8 +539,7 @@ func (s *Service) activateSync(ctx context.Context, userID int64) (*DirectRespon
 		summary.Items = append(summary.Items, syncActivationItem{Rank: rank + 1, ThreadID: thread.ID, Title: syncTopicTitle(thread), Telegram: "pending", Codex: syncCodexStatus(thread)})
 	}
 	for rank, thread := range filtered {
-		title := syncTopicTitle(thread)
-		topicID, createErr := forum.CreateSyncTopic(ctx, title)
+		_, createErr := s.createSyncThreadTopic(ctx, forum, sessionID, s.cfg.SyncGroupID, rank+1, thread)
 		if createErr != nil {
 			var failure *SyncForumFailure
 			entry := fmt.Sprintf("%s: %s", thread.ID, createErr)
@@ -559,13 +558,6 @@ func (s *Service) activateSync(ctx context.Context, userID int64) (*DirectRespon
 			}
 			break
 		}
-		if err := s.store.UpsertSyncTopic(ctx, model.SyncTopic{SessionID: sessionID, ChatID: s.cfg.SyncGroupID,
-			TopicID: topicID, ThreadID: thread.ID, Rank: rank + 1, Title: title, TelegramState: model.SyncTopicConnected}); err != nil {
-			_ = forum.DeleteSyncTopic(ctx, topicID)
-			summary.Failed = append(summary.Failed, fmt.Sprintf("%s: persist: %s", thread.ID, err))
-			summary.Items[rank].Telegram, summary.Items[rank].Error = "binding failed", sanitizeDiagnosticString(err.Error())
-			continue
-		}
 		summary.Created++
 		summary.Items[rank].Telegram = "connected"
 		_ = s.store.UpsertThread(ctx, thread)
@@ -583,6 +575,9 @@ func (s *Service) activateSync(ctx context.Context, userID int64) (*DirectRespon
 		return nil, err
 	}
 	_ = s.syncWriter.AcceptNewWork()
+	if pending, _ := s.store.GetState(ctx, syncTopicCreationKey(sessionID)); pending == "" {
+		s.reportHealthRecovered(ctx, "sync.topic_create", "Sync topic creation recovered")
+	}
 	s.pruneSyncTopics(ctx, sessionID)
 	return nil, nil
 }
@@ -647,6 +642,11 @@ func (s *Service) syncStatus(ctx context.Context) (*DirectResponse, error) {
 		return nil, err
 	}
 	health := strings.Join(s.healthStatusLines(ctx, time.Now().UTC()), "\n")
+	if pending, err := s.store.GetState(ctx, syncTopicCreationKey(state.SessionID)); err != nil {
+		return nil, err
+	} else if pending != "" {
+		health += "\n" + syncTopicCreationPaused
+	}
 	return &DirectResponse{Text: fmt.Sprintf("Sync state: %s\nSession: %s\nInitial topic limit: %d\nConnected topics: %d\nReady drafts: %d\n%s\nPoller status: /pollers\nExternal requests: /requests\nRefresh command: /refresh\nRepair command: /repair\nNew task commands: /projects, /newchat\nActivation summary: %s",
 		state.State, state.SessionID, syncInitialTopicLimit(s.cfg.SyncInitialTopicLimit), countConnectedSyncTopics(topics), countReadySyncDrafts(drafts), health, strings.TrimSpace(state.ActivationSummaryJSON))}, nil
 }
@@ -705,7 +705,7 @@ func (s *Service) reconcileSyncLocked(ctx context.Context) (reconcileSyncResult,
 		result.Discovered = discovered
 		result.DiscoveryFailures = failures
 		discoveryErr = discoverErr
-		if discoverErr == nil {
+		if discoverErr == nil || discovered > 0 {
 			topics, err = s.store.ListSyncTopics(ctx, state.SessionID)
 			if err != nil {
 				return result, err
@@ -758,6 +758,9 @@ func syncStoredTerminalPresentationDelivered(previous *model.ThreadSnapshotState
 		return false
 	}
 	turnID := strings.TrimSpace(snapshot.LatestTurnID)
+	if topic.StatusMessageID == 0 && turnID != "" && strings.TrimSpace(topic.StatusTurnID) == turnID {
+		return false // Initial catch-up reserved this Status; its send still needs a retry.
+	}
 	if topic.StatusMessageID == 0 || strings.TrimSpace(topic.StatusTurnID) != turnID {
 		return strings.TrimSpace(snapshot.LatestFinalFP) != "" && snapshot.LatestFinalFP == topic.LastFinalFP
 	}
@@ -766,8 +769,13 @@ func syncStoredTerminalPresentationDelivered(previous *model.ThreadSnapshotState
 }
 
 func (s *Service) discoverSyncThreadsLocked(ctx context.Context, state model.SyncState, forum SyncForum, poll Session, topics []model.SyncTopic) (int, int, error) {
+	if err := s.syncTopicCreationReady(ctx, state.SessionID); err != nil {
+		s.reportSyncTopicCreationPaused(ctx, err)
+		return 0, 0, err
+	}
+	s.reportHealthRecovered(ctx, "sync.topic_create", "Sync topic creation recovered")
 	cutoff := s.now().UTC().Add(-syncTopicInactiveAge).Unix()
-	result, err := poll.ThreadList(ctx, syncRecentThreadLimit, "")
+	threads, err := listSyncThreads(ctx, poll)
 	if err != nil {
 		return 0, 0, fmt.Errorf("Sync discovery thread/list: %w", err)
 	}
@@ -788,15 +796,23 @@ func (s *Service) discoverSyncThreadsLocked(ctx context.Context, state model.Syn
 			nextRank = draft.Rank
 		}
 	}
-	threads := appserver.ThreadsFromList(result)
-	sort.Slice(threads, func(i, j int) bool {
-		if threads[i].UpdatedAt == threads[j].UpdatedAt {
-			return threads[i].ID < threads[j].ID
+	sortSyncActivationThreads(threads)
+	cursorKey := "sync.discovery_after." + state.SessionID
+	after, err := s.store.GetState(ctx, cursorKey)
+	if err != nil {
+		return 0, 0, err
+	}
+	start := 0
+	for index, thread := range threads {
+		if thread.ID == after {
+			start = (index + 1) % len(threads)
+			break
 		}
-		return threads[i].UpdatedAt < threads[j].UpdatedAt
-	})
+	}
+	attempts, limit := 0, syncInitialTopicLimit(s.cfg.SyncInitialTopicLimit)
 	discovered, failures := 0, 0
-	for _, thread := range threads {
+	for offset := 0; offset < len(threads); offset++ {
+		thread := threads[(start+offset)%len(threads)]
 		if thread.ID == "" || thread.Archived || thread.IsInternal() || !syncThreadActiveSince(thread, cutoff) {
 			continue
 		}
@@ -804,25 +820,82 @@ func (s *Service) discoverSyncThreadsLocked(ctx context.Context, state model.Syn
 		if _, ok := bound[thread.ID]; ok {
 			continue
 		}
-		title := syncTopicTitle(thread)
-		topicID, createErr := forum.CreateSyncTopic(ctx, title)
+		if attempts >= limit {
+			break
+		}
+		attempts++
+		// Advance across failed candidates too, so one rejected batch cannot starve the rest.
+		if err := s.store.SetState(ctx, cursorKey, thread.ID); err != nil {
+			return discovered, failures, err
+		}
+		_, createErr := s.createSyncThreadTopic(ctx, forum, state.SessionID, state.ChatID, nextRank+1, thread)
 		if createErr != nil {
 			failures++
-			continue
+			var failure *SyncForumFailure
+			if errors.As(createErr, &failure) && failure.Kind == SyncForumFailureDefinitive {
+				continue
+			}
+			s.reportSyncTopicCreationPaused(ctx, createErr)
+			return discovered, failures, createErr
 		}
 		nextRank++
-		topic := model.SyncTopic{SessionID: state.SessionID, ChatID: state.ChatID, TopicID: topicID,
-			ThreadID: thread.ID, Rank: nextRank, Title: title, TelegramState: model.SyncTopicConnected}
-		if err := s.store.UpsertSyncTopic(ctx, topic); err != nil {
-			_ = forum.DeleteSyncTopic(ctx, topicID)
-			nextRank--
-			failures++
-			continue
-		}
 		bound[thread.ID] = struct{}{}
 		discovered++
 	}
 	return discovered, failures, nil
+}
+
+const syncTopicCreationPaused = "Topic creation paused: Telegram outcome is unknown. Inspect/remove untracked topics, then use /sync off and /sync on."
+
+func syncTopicCreationKey(sessionID string) string { return "sync.topic_create." + sessionID }
+
+func (s *Service) syncTopicCreationReady(ctx context.Context, sessionID string) error {
+	pending, err := s.store.GetState(ctx, syncTopicCreationKey(sessionID))
+	if err != nil || pending == "" {
+		return err
+	}
+	// A crash after persisting the binding is safe to recover: its topic id is known.
+	topic, err := s.store.GetActiveSyncTopicByThread(ctx, sessionID, pending)
+	if err != nil {
+		return err
+	}
+	if topic == nil {
+		return NewSyncForumFailure(SyncForumFailureUnknown, errors.New(syncTopicCreationPaused))
+	}
+	return s.store.DeleteState(ctx, syncTopicCreationKey(sessionID))
+}
+
+func (s *Service) createSyncThreadTopic(ctx context.Context, forum SyncForum, sessionID string, chatID int64, rank int, thread model.Thread) (int64, error) {
+	if err := s.syncTopicCreationReady(ctx, sessionID); err != nil {
+		return 0, err
+	}
+	key := syncTopicCreationKey(sessionID)
+	// Record before remote I/O, including the crash-before-binding window.
+	if err := s.store.SetState(ctx, key, thread.ID); err != nil {
+		return 0, NewSyncForumFailure(SyncForumFailureDefinitive, err)
+	}
+	topicID, err := forum.CreateSyncTopic(ctx, syncTopicTitle(thread))
+	if err != nil {
+		var failure *SyncForumFailure
+		if errors.As(err, &failure) && failure.Kind == SyncForumFailureDefinitive {
+			_ = s.store.DeleteState(ctx, key)
+		}
+		return 0, err
+	}
+	if err := s.store.UpsertSyncTopic(ctx, model.SyncTopic{SessionID: sessionID, ChatID: chatID,
+		TopicID: topicID, ThreadID: thread.ID, Rank: rank, Title: syncTopicTitle(thread), TelegramState: model.SyncTopicConnected}); err != nil {
+		if deleteErr := forum.DeleteSyncTopic(ctx, topicID); deleteErr != nil {
+			return 0, NewSyncForumFailure(SyncForumFailureUnknown, errors.Join(err, deleteErr))
+		}
+		_ = s.store.DeleteState(ctx, key)
+		return 0, NewSyncForumFailure(SyncForumFailureDefinitive, err)
+	}
+	_ = s.store.DeleteState(ctx, key)
+	return topicID, nil
+}
+
+func (s *Service) reportSyncTopicCreationPaused(ctx context.Context, err error) {
+	s.reportHealthFailure(ctx, "sync.topic_create", "Sync topic creation paused", err.Error(), syncTopicCreationPaused)
 }
 
 func syncThreadActiveSince(thread model.Thread, cutoffUnix int64) bool {
@@ -1254,6 +1327,17 @@ func (s *Service) processSyncSnapshotLocked(ctx context.Context, state model.Syn
 		}
 	}
 	current = monotonicSyncSnapshot(previous, current)
+	// First catch-up shows current context, but absorbs a result from before activation.
+	// Reserving StatusTurnID lets delivery create its compact card without that old Final.
+	if topic.StatusMessageID == 0 && topic.LastUserFP == "" && topic.LastFinalFP == "" &&
+		topic.PendingTelegramUserFP == "" && isTerminalStatus(current.LatestTurnStatus) &&
+		current.LatestFinalFP != "" && current.Thread.UpdatedAt > 0 &&
+		current.Thread.UpdatedAt < parseTime(state.SnapshotAt).Unix() {
+		if err := s.store.UpdateSyncTopicDelivery(ctx, topic.SessionID, topic.TopicID, 0, current.LatestTurnID, "", current.LatestFinalFP); err != nil {
+			return
+		}
+		topic.StatusTurnID, topic.LastFinalFP = current.LatestTurnID, current.LatestFinalFP
+	}
 	s.queueExternalReplyFromSnapshot(ctx, current)
 	if forum != nil {
 		s.mu.RLock()
@@ -1492,7 +1576,7 @@ func (s *Service) deliverSyncStatus(ctx context.Context, forum SyncForum, topic 
 	statusID := topic.StatusMessageID
 	statusTurnID := strings.TrimSpace(topic.StatusTurnID)
 	newObservedTurn := statusTurnID != "" && currentTurnID != "" && statusTurnID != currentTurnID
-	if (statusID == 0 || newObservedTurn) && isTerminalStatus(current.LatestTurnStatus) &&
+	if (statusID == 0 || newObservedTurn) && statusTurnID != currentTurnID && isTerminalStatus(current.LatestTurnStatus) &&
 		strings.TrimSpace(current.LatestFinalFP) != "" && current.LatestFinalFP == topic.LastFinalFP {
 		return topic, true
 	}
@@ -1633,6 +1717,9 @@ func (s *Service) runSyncDelivery(ctx context.Context, threadID string) {
 	stored, err := s.store.GetSnapshot(ctx, threadID)
 	if err != nil || stored == nil || len(stored.CompactJSON) == 0 {
 		return
+	}
+	if snapshotAt, activationAt := parseTime(stored.LastPollAt), parseTime(state.SnapshotAt); !activationAt.IsZero() && snapshotAt.Before(activationAt) {
+		return // A late queue wake must not replay a previous Sync session's snapshot.
 	}
 	var current appserver.ThreadReadSnapshot
 	if json.Unmarshal(stored.CompactJSON, &current) != nil {
@@ -1938,7 +2025,7 @@ func syncCodexStatus(thread model.Thread) string {
 	}
 }
 
-func listSyncActivationThreads(ctx context.Context, poll Session) ([]model.Thread, error) {
+func listSyncThreads(ctx context.Context, poll Session) ([]model.Thread, error) {
 	const pageSize = 100
 	threads := make([]model.Thread, 0, pageSize)
 	cursor := ""

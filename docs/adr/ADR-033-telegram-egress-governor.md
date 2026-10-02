@@ -23,7 +23,13 @@ Launch-card rendering, external-source reply delivery, and Telegram delivery use
 
 During `/sync on`, all pages of candidate Codex threads are loaded and ordered by work importance before the configured topic limit is applied: waiting/running, unknown nonterminal, failed/interrupted, then completed. When the list reports a thread as `notLoaded`, its last turn supplies the effective running or terminal status. Each class is ordered by most recent update and then thread id.
 
-Topic creation stops after the first ambiguous outcome, such as a timeout or transport EOF. Telegram may have created that topic without returning its id, so automatically continuing or retrying could multiply empty orphan topics. The remaining candidates are recorded as skipped. The activation state and a `sync_activation` Control delivery are committed in one SQLite transaction; the shared delivery queue retries the summary independently of the command request.
+Topic creation stops after the first ambiguous outcome, such as a timeout or transport EOF. Telegram may have created that topic without returning its id, so automatically continuing or retrying could multiply empty orphan topics. The remaining activation candidates are recorded as skipped. A session-local
+`daemon_state` marker is persisted before remote creation and remains until the
+binding is durable or failure is definitive. Discovery also stops while that
+marker has no known binding; subsequent polls never retry the unknown creation.
+Control/status explain the pause and instruct the operator to inspect untracked
+topics before explicitly cycling Sync. A marker with an already persisted binding
+is safely cleared after an interrupted local completion. The activation state and a `sync_activation` Control delivery are committed in one SQLite transaction; the shared delivery queue retries the summary independently of the command request.
 
 ## Consequences
 
@@ -32,7 +38,9 @@ Topic creation stops after the first ambiguous outcome, such as a timeout or tra
 - Important launches and user-visible results can pass background status/health maintenance, while background work still progresses.
 - A process restart forgets both the local rolling-window history and Telegram's previous `retry_after`; a subsequent `429` immediately rebuilds the cooldown.
 - A launch topic `429` becomes a durable failed request with Retry/Close controls rather than an invisible in-memory wait.
-- An ambiguous Sync topic creation can leave at most one new untracked topic per activation; later candidates are not attempted.
+- An ambiguous Sync topic creation can leave at most one new untracked topic per
+  Sync session; activation and discovery pause further automatic topic creation.
+  A new session is an explicit operator recovery boundary after topic inspection.
 - The operator receives the activation result through durable Control delivery even if the original Telegram update can no longer send a direct response.
 - Precise callback-result toasts are replaced by an early neutral acknowledgement; the durable card edit or scoped failure message carries the result.
 - Sync reconciliation still serializes some Telegram work under `syncMu`; removing that lock from I/O would require a separate generation/commit protocol and is not part of this change.

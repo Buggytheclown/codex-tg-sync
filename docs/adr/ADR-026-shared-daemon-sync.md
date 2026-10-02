@@ -42,13 +42,15 @@ Desktop sees without maintaining a second App Server runtime.
   Final delivery fingerprint advances only after every chunk is accepted;
   reconciliation retries an incomplete delivery.
 - Sync reconciliation continuously materializes eligible top-level Desktop
-  threads whose `createdAt` or `updatedAt` is at or after the activation
-  snapshot. This includes pre-existing chats used after `/sync on`, even when a
-  short turn finishes before the next list poll, while leaving untouched older
-  chats out of scope. A start/status event for an unbound thread wakes the same
-  authoritative list reconciliation; periodic reconciliation remains the
-  missed-event fallback. Activation creates only a bounded recent snapshot;
-  `CTR_GO_SYNC_INITIAL_TOPIC_LIMIT` defaults to five.
+  threads created or updated in the last 24 hours (ADR-032). It paginates all
+  candidates, connecting bounded batches without an overall topic-count cap.
+  A start/status event wakes the same authoritative list reconciliation;
+  periodic reconciliation covers missed events. The configured initial limit
+  also bounds attempts per discovery pass and defaults to five.
+  Expired passive topics can be deleted and materialized again on fresh
+  activity; Codex history is retained. Pending old Finals do not extend topic
+  retention. First catch-up absorbs a completed pre-activation Final and shows
+  User/current Status, while subsequent results deliver normally.
 - Durable `threadId` mapping makes topic creation idempotent. New Telegram chats
   retain the draft-first `thread/start + turn/start` contract from ADR-025.
 - Local writer leases continue to guard Telegram dispatch, receipts, callbacks,

@@ -36,11 +36,16 @@ Coverage includes:
 
 - forum validation and Control preparation;
 - paginated, importance-first `/sync on` topic selection (including `notLoaded` threads with running or terminal last turns), initial topic limit, empty active Sync, and continuous discovery of chats created or updated in the last 24 hours;
+- bounded discovery batches over every page, with failed-candidate progress;
+- `sync_fresh_window_test.go`: 100 chats, expiration/recreation, durable unknown
+  create pause, omission of pre-activation Finals with normal later delivery,
+  catch-up Status retry, and rejection of queued previous-session snapshots;
 - one topic per thread and receipt idempotency;
 - shared daemon/WebSocket reconnection without prompt replay;
 - startup reset to off and cleanup-only old topics/drafts;
 - periodic 24-hour inactivity cleanup by Codex thread activity, including ready drafts,
-  unfinished-work protection, asynchronous deletion outside `/newchat`, and
+  existing local writer-state protection, passive-topic expiration and recreation
+  on new activity, asynchronous deletion outside `/newchat`, and
   cleanup retry across historical sessions;
 - generation-aware writer claims and fail-closed unknown dispatch;
 - poll/list/read behavior and non-blocking startup;

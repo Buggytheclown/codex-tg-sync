@@ -118,7 +118,6 @@ type Service struct {
 }
 
 const (
-	syncRecentThreadLimit     = 50
 	collaborationModeDefault  = "default"
 	telegramOriginHotPollMax  = 75 * time.Second
 	telegramOriginHotPollTick = 3 * time.Second

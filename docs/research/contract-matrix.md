@@ -35,14 +35,22 @@ The Bot API chat-scoped menu contains exactly:
 - Control is the General topic and is never deleted.
 - `/sync on` creates topics for the configured number of recent eligible Codex chats.
 - `/sync on` paginates the candidate list and selects waiting/running chats first, then unknown nonterminal, failed/interrupted, and completed chats; recency orders each class.
-- Active synchronization discovers chats created or updated after activation
-  without replaying earlier prompts; start/status events reduce discovery
-  latency and periodic reconciliation covers missed events.
+- Active synchronization paginates all eligible chats created or updated in the
+  last 24 hours. The configured initial limit also bounds creation attempts per
+  pass; later passes connect the rest without an overall topic-count cap. Failed
+  candidates do not starve later candidates. Start/status events reduce latency.
+- First catch-up shows User/current Status and absorbs a completed Final whose
+  source update predates activation. Later results deliver normally.
+- A durable marker written before remote creation prevents automatic retries
+  after an ambiguous outcome, including continuation after partial activation.
+  Control/status report the pause; inspect untracked topics before cycling Sync.
 - One durable Codex `threadId` maps to one managed topic per Sync session.
 - A restart resets Sync to off, cleans old managed topics, and preserves Codex work.
-- New topic creation prunes the oldest managed topics inactive for more than 24
-  hours until ten remain, when enough safe terminal topics or ready drafts
-  exist. Active, starting, and unknown work is preserved even above the limit.
+- Periodic reconciliation and new-topic creation prune passive topics inactive
+  for more than 24 hours and old ready drafts, independent of topic count.
+  Passive Desktop-running/unknown work may lose its topic and regain it on fresh
+  activity; local Telegram starting/active/unknown ownership stays protected.
+  Pending old Finals do not extend retention; their history remains in Codex.
 - Cleanup is durable across failures and retried for historical Sync sessions
   in the configured group.
 - Project/Chat creation first creates a durable topic draft. The first text message claims the draft, creates the thread, and starts one turn.
