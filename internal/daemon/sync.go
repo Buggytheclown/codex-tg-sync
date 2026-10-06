@@ -101,6 +101,21 @@ func isSyncControlTopic(topicID int64) bool { return topicID == 0 || topicID == 
 
 func (s *Service) handleSyncMessage(ctx context.Context, topicID, messageID, userID int64, text string) (*DirectResponse, error) {
 	text = strings.TrimSpace(text)
+	if !isSyncControlTopic(topicID) || !syncLegacyReadOnlyCommand(text) {
+		s.syncMu.Lock()
+		err := s.syncMutationErrorLocked(ctx)
+		fields := strings.Fields(strings.ToLower(text))
+		if isSyncControlTopic(topicID) && len(fields) == 1 {
+			command, _, _ := strings.Cut(fields[0], "@")
+			if command == "/repair" {
+				err = s.syncAccessErrorLocked(ctx)
+			}
+		}
+		s.syncMu.Unlock()
+		if err != nil {
+			return &DirectResponse{Text: err.Error()}, nil
+		}
+	}
 	if isSyncControlTopic(topicID) {
 		fields := strings.Fields(strings.ToLower(text))
 		if len(fields) > 0 {
@@ -178,6 +193,9 @@ func (s *Service) handleSyncMessage(ctx context.Context, topicID, messageID, use
 func (s *Service) dispatchSyncMessage(ctx context.Context, topic model.SyncTopic, messageID int64, text string) (*DirectResponse, error) {
 	s.syncMu.Lock()
 	defer s.syncMu.Unlock()
+	if err := s.syncMutationErrorLocked(ctx); err != nil {
+		return &DirectResponse{Text: err.Error()}, nil
+	}
 	receipt, created, err := s.store.AcceptSyncMessage(ctx, topic.ChatID, topic.TopicID, messageID)
 	if err != nil {
 		return nil, err
@@ -483,6 +501,9 @@ func isSyncNoRolloutError(err error) bool {
 func (s *Service) activateSync(ctx context.Context, userID int64) (*DirectResponse, error) {
 	s.syncMu.Lock()
 	defer s.syncMu.Unlock()
+	if err := s.syncMutationErrorLocked(ctx); err != nil {
+		return &DirectResponse{Text: err.Error()}, nil
+	}
 	if s.cfg.SyncGroupID == 0 {
 		return nil, errors.New("CTR_GO_SYNC_GROUP_ID is not configured")
 	}
@@ -578,6 +599,7 @@ func (s *Service) activateSync(ctx context.Context, userID int64) (*DirectRespon
 	if pending, _ := s.store.GetState(ctx, syncTopicCreationKey(sessionID)); pending == "" {
 		s.reportHealthRecovered(ctx, "sync.topic_create", "Sync topic creation recovered")
 	}
+	s.syncValidatedSession = sessionID
 	s.pruneSyncTopics(ctx, sessionID)
 	return nil, nil
 }
@@ -585,6 +607,9 @@ func (s *Service) activateSync(ctx context.Context, userID int64) (*DirectRespon
 func (s *Service) deactivateSync(ctx context.Context) (*DirectResponse, error) {
 	s.syncMu.Lock()
 	defer s.syncMu.Unlock()
+	if err := s.syncMutationErrorLocked(ctx); err != nil {
+		return &DirectResponse{Text: err.Error()}, nil
+	}
 	state, err := s.store.GetSyncState(ctx)
 	if err != nil {
 		return nil, err
@@ -601,7 +626,7 @@ func (s *Service) deactivateSync(ctx context.Context) (*DirectResponse, error) {
 	if err != nil {
 		return nil, err
 	}
-	if writer.Starting+writer.Active+writer.Unknown > 0 || hasUnfinishedSyncTopics(topics) || hasUnfinishedSyncDrafts(drafts) {
+	if s.resumedSyncDrainPendingLocked() || writer.Starting+writer.Active+writer.Unknown > 0 || hasUnfinishedSyncTopics(topics) || hasUnfinishedSyncDrafts(drafts) {
 		titles := unfinishedSyncWorkTitles(topics, drafts)
 		return &DirectResponse{Text: "Sync off refused; unfinished topics: " + strings.Join(titles, ", ") + ". Use /sync off --force to drain."}, nil
 	}
@@ -642,6 +667,17 @@ func (s *Service) syncStatus(ctx context.Context) (*DirectResponse, error) {
 		return nil, err
 	}
 	health := strings.Join(s.healthStatusLines(ctx, time.Now().UTC()), "\n")
+	s.mu.RLock()
+	connected := s.pollConnected
+	s.mu.RUnlock()
+	s.syncMu.Lock()
+	pending := len(s.syncRecoveryPending)
+	accessErr := s.syncAccessErrorLocked(ctx)
+	s.syncMu.Unlock()
+	health += fmt.Sprintf("\nApp Server connected: %t\nCatch-up pending topics: %d", connected, pending)
+	if accessErr != nil {
+		health += "\n" + accessErr.Error()
+	}
 	if pending, err := s.store.GetState(ctx, syncTopicCreationKey(state.SessionID)); err != nil {
 		return nil, err
 	} else if pending != "" {
@@ -678,6 +714,25 @@ func (s *Service) reconcileSyncCommand(ctx context.Context) (*DirectResponse, er
 
 func (s *Service) reconcileSyncLocked(ctx context.Context) (reconcileSyncResult, error) {
 	var result reconcileSyncResult
+	if err := s.validateSavedSyncLocked(ctx); err != nil {
+		s.mu.RLock()
+		awaitingTelegram := s.started && !s.syncBotReady
+		s.mu.RUnlock()
+		if awaitingTelegram {
+			return result, err
+		}
+		s.reportHealthFailure(ctx, "sync.resume", "Sync catch-up unavailable", err.Error(), "Restore the configured Sync group and Control; saved state is preserved.")
+		return result, err
+	}
+	s.reportHealthRecovered(ctx, "sync.resume", "Sync group and Control verified")
+	if s.syncWriter.Snapshot().State == appserver.WriterClosing {
+		if err := s.syncWriter.ForceClose(); err == nil {
+			state, _ := s.store.GetSyncState(ctx)
+			if state.State == model.SyncStateActive {
+				_ = s.syncWriter.AcceptNewWork()
+			}
+		}
+	}
 	state, err := s.store.GetSyncState(ctx)
 	if err != nil {
 		return result, err
@@ -699,19 +754,6 @@ func (s *Service) reconcileSyncLocked(ctx context.Context) (reconcileSyncResult,
 	if err != nil {
 		return result, err
 	}
-	var discoveryErr error
-	if state.State == model.SyncStateActive {
-		discovered, failures, discoverErr := s.discoverSyncThreadsLocked(ctx, state, forum, poll, topics)
-		result.Discovered = discovered
-		result.DiscoveryFailures = failures
-		discoveryErr = discoverErr
-		if discoverErr == nil || discovered > 0 {
-			topics, err = s.store.ListSyncTopics(ctx, state.SessionID)
-			if err != nil {
-				return result, err
-			}
-		}
-	}
 	for _, topic := range topics {
 		if topic.TelegramState != model.SyncTopicConnected {
 			continue
@@ -726,9 +768,12 @@ func (s *Service) reconcileSyncLocked(ctx context.Context) (reconcileSyncResult,
 			continue
 		}
 		previous, _ := s.store.GetSnapshot(ctx, topic.ThreadID)
-		if isTerminalStatus(current.LatestTurnStatus) {
+		if isTerminalStatus(current.LatestTurnStatus) && topic.ActiveTurnState != model.SyncTurnUnknown {
 			if previous != nil && previous.LastSeenTurnID == current.LatestTurnID && isTerminalStatus(previous.LastSeenTurnStatus) &&
 				syncStoredTerminalPresentationDelivered(previous, topic) {
+				_ = s.store.UpsertThread(ctx, current.Thread)
+				delete(s.syncRecoveryPending, topic.ThreadID)
+				delete(s.syncDrainActive, topic.ThreadID)
 				continue
 			}
 		}
@@ -739,7 +784,21 @@ func (s *Service) reconcileSyncLocked(ctx context.Context) (reconcileSyncResult,
 		}
 		s.processSyncSnapshotLocked(ctx, state, forum, topic, current, "sync_poll")
 	}
+	var discoveryErr error
+	if state.State == model.SyncStateActive {
+		discovered, failures, discoverErr := s.discoverSyncThreadsLocked(ctx, state, forum, poll, topics)
+		result.Discovered = discovered
+		result.DiscoveryFailures = failures
+		discoveryErr = discoverErr
+		if discoverErr == nil || discovered > 0 {
+			topics, err = s.store.ListSyncTopics(ctx, state.SessionID)
+			if err != nil {
+				return result, err
+			}
+		}
+	}
 	s.pruneSyncTopics(ctx, state.SessionID)
+	s.finishResumedSyncDrainLocked(ctx, state)
 	return result, discoveryErr
 }
 
@@ -845,7 +904,7 @@ func (s *Service) discoverSyncThreadsLocked(ctx context.Context, state model.Syn
 	return discovered, failures, nil
 }
 
-const syncTopicCreationPaused = "Topic creation paused: Telegram outcome is unknown. Inspect/remove untracked topics, then use /sync off and /sync on."
+const syncTopicCreationPaused = "Topic creation paused: one Telegram create outcome is unknown. Existing topics continue syncing; inspect the ambiguous operation before clearing its marker."
 
 func syncTopicCreationKey(sessionID string) string { return "sync.topic_create." + sessionID }
 
@@ -954,6 +1013,9 @@ func (s *Service) syncTelegramOriginHotPollOnce(ctx context.Context, threadID, t
 	}
 	s.syncMu.Lock()
 	defer s.syncMu.Unlock()
+	if err := s.syncAccessErrorLocked(ctx); err != nil {
+		return false
+	}
 	state, err := s.store.GetSyncState(ctx)
 	if err != nil || (state.State != model.SyncStateActive && state.State != model.SyncStateDraining) {
 		return false
@@ -1277,6 +1339,9 @@ func (s *Service) reconcileDirtySyncThreads(ctx context.Context) {
 func (s *Service) reconcileSyncThread(ctx context.Context, threadID string) {
 	s.syncMu.Lock()
 	defer s.syncMu.Unlock()
+	if err := s.syncAccessErrorLocked(ctx); err != nil {
+		return
+	}
 	state, err := s.store.GetSyncState(ctx)
 	if err != nil || (state.State != model.SyncStateActive && state.State != model.SyncStateDraining) {
 		return
@@ -1309,6 +1374,25 @@ func (s *Service) reconcileSyncThread(ctx context.Context, threadID string) {
 }
 
 func (s *Service) processSyncSnapshotLocked(ctx context.Context, state model.SyncState, forum SyncForum, topic model.SyncTopic, current appserver.ThreadReadSnapshot, operation string) {
+	if err := s.syncAccessErrorLocked(ctx); err != nil {
+		return
+	}
+	if topic.ActiveTurnState == model.SyncTurnUnknown {
+		if _, live := s.syncLeases[topic.ThreadID]; !live {
+			if err := s.store.ResolveSyncSharedDaemonUnknown(ctx, state.SessionID, topic.TopicID, topic.ThreadID, topic.WriterGeneration); err != nil {
+				return
+			}
+			topic.ActiveTurnState, topic.ActiveTurnID, topic.WriterGeneration = model.SyncTurnTerminal, "", 0
+		}
+	}
+	delete(s.syncRecoveryPending, topic.ThreadID)
+	if s.syncResumeDraining && state.State == model.SyncStateDraining {
+		if activeTurnIDFromSyncSnapshot(current) != "" {
+			s.syncDrainActive[topic.ThreadID] = true
+		} else {
+			delete(s.syncDrainActive, topic.ThreadID)
+		}
+	}
 	previous, _ := s.store.GetSnapshot(ctx, topic.ThreadID)
 	activeTurnID := strings.TrimSpace(topic.ActiveTurnID)
 	currentTurnID := strings.TrimSpace(current.LatestTurnID)
@@ -1706,6 +1790,12 @@ func (s *Service) finishSyncDelivery(threadID string) {
 }
 
 func (s *Service) runSyncDelivery(ctx context.Context, threadID string) {
+	s.syncMu.Lock()
+	blocked := s.syncAccessErrorLocked(ctx) != nil || s.syncRecoveryPending[threadID]
+	s.syncMu.Unlock()
+	if blocked {
+		return
+	}
 	state, err := s.store.GetSyncState(ctx)
 	if err != nil || (state.State != model.SyncStateActive && state.State != model.SyncStateDraining) {
 		return
@@ -1884,7 +1974,11 @@ func (s *Service) markStaleSyncTopicsForCleanup(ctx context.Context, sessionID s
 		return false
 	}
 	cutoff := model.TimeString(s.now().UTC().Add(-syncTopicInactiveAge).Format(time.RFC3339Nano))
-	_, err := s.store.MarkStaleSyncTopicsForCleanup(ctx, sessionID, cutoff)
+	unread := make([]string, 0, len(s.syncRecoveryPending))
+	for threadID := range s.syncRecoveryPending {
+		unread = append(unread, threadID)
+	}
+	_, err := s.store.MarkStaleSyncTopicsForCleanup(ctx, sessionID, cutoff, unread...)
 	if err != nil {
 		s.logLifecycle("sync_topic_prune_failed", lifecycleFields{"session_id": sessionID, "error": err})
 		return false
@@ -1947,8 +2041,17 @@ func (s *Service) FinishStartup(ctx context.Context) {
 }
 
 func (s *Service) finishStartup(ctx context.Context) {
+	s.syncMu.Lock()
+	s.syncBotReady = true
+	err := s.validateSavedSyncLocked(ctx)
+	s.syncMu.Unlock()
+	if err != nil {
+		s.reportHealthFailure(ctx, "sync.resume", "Sync catch-up unavailable", err.Error(), "Restore the configured Sync group and Control; saved state is preserved.")
+		return
+	}
 	s.cleanupSyncTopics(ctx)
 	s.ensurePollSession(ctx)
+	s.wakeSyncReconcile()
 
 	s.mu.RLock()
 	connected := s.pollConnected
@@ -1969,15 +2072,15 @@ func (s *Service) finishStartup(ctx context.Context) {
 func (s *Service) sharedAppServerStartupWarning() string {
 	fix := "1. Start the managed daemon: codex app-server daemon start\n" +
 		"2. Restart Codex Desktop in local-daemon mode.\n" +
-		"3. Restart codex-tg, then run /sync on in Control."
+		"3. Wait for codex-tg to reconnect and catch up automatically."
 	if appserver.TransportMode(strings.ToLower(strings.TrimSpace(s.cfg.AppServerMode))) == appserver.TransportWebSocket {
 		endpoint := strings.TrimSpace(s.cfg.AppServerListen)
 		fix = "1. Restore the shared App Server at " + endpoint + ".\n" +
 			"2. Ensure Codex Desktop is connected to the same endpoint.\n" +
-			"3. Restart codex-tg, then run /sync on in Control."
+			"3. Wait for codex-tg to reconnect and catch up automatically."
 	}
 	return "⚠️ Shared Codex App Server is unavailable.\n\n" +
-		"Sync was reset to off.\n\n" +
+		"Sync state is preserved.\n\n" +
 		"Fix:\n" + fix
 }
 

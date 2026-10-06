@@ -2709,7 +2709,7 @@ func TestSyncRestartUnknownOwnershipBlocksSafeAndForceCleanup(t *testing.T) {
 	}
 }
 
-func TestSyncStartupResetsSessionCleansTopicsAndWarnsOnceWhenWebSocketUnavailable(t *testing.T) {
+func TestSyncStartupPreservesSessionAndWarnsOnceWhenWebSocketUnavailable(t *testing.T) {
 	service := activeSyncService(t)
 	service.cfg.AppServerMode = string(appserver.TransportWebSocket)
 	service.cfg.AppServerListen = "ws://127.0.0.1:4500"
@@ -2742,16 +2742,16 @@ func TestSyncStartupResetsSessionCleansTopicsAndWarnsOnceWhenWebSocketUnavailabl
 	}
 
 	state, err := service.store.GetSyncState(ctx)
-	if err != nil || state.State != model.SyncStateOff {
+	if err != nil || state.State != model.SyncStateActive {
 		t.Fatalf("state=%#v err=%v", state, err)
 	}
-	if len(forum.deletes) != 2 || forum.deletes[0] != 11 || forum.deletes[1] != 12 {
+	if len(forum.deletes) != 0 {
 		t.Fatalf("deletes=%v", forum.deletes)
 	}
 	if len(forum.sends) != 1 || forum.sends[0].topicID != syncGeneralSendTopicID ||
 		!strings.Contains(forum.sends[0].text, "Shared Codex App Server is unavailable") ||
 		!strings.Contains(forum.sends[0].text, "ws://127.0.0.1:4500") ||
-		!strings.Contains(forum.sends[0].text, "/sync on") {
+		!strings.Contains(forum.sends[0].text, "Sync state is preserved") {
 		t.Fatalf("startup warnings=%#v", forum.sends)
 	}
 	if value, _ := service.store.GetState(ctx, "appserver.poll_connected"); value != "false" {

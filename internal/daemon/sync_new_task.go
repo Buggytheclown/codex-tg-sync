@@ -12,6 +12,11 @@ import (
 const syncProjectMenuLimit = 8
 
 func (s *Service) syncProjectsMenu(ctx context.Context, controlTopicID int64) (*DirectResponse, error) {
+	s.syncMu.Lock()
+	defer s.syncMu.Unlock()
+	if err := s.syncMutationErrorLocked(ctx); err != nil {
+		return &DirectResponse{Text: err.Error()}, nil
+	}
 	state, err := s.store.GetSyncState(ctx)
 	if err != nil {
 		return nil, err

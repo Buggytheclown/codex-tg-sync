@@ -67,7 +67,13 @@ The LaunchAgent receives `CTR_GO_CONFIG`; secrets and required proxy values rema
 
 ## Restart behavior
 
-In shared App Server modes, restarting `codex-tg` does not interrupt the authoritative Codex turn. It resets Sync to off and cleans the previous Telegram session. Run `/sync on` after reconnect.
+Restart preserves the saved active/off/draining state and resumes the same Sync session after validating the configured group and Control. Saved topic and Status IDs, activation timestamp, pending User correlation, and delivery fingerprints remain intact. `/status` reports enabled state separately from App Server availability and catch-up pending topics. No `/sync on` is needed for a saved active session.
+
+In shared App Server modes, restarting `codex-tg` does not send an interrupt to the authoritative Codex turn. The old writer connection is closed; previous approval/input buttons expire and cannot be restored just by matching a writer generation. Handle any remaining server request in Codex. A fresh authoritative read clears detached local ownership without replaying its prompt. Failed reads keep that topic protected from retention until catch-up succeeds.
+
+Off remains off. Draining never starts new work or repeats its interrupt after restart; authoritative completion permits the already-requested cleanup. Unknown thread creation or starting drafts remain blocked for manual inspection. An ambiguous topic-create marker pauses discovery while bound topics keep updating; do not cycle the entire Sync session to repair it.
+
+Use the same SQLite database and configured group. Group/endpoint changes are separate migrations; already deleted topics are not restored. Latest-turn catch-up delivers the current undelivered Final, not every turn that may have completed during downtime. Telegram governor delays still apply.
 
 In spawned mode, the bridge owns the App Server process. Avoid restarting while a bridge-owned turn is active.
 

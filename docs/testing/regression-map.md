@@ -42,7 +42,7 @@ Coverage includes:
   catch-up Status retry, and rejection of queued previous-session snapshots;
 - one topic per thread and receipt idempotency;
 - shared daemon/WebSocket reconnection without prompt replay;
-- startup reset to off and cleanup-only old topics/drafts;
+- startup/reconnect preserve session, topics, ready drafts, anchors, activation boundary, and delivery fingerprints; unknown operations are never replayed;
 - periodic 24-hour inactivity cleanup by Codex thread activity, including ready drafts,
   existing local writer-state protection, passive-topic expiration and recreation
   on new activity, asynchronous deletion outside `/newchat`, and
@@ -213,5 +213,12 @@ For live Telegram QA, verify:
    running/waiting chats are created before unknown, failed/interrupted, and completed chats;
 5. a topic prompt starts with explicit writable/on-request permissions;
 6. an available approval edits the same card and removes buttons;
-7. restart resets Sync off without interrupting the authoritative Codex turn.
+7. restart preserves Sync and the same topics/Status IDs, catches up a downtime Final once, and never interrupts/replays the authoritative Codex turn.
 8. during a Telegram `429`, callbacks are acknowledged while noncritical group writes wait for `retry_after`.
+
+## Restart recovery
+
+- `internal/storage/store_sync_recovery_test.go`: active/off/draining and interrupted activation, receipt/draft uncertainty, preserved delivery/correlation, exact Sync callback expiry, missing database, repeated recovery.
+- `internal/daemon/sync_recovery_test.go`: detached terminal/active/superseding turns, downtime Final fingerprint and Status anchor, failed read retention protection, Telegram/Control/group gate, resumed draining without repeated interrupt, old callback with repeated generation.
+- `internal/daemon/health_test.go`: transport loss preserves enabled state and reports disconnection without topic cleanup.
+- Startup and reconnect never call activation, replay prompts, or create/delete previously bound topics. Unknown creation pauses discovery only. A failed read is isolated to its topic.

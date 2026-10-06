@@ -43,9 +43,9 @@ The Bot API chat-scoped menu contains exactly:
   source update predates activation. Later results deliver normally.
 - A durable marker written before remote creation prevents automatic retries
   after an ambiguous outcome, including continuation after partial activation.
-  Control/status report the pause; inspect untracked topics before cycling Sync.
+  Control/status report the ambiguous operation; existing bound topics keep updating. Resolve its marker manually after inspection.
 - One durable Codex `threadId` maps to one managed topic per Sync session.
-- A restart resets Sync to off, cleans old managed topics, and preserves Codex work.
+- Restart and transport repair preserve active/off/draining state, session ID, activation boundary, topic bindings, message anchors, and fingerprints. Interrupted activation continues in the same session. Catch-up reads saved topics before discovery; only freshly read topics can be retention-pruned.
 - Periodic reconciliation and new-topic creation prune passive topics inactive
   for more than 24 hours and old ready drafts, independent of topic count.
   Passive Desktop-running/unknown work may lose its topic and regain it on fresh
@@ -103,7 +103,7 @@ All raw Sync-group Bot API writes share one in-memory egress governor. It permit
 | Deny | `decline` | reject the request |
 | Cancel | `cancel` | cancel the request |
 
-Callbacks are valid only for the stored chat/topic/message, thread, turn, request id, and writer generation. Duplicate or stale callbacks fail closed.
+Callbacks are valid only for the stored chat/topic/message, thread, turn, request id, and writer generation. Restart/transport recovery expires all previous Sync routes even when generation repeats; old approval/input requests are not automatically answered or rebound. External launch routes keep their separate recovery. Duplicate or stale callbacks fail closed.
 
 ## Launch requests
 

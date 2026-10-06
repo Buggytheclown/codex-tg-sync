@@ -36,33 +36,8 @@ func (s *Store) BeginSyncActivation(ctx context.Context, sessionID string, chatI
 	return err
 }
 
-// RecoverSyncState converts an interrupted activation into a logically-off
-// session whose already-created topics are cleanup-only. Active sessions stay
-// active and are resumed by passive polling; no writer is started here.
-func (s *Store) RecoverSyncState(ctx context.Context) error {
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
-	defer rollback(tx)
-	var sessionID, state string
-	err = tx.QueryRowContext(ctx, `SELECT session_id, state FROM sync_state WHERE id=1`).Scan(&sessionID, &state)
-	if errors.Is(err, sql.ErrNoRows) || state != model.SyncStateActivating {
-		return tx.Commit()
-	}
-	if err != nil {
-		return err
-	}
-	now := string(model.NowString())
-	if _, err := tx.ExecContext(ctx, `UPDATE sync_state SET state=?, ended_at=? WHERE id=1`, model.SyncStateOff, now); err != nil {
-		return err
-	}
-	if _, err := tx.ExecContext(ctx, `UPDATE sync_topics SET telegram_state=?, updated_at=? WHERE session_id=?`, model.SyncTopicCleanup, now, sessionID); err != nil {
-		return err
-	}
-	return tx.Commit()
-}
-
+// RecoverSyncWriterState preserves the durable presentation, but never restores
+// process authority or replays an operation with an uncertain outcome.
 func (s *Store) RecoverSyncWriterState(ctx context.Context) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -70,77 +45,26 @@ func (s *Store) RecoverSyncWriterState(ctx context.Context) error {
 	}
 	defer rollback(tx)
 	now := model.NowString()
-	if _, err := tx.ExecContext(ctx, `UPDATE sync_message_receipts SET state=?, updated_at=?
-		WHERE state=? AND session_id=(SELECT session_id FROM sync_state WHERE id=1 AND state=?)`,
-		model.SyncReceiptUnknown, now, model.SyncReceiptAccepted, model.SyncStateActive); err != nil {
-		return err
+	statements := []struct {
+		query string
+		args  []any
+	}{
+		{`UPDATE sync_message_receipts SET state=?, updated_at=? WHERE state=?
+		 AND session_id=(SELECT session_id FROM sync_state WHERE id=1)`, []any{model.SyncReceiptUnknown, now, model.SyncReceiptAccepted}},
+		{`UPDATE sync_topics SET active_turn_state=CASE WHEN active_turn_state IN (?,?) THEN ? ELSE active_turn_state END,
+		 writer_generation=0, updated_at=? WHERE session_id=(SELECT session_id FROM sync_state WHERE id=1)`,
+			[]any{model.SyncTurnStarting, model.SyncTurnActive, model.SyncTurnUnknown, now}},
+		{`UPDATE sync_topic_drafts SET state=?, updated_at=? WHERE state=?
+		 AND session_id=(SELECT session_id FROM sync_state WHERE id=1)`, []any{model.SyncDraftUnknown, now, model.SyncDraftStarting}},
+		{`UPDATE callback_routes SET status=? WHERE substr(action,1,5)='sync_'`, []any{model.CallbackStatusExpired}},
+		{`UPDATE sync_state SET state=? WHERE id=1 AND state=?`, []any{model.SyncStateActive, model.SyncStateActivating}},
 	}
-	if _, err := tx.ExecContext(ctx, `UPDATE sync_topics SET active_turn_state=?, updated_at=?
-		WHERE session_id=(SELECT session_id FROM sync_state WHERE id=1 AND state=?) AND active_turn_state IN (?,?)`,
-		model.SyncTurnUnknown, now, model.SyncStateActive, model.SyncTurnStarting, model.SyncTurnActive); err != nil {
-		return err
-	}
-	if _, err := tx.ExecContext(ctx, `UPDATE sync_topic_drafts SET state=?, updated_at=?
-		WHERE session_id=(SELECT session_id FROM sync_state WHERE id=1 AND state=?) AND state=?`,
-		model.SyncDraftUnknown, now, model.SyncStateActive, model.SyncDraftStarting); err != nil {
-		return err
+	for _, statement := range statements {
+		if _, err := tx.ExecContext(ctx, statement.query, statement.args...); err != nil {
+			return err
+		}
 	}
 	return tx.Commit()
-}
-
-// ResetSyncOnStartup makes the previous Sync session cleanup-only without
-// touching non-Sync control-plane state. Unfinished receipts remain durable and
-// non-replayable for audit purposes.
-func (s *Store) ResetSyncOnStartup(ctx context.Context) (string, error) {
-	return s.resetSyncTransientState(ctx)
-}
-
-// ResetSyncOnTransportLoss applies the same deliberately lossy boundary as a
-// bot restart: Telegram synchronization is discarded, while Codex runtime
-// threads are neither interrupted nor replayed.
-func (s *Store) ResetSyncOnTransportLoss(ctx context.Context) (string, error) {
-	return s.resetSyncTransientState(ctx)
-}
-
-func (s *Store) resetSyncTransientState(ctx context.Context) (string, error) {
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return "", err
-	}
-	defer rollback(tx)
-
-	var sessionID string
-	err = tx.QueryRowContext(ctx, `SELECT session_id FROM sync_state WHERE id=1`).Scan(&sessionID)
-	if errors.Is(err, sql.ErrNoRows) {
-		return "", tx.Commit()
-	}
-	if err != nil {
-		return "", err
-	}
-
-	now := model.NowString()
-	if _, err := tx.ExecContext(ctx, `UPDATE sync_state SET state=?, ended_at=? WHERE id=1`,
-		model.SyncStateOff, now); err != nil {
-		return "", err
-	}
-	if _, err := tx.ExecContext(ctx, `UPDATE sync_message_receipts SET state=?, updated_at=?
-		WHERE session_id=? AND state=?`, model.SyncReceiptUnknown, now, sessionID, model.SyncReceiptAccepted); err != nil {
-		return "", err
-	}
-	if _, err := tx.ExecContext(ctx, `UPDATE sync_topics SET telegram_state=?, active_turn_id=NULL,
-		active_turn_state=?, writer_generation=0, pending_telegram_user_fp=NULL,
-		pending_telegram_turn_id=NULL, updated_at=? WHERE session_id=?`,
-		model.SyncTopicCleanup, model.SyncTurnTerminal, now, sessionID); err != nil {
-		return "", err
-	}
-	if _, err := tx.ExecContext(ctx, `UPDATE sync_topic_drafts SET state=?, updated_at=? WHERE session_id=?`,
-		model.SyncDraftCleanup, now, sessionID); err != nil {
-		return "", err
-	}
-	if err := tx.Commit(); err != nil {
-		return "", err
-	}
-	return sessionID, nil
 }
 
 func (s *Store) UpsertSyncTopic(ctx context.Context, topic model.SyncTopic) error {
@@ -505,7 +429,7 @@ func (s *Store) GetActiveSyncTopicByThread(ctx context.Context, sessionID, threa
 // MarkStaleSyncTopicsForCleanup claims idle topics whose Codex thread has been
 // inactive since cutoff, plus old empty drafts. Telegram deletion follows the
 // transaction; claimed rows remain cleanup-only until it succeeds.
-func (s *Store) MarkStaleSyncTopicsForCleanup(ctx context.Context, sessionID string, cutoff model.TimeString) ([]model.SyncTopic, error) {
+func (s *Store) MarkStaleSyncTopicsForCleanup(ctx context.Context, sessionID string, cutoff model.TimeString, unreadThreads ...string) ([]model.SyncTopic, error) {
 	if strings.TrimSpace(sessionID) == "" || strings.TrimSpace(string(cutoff)) == "" {
 		return nil, errors.New("Sync cleanup session and cutoff are required")
 	}
@@ -519,6 +443,14 @@ func (s *Store) MarkStaleSyncTopicsForCleanup(ctx context.Context, sessionID str
 	}
 	defer rollback(tx)
 
+	args := []any{sessionID, model.SyncTopicConnected, model.SyncTurnStarting, model.SyncTurnActive, model.SyncTurnUnknown, sessionID, model.SyncDraftReady, cutoffTime.Unix()}
+	exclusion := ""
+	if len(unreadThreads) > 0 {
+		exclusion = " AND thread_id NOT IN (" + strings.TrimSuffix(strings.Repeat("?,", len(unreadThreads)), ",") + ")"
+		for _, threadID := range unreadThreads {
+			args = append(args, threadID)
+		}
+	}
 	rows, err := tx.QueryContext(ctx, `SELECT kind,session_id,chat_id,topic_id,thread_id,rank,title,created_at,updated_at FROM (
 		SELECT 'topic' AS kind,st.session_id,st.chat_id,st.topic_id,st.thread_id,st.rank,st.title,st.created_at,st.updated_at,
 			CASE WHEN t.updated_at > 0 THEN t.updated_at ELSE unixepoch(st.updated_at) END AS activity_at
@@ -530,9 +462,7 @@ func (s *Store) MarkStaleSyncTopicsForCleanup(ctx context.Context, sessionID str
 			unixepoch(updated_at) AS activity_at
 		FROM sync_topic_drafts
 		WHERE session_id=? AND state=?
-	) WHERE activity_at<? ORDER BY activity_at,topic_id`,
-		sessionID, model.SyncTopicConnected, model.SyncTurnStarting, model.SyncTurnActive, model.SyncTurnUnknown,
-		sessionID, model.SyncDraftReady, cutoffTime.Unix())
+	) WHERE activity_at<?`+exclusion+` ORDER BY activity_at,topic_id`, args...)
 	if err != nil {
 		return nil, err
 	}

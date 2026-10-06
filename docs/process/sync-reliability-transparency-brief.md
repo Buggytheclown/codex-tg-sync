@@ -18,14 +18,13 @@ dead or half-open App Server transport can still look connected.
 - Important infrastructure incidents produce one durable Control warning and
   one recovery notice without repeated-message spam.
 - A managed-daemon transport failure is detected, reported, and handled as a
-  disposable Telegram projection: Sync resets to `off`, no prompt is replayed,
-  Codex runtime work continues, and the poll session reconnects.
+  recoverable Telegram projection: Sync state and topics survive, no prompt is
+  replayed, detached writer authority expires, and the poll session reconnects.
 
 ## Non-goals
 
-- Preserving Telegram topics across daemon or transport failure.
 - Rebinding active writer leases to a replacement WebSocket.
-- Automatically replaying prompts or automatically enabling Sync after repair.
+- Automatically replaying prompts or enabling a previously off Sync session after repair.
 - Uploading Telegram or YMessenger attachments to Codex.
 - A generic external-message outbox or a new health database schema.
 - Changing spawned-stdio ownership semantics.
@@ -39,9 +38,9 @@ dead or half-open App Server transport can still look connected.
 - Disallowed explicit mentions receive: the bot is owner-only and no Codex
   session was started. The owner login and allowlist are never disclosed.
 - Control receives actionable warning/recovered messages for YMessenger poll,
-  App Server transport/session, external reply dead-letter, and Sync reset.
-- After transport recovery Control says Sync remains off and instructs the
-  operator to run `/sync on`.
+  App Server transport/session, external reply dead-letter, and Sync recovery.
+- After transport recovery Control reports restored connectivity; a saved active
+  Sync session catches up automatically.
 
 ## Domain Model
 
@@ -51,8 +50,8 @@ dead or half-open App Server transport can still look connected.
   policy acknowledgement and can never dispatch.
 - Health episodes use namespaced `daemon_state` keys and deterministic delivery
   event ids.
-- Transport-triggered Sync reset mirrors the ADR-027 startup boundary and keeps
-  unfinished receipts non-replayable.
+- Transport recovery mirrors the amended ADR-027 startup contract: preserve
+  presentation, expire process authority, and keep unfinished receipts non-replayable.
 
 ## Architecture
 
@@ -60,7 +59,7 @@ dead or half-open App Server transport can still look connected.
   failures without importing Telegram or App Server code.
 - `internal/storage` owns atomic request/cursor/delivery transitions.
 - `internal/daemon` owns health policy, Sync lifecycle, source delivery, and
-  transport reset orchestration.
+  transport recovery orchestration.
 - Existing `delivery_queue` delivers Control health messages. Existing external
   request rows deliver YMessenger ack/terminal messages.
 - App Server remains authoritative for threads and turns.
@@ -70,7 +69,7 @@ dead or half-open App Server transport can still look connected.
 - Unit tests for root lookup degradation, unauthorized classification, fixed
   delivery slots, duplicate updates/callbacks, and every terminal outcome.
 - Sync regression tests for stale steer, superseding turn, media rejection,
-  startup notice, and transport reset.
+  startup notice, and transport recovery.
 - App Server tests for critical close delivery, pending RPC failure, heartbeat,
   and stale-generation safety.
 - Full `go test ./...` and `go build -buildvcs=false ./...`.
@@ -87,5 +86,5 @@ dead or half-open App Server transport can still look connected.
 - [x] Health warnings and recovery notices are durable and deduplicated.
 - [x] Sleep-sized polling gaps and short network transitions do not create
       flapping warnings or out-of-order recovery notices.
-- [x] Managed-daemon transport loss makes status truthful, resets Sync to off,
+- [x] Managed-daemon transport loss makes status truthful, preserves Sync state/topics,
       never replays input, and reconnects the poll session.

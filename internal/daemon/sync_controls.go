@@ -15,6 +15,9 @@ import (
 func (s *Service) stopSyncTurn(ctx context.Context, topicID int64) (*DirectResponse, error) {
 	s.syncMu.Lock()
 	defer s.syncMu.Unlock()
+	if err := s.syncMutationErrorLocked(ctx); err != nil {
+		return &DirectResponse{Text: err.Error()}, nil
+	}
 	state, err := s.store.GetSyncState(ctx)
 	if err != nil {
 		return nil, err
@@ -64,6 +67,10 @@ func (s *Service) stopSyncTurn(ctx context.Context, topicID int64) (*DirectRespo
 
 func (s *Service) forceDeactivateSync(ctx context.Context) (*DirectResponse, error) {
 	s.syncMu.Lock()
+	if err := s.syncMutationErrorLocked(ctx); err != nil {
+		s.syncMu.Unlock()
+		return &DirectResponse{Text: err.Error()}, nil
+	}
 	state, err := s.store.GetSyncState(ctx)
 	if err != nil {
 		s.syncMu.Unlock()
@@ -113,7 +120,10 @@ func (s *Service) forceDeactivateSync(ctx context.Context) (*DirectResponse, err
 		if draftErr != nil {
 			return nil, draftErr
 		}
-		if writer.Starting+writer.Active+writer.Unknown == 0 && !hasUnfinishedSyncTopics(current) && !hasUnfinishedSyncDrafts(drafts) {
+		s.syncMu.Lock()
+		recoveryPending := s.resumedSyncDrainPendingLocked()
+		s.syncMu.Unlock()
+		if !recoveryPending && writer.Starting+writer.Active+writer.Unknown == 0 && !hasUnfinishedSyncTopics(current) && !hasUnfinishedSyncDrafts(drafts) {
 			return s.deactivateSync(ctx)
 		}
 		if time.Now().After(deadline) {
@@ -184,6 +194,9 @@ func unfinishedSyncTopicTitles(topics []model.SyncTopic) []string {
 }
 
 func (s *Service) handleSyncPendingRequestLocked(ctx context.Context, topic model.SyncTopic, approval model.PendingApproval) {
+	if err := s.syncAccessErrorLocked(ctx); err != nil {
+		return
+	}
 	if approval.ThreadID != topic.ThreadID || approval.TurnID == "" || approval.TurnID != topic.ActiveTurnID {
 		return
 	}
@@ -247,6 +260,9 @@ func (s *Service) newSyncCallbackRoute(ctx context.Context, topic model.SyncTopi
 func (s *Service) handleSyncCallback(ctx context.Context, topicID, messageID int64, token string) (*DirectResponse, error) {
 	s.syncMu.Lock()
 	defer s.syncMu.Unlock()
+	if err := s.syncMutationErrorLocked(ctx); err != nil {
+		return &DirectResponse{CallbackText: err.Error()}, nil
+	}
 	route, err := s.store.GetCallbackRoute(ctx, token)
 	if err != nil {
 		return nil, err

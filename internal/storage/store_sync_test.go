@@ -408,7 +408,7 @@ func TestRecoverSyncWriterMarksStartingDraftUnknown(t *testing.T) {
 	}
 }
 
-func TestRecoverSyncStateMakesInterruptedActivationCleanupOnly(t *testing.T) {
+func TestRecoverSyncStatePreservesInterruptedActivation(t *testing.T) {
 	t.Parallel()
 	store := openTestStore(t)
 	ctx := context.Background()
@@ -418,20 +418,20 @@ func TestRecoverSyncStateMakesInterruptedActivationCleanupOnly(t *testing.T) {
 	if err := store.UpsertSyncTopic(ctx, model.SyncTopic{SessionID: "session-1", ChatID: -1001, TopicID: 11, ThreadID: "thread-1", TelegramState: model.SyncTopicConnected}); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.RecoverSyncState(ctx); err != nil {
+	if err := store.RecoverSyncWriterState(ctx); err != nil {
 		t.Fatal(err)
 	}
 	state, _ := store.GetSyncState(ctx)
-	if state.State != model.SyncStateOff {
+	if state.State != model.SyncStateActive {
 		t.Fatalf("state = %#v", state)
 	}
 	topics, _ := store.ListSyncTopics(ctx, "session-1")
-	if len(topics) != 1 || topics[0].TelegramState != model.SyncTopicCleanup {
+	if len(topics) != 1 || topics[0].TelegramState != model.SyncTopicConnected {
 		t.Fatalf("topics = %#v", topics)
 	}
 }
 
-func TestResetSyncOnStartupMakesSessionCleanupOnlyAndPreservesOtherState(t *testing.T) {
+func TestRecoverSyncWriterPreservesSessionAndOtherState(t *testing.T) {
 	t.Parallel()
 	store := openTestStore(t)
 	ctx := context.Background()
@@ -460,21 +460,22 @@ func TestResetSyncOnStartupMakesSessionCleanupOnlyAndPreservesOtherState(t *test
 		t.Fatal(err)
 	}
 
-	sessionID, err := store.ResetSyncOnStartup(ctx)
+	err = store.RecoverSyncWriterState(ctx)
+	sessionID := "session-1"
 	if err != nil || sessionID != "session-1" {
 		t.Fatalf("sessionID=%q err=%v", sessionID, err)
 	}
 	state, err := store.GetSyncState(ctx)
-	if err != nil || state.State != model.SyncStateOff {
+	if err != nil || state.State != model.SyncStateActive {
 		t.Fatalf("state=%#v err=%v", state, err)
 	}
 	topics, err := store.ListSyncTopics(ctx, sessionID)
-	if err != nil || len(topics) != 1 || topics[0].TelegramState != model.SyncTopicCleanup ||
-		topics[0].ActiveTurnID != "" || topics[0].ActiveTurnState != model.SyncTurnTerminal || topics[0].WriterGeneration != 0 {
+	if err != nil || len(topics) != 1 || topics[0].TelegramState != model.SyncTopicConnected ||
+		topics[0].ActiveTurnID != "" || topics[0].ActiveTurnState != model.SyncTurnUnknown || topics[0].WriterGeneration != 0 {
 		t.Fatalf("topics=%#v err=%v", topics, err)
 	}
 	drafts, err := store.ListSyncTopicDrafts(ctx, sessionID)
-	if err != nil || len(drafts) != 1 || drafts[0].State != model.SyncDraftCleanup {
+	if err != nil || len(drafts) != 1 || drafts[0].State != model.SyncDraftReady {
 		t.Fatalf("drafts=%#v err=%v", drafts, err)
 	}
 	storedReceipt, err := store.GetSyncReceipt(ctx, 11, 501)

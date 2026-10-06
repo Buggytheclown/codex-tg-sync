@@ -607,6 +607,26 @@ func (s *Store) GetCallbackRoute(ctx context.Context, token string) (*model.Call
 	return &route, nil
 }
 
+// ListSyncActionCards is a best-effort UI repair input; route expiry is atomic
+// with writer recovery and remains authoritative even when card editing fails.
+func (s *Store) ListSyncActionCards(ctx context.Context) ([]model.CallbackRoute, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT action,telegram_message_id,payload_json
+	 FROM callback_routes WHERE status=? AND action IN ('sync_approval','sync_user_input') AND telegram_message_id>0`, model.CallbackStatusActive)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var cards []model.CallbackRoute
+	for rows.Next() {
+		var card model.CallbackRoute
+		if err := rows.Scan(&card.Action, &card.TelegramMessageID, &card.PayloadJSON); err != nil {
+			return nil, err
+		}
+		cards = append(cards, card)
+	}
+	return cards, rows.Err()
+}
+
 func (s *Store) ExpireCallbackRoute(ctx context.Context, token string) error {
 	_, err := s.db.ExecContext(ctx, `UPDATE callback_routes SET status = ? WHERE route_token = ?`, model.CallbackStatusExpired, token)
 	return err

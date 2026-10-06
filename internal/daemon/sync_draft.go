@@ -25,6 +25,9 @@ func (s *Service) handleSyncDraftMessage(ctx context.Context, draft model.SyncTo
 func (s *Service) dispatchSyncDraftMessage(ctx context.Context, draft model.SyncTopicDraft, messageID int64, text string) (*DirectResponse, error) {
 	s.syncMu.Lock()
 	defer s.syncMu.Unlock()
+	if err := s.syncMutationErrorLocked(ctx); err != nil {
+		return &DirectResponse{Text: err.Error()}, nil
+	}
 	claimed, receipt, created, err := s.store.ClaimSyncTopicDraftMessage(ctx, draft.ChatID, draft.TopicID, messageID)
 	if err != nil {
 		if claimed.State == model.SyncDraftStarting || claimed.State == model.SyncDraftUnknown {

@@ -112,6 +112,12 @@ type Service struct {
 	phase                        string
 	lastError                    string
 	pollConnected                bool
+	syncBotReady                 bool
+	syncValidatedSession         string
+	syncRecoveryPending          map[string]bool
+	syncExpiredCards             []model.CallbackRoute
+	syncResumeDraining           bool
+	syncDrainActive              map[string]bool
 	startupFinished              bool
 	startupDone                  chan struct{}
 	lastPollHeartbeat            time.Time
@@ -271,7 +277,11 @@ func (s *Service) Start(ctx context.Context) error {
 	_, actionCardRecoveryErr := s.store.RefreshExternalLaunchActionCards(runCtx)
 	_, ackRecoveryErr := s.store.RecoverSendingExternalAcks(runCtx)
 	_, replyRecoveryErr := s.store.RecoverSendingExternalReplies(runCtx)
-	_, resetErr := s.store.ResetSyncOnStartup(runCtx)
+	s.syncMu.Lock()
+	s.syncBotReady = false
+	s.syncValidatedSession = ""
+	resetErr := s.recoverSyncRuntimeLocked(runCtx)
+	s.syncMu.Unlock()
 	err := errors.Join(repairResetErr, deliveryRetirementErr, recoveryErr, terminalRecoveryErr, actionCardRecoveryErr, ackRecoveryErr, replyRecoveryErr, resetErr)
 	if err != nil {
 		cancel()
@@ -461,6 +471,7 @@ func (s *Service) ensurePollSessionLocked(ctx context.Context) {
 		"duration_ms": time.Since(started).Milliseconds(),
 	})
 	s.installSyncPollEvents(client, generation)
+	s.wakeSyncReconcile()
 }
 
 func turnIDAfter(candidate, current string) bool {
@@ -619,9 +630,11 @@ func (s *Service) heartbeatPollSession(ctx context.Context) {
 		return
 	}
 	s.mu.Lock()
-	if s.poll == poll {
-		s.pollConnected = false
+	if s.poll != poll || s.pollGeneration != generation {
+		s.mu.Unlock()
+		return
 	}
+	s.pollConnected = false
 	s.mu.Unlock()
 	_ = s.store.SetState(ctx, "appserver.poll_connected", "false")
 	_ = s.store.SetState(ctx, "appserver.poll.last_error", sanitizeDiagnosticString(err.Error()))
@@ -633,40 +646,37 @@ func (s *Service) softResetSyncAfterTransportLoss(ctx context.Context, cause err
 	if !s.usesSharedAppServer() || ctx.Err() != nil {
 		return
 	}
-	summary := "The shared App Server connection was lost. Sync was reset to off; unfinished Telegram receipts are unknown and no request was replayed."
+	summary := "The shared App Server connection was lost. Sync remains enabled if previously active; unfinished Telegram receipts are unknown and no request was replayed."
 	if cause != nil {
 		summary += " " + sanitizeDiagnosticString(cause.Error())
 	}
-	s.reportHealthFailure(ctx, "appserver.transport", "Shared Codex App Server connection lost", summary, "Wait for reconnect, then run /sync on again.")
+	s.reportHealthFailure(ctx, "appserver.transport", "Shared Codex App Server connection lost", summary, "Restore the App Server connection; Sync catch-up runs automatically.")
 	s.syncMu.Lock()
-	state, stateErr := s.store.GetSyncState(ctx)
-	if stateErr != nil || state.State == model.SyncStateOff || strings.TrimSpace(state.SessionID) == "" {
-		s.syncMu.Unlock()
-		if stateErr != nil {
-			s.logLifecycle("sync_transport_reset_failed", lifecycleFields{"error": stateErr})
-		}
+	defer s.syncMu.Unlock()
+	if err := s.recoverSyncRuntimeLocked(ctx); err != nil {
+		s.logLifecycle("sync_transport_recovery_failed", lifecycleFields{"error": err})
 		return
 	}
-	sessionID, resetErr := s.store.ResetSyncOnTransportLoss(ctx)
-	if resetErr == nil {
-		if s.syncEventCancel != nil {
-			s.syncEventCancel()
-			s.syncEventCancel = nil
+	if s.syncEventCancel != nil {
+		s.syncEventCancel()
+	}
+	s.syncEventCancel, s.syncEventProcess, s.syncEventGeneration = nil, nil, 0
+	if s.syncPollEventCancel != nil {
+		s.syncPollEventCancel()
+	}
+	s.syncPollEventCancel, s.syncPollEventProcess, s.syncPollEventGeneration = nil, nil, 0
+	s.syncSubscribedPollGeneration = 0
+	s.syncSubscribedThreads = map[string]struct{}{}
+	s.syncLeases = map[string]appserver.WriterLease[Session]{}
+	if err := s.syncWriter.ForceClose(); err != nil {
+		s.logLifecycle("sync_writer_close_failed", lifecycleFields{"error": err})
+	} else {
+		state, _ := s.store.GetSyncState(ctx)
+		if state.State == model.SyncStateActive {
+			_ = s.syncWriter.AcceptNewWork()
 		}
-		s.syncEventProcess = nil
-		s.syncEventGeneration = 0
-		s.syncSubscribedPollGeneration = 0
-		s.syncSubscribedThreads = map[string]struct{}{}
-		s.syncLeases = map[string]appserver.WriterLease[Session]{}
 	}
-	s.syncMu.Unlock()
-	if resetErr != nil {
-		s.logLifecycle("sync_transport_reset_failed", lifecycleFields{"error": resetErr})
-		return
-	}
-	_ = s.syncWriter.ForceClose()
-	s.cleanupSyncTopics(ctx)
-	s.logLifecycle("sync_transport_reset", lifecycleFields{"session_id": sessionID, "error": cause})
+	s.logLifecycle("sync_transport_recovered_locally", lifecycleFields{"error": cause})
 }
 
 func (s *Service) reconcileSessions(ctx context.Context) {
@@ -674,6 +684,7 @@ func (s *Service) reconcileSessions(ctx context.Context) {
 }
 
 func (s *Service) repairSessions(ctx context.Context, reason string) {
+	s.softResetSyncAfterTransportLoss(ctx, nil)
 	s.sessionMu.Lock()
 	s.mu.Lock()
 	oldPoll := s.poll

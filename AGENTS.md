@@ -67,7 +67,7 @@ The repository is public. Never commit private paths, tokens, Telegram ids, loca
 - `/projects` and `/newchat` create topic drafts from known local workspaces; Telegram never accepts arbitrary filesystem paths.
 - `/pollers` reports source poller activity and health. `/requests` lists active launch requests.
 - Health and external terminal deliveries stay inside the Sync group.
-- Sync resets to off after a daemon restart; the operator enables it again after reconnect.
+- Restart and transport repair preserve Sync enabled state, session, topics, Status anchors, and delivery fingerprints. Detached ownership is cleared only after an authoritative read; unfinished operations are never replayed.
 
 ## Routing And Ownership
 

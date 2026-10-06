@@ -241,7 +241,7 @@ func TestPollersCommandShowsDurableHealthyFailingStaleAndDisabledState(t *testin
 	}
 }
 
-func TestSharedAppServerHeartbeatFailureTruthfullyResetsSyncWithoutReplay(t *testing.T) {
+func TestSharedAppServerHeartbeatFailurePreservesSyncWithoutReplay(t *testing.T) {
 	service := activeSyncService(t)
 	service.cfg.AppServerMode = "websocket"
 	service.lastPollHeartbeat = time.Time{}
@@ -253,8 +253,8 @@ func TestSharedAppServerHeartbeatFailureTruthfullyResetsSyncWithoutReplay(t *tes
 
 	service.heartbeatPollSession(context.Background())
 	state, err := service.store.GetSyncState(context.Background())
-	if err != nil || state.State != model.SyncStateOff {
-		t.Fatalf("Sync state=%#v err=%v, want off", state, err)
+	if err != nil || state.State != model.SyncStateActive {
+		t.Fatalf("Sync state=%#v err=%v, want active", state, err)
 	}
 	service.mu.RLock()
 	connected := service.pollConnected
@@ -267,12 +267,12 @@ func TestSharedAppServerHeartbeatFailureTruthfullyResetsSyncWithoutReplay(t *tes
 		if getErr != nil {
 			t.Fatal(getErr)
 		}
-		if stored != nil {
+		if stored == nil {
 			t.Fatalf("topic %d remained active after transport reset: %#v", topic, stored)
 		}
 	}
 	items, err := service.store.ClaimDeliveryBatch(context.Background(), 10)
-	if err != nil || len(items) != 1 || !strings.Contains(items[0].PayloadJSON, "Sync was reset to off") {
+	if err != nil || len(items) != 1 || !strings.Contains(items[0].PayloadJSON, "Sync remains enabled") {
 		t.Fatalf("health warning=%#v err=%v", items, err)
 	}
 }

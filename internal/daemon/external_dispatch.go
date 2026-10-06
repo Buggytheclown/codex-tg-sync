@@ -20,7 +20,7 @@ func (s *Service) dispatchExternalLaunchRequest(ctx context.Context, requestID s
 	if err != nil {
 		return
 	}
-	if state.State != model.SyncStateActive || state.ChatID != s.cfg.SyncGroupID {
+	if state.State != model.SyncStateActive || state.ChatID != s.cfg.SyncGroupID || s.syncMutationErrorLocked(ctx) != nil {
 		summary := "Sync is inactive; enable Sync and press Start again."
 		if request.AutoStart {
 			summary = "Sync is inactive; the request will start automatically after Sync is enabled."

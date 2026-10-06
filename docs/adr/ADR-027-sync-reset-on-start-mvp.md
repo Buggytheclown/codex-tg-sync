@@ -1,55 +1,68 @@
-# ADR-027: Sync Reset On Bridge Startup
+# ADR-027: Sync Resume After Bridge Restart
 
-- Status: accepted
+- Status: accepted; amended 2026-10-06
 - Amends: ADR-024, ADR-026 restart recovery
-- Related: `docs/plans/2026-08-19-sync-reset-on-start-mvp-design.md`
+- Related: ADR-032, ADR-034
 
 ## Context
 
-Durable Sync writer recovery originally preserved `starting` and `active` work
-as `ownership-unknown` after a bridge restart. That fail-closed rule prevents
-prompt replay, but it also leaves an MVP operator unable to run safe `/sync off`
-when the bridge restarts after the authoritative Codex turn has already
-finished. A machine reboot can therefore preserve stale Telegram ownership
-long after the shared App Server runtime is gone or has moved on.
-
-The full solution would reconcile every durable receipt and writer lease with
-authoritative App Server history. The MVP instead needs a small, predictable
-restart boundary.
+The original MVP reset Sync to off and made all old topics cleanup targets.
+This avoided stale local ownership blocking `/sync off`, but deleted the
+operator's Telegram presentation on every rebuild or transport failure.
+Keeping topics requires separating durable enabled state from process authority.
 
 ## Decision
 
-- Every `codex-tg` process start atomically resets the current Sync session to
-  `off` before background reconciliation starts.
-- Topics and drafts from the previous session become cleanup-only. Topic-local
-  active-turn and writer-generation fields are cleared.
-- Accepted receipts from that session become `unknown` and remain durable for
-  audit. They are never replayed.
-- Non-Sync SQLite state is preserved. A Codex turn already running in the shared
-  daemon is neither interrupted nor deleted.
-- Telegram topic deletion runs only after the bot is ready. Failed deletion
-  remains a durable cleanup target; Control is never deleted.
-- Persisted App Server connection flags reset to disconnected before the new
-  process attempts a connection.
-- In explicit shared-daemon mode, one failed startup connection attempt sends
-  one recovery warning to Control when the Sync forum is configured.
-- Sync never reactivates automatically. The operator runs `/sync on` to create a
-  fresh session after startup health is restored.
+- SQLite `sync_state.state` remains the source of enabled state. Startup and
+  shared transport recovery preserve active/off/draining, session ID, activation
+  timestamp, topic bindings, ready drafts, snapshots, Status anchors, delivery
+  fingerprints, and pending User correlation.
+- In one transaction, accepted receipts become unknown, starting/active local
+  ownership becomes unknown with generation zero, starting drafts become unknown,
+  and all previous Sync callback routes expire. Successful receipts and external
+  launch callbacks keep their separate lifecycle. No operation is replayed.
+- Interrupted activation becomes active in the same session. Discovery can add
+  missing bindings, but an unresolved creation marker prevents a repeated remote
+  topic creation. Existing bindings continue updating despite that marker.
+- Startup stays non-blocking. After Telegram is ready, validate the saved group
+  and Control before session ingress/egress. Failed verification keeps Sync
+  enabled but degraded; a different configured group cannot use that session.
+- The existing poll session reconnects and restores generation-scoped
+  subscriptions. Reconciliation first reads saved topics, then discovers new
+  chats. No extra polling loop or activation is introduced.
+- A fresh authoritative read clears detached unknown local ownership by CAS.
+  An active Codex turn remains passively active in its snapshot. This transition
+  does not dispatch, steer, interrupt, approve, or rewrite an unknown receipt.
+  A failed read blocks only that topic's recovery; its cached state cannot cause
+  retention deletion until a fresh read succeeds.
+- Runtime recovery invalidates old events/leases and closes the old writer.
+  Unconfirmed close keeps mutations unavailable; passive reads continue. New
+  work is allowed only in active Sync. Draining observes completion and finishes
+  already requested off without repeating interrupt. Off stays off.
+- Best-effort expired approval/input card edits remove old buttons; route expiry
+  remains authoritative if Telegram editing fails. Server requests are not
+  automatically rebound to a replacement connection.
+- Explicit off and normal retention remain the only sources of cleanup targets.
+  Existing historical cleanup rows remain retryable; Control is never deleted.
 
-## Consequences
+## Consequences and limits
 
-Bridge restart is a deliberate Telegram Sync session boundary. Existing Codex
-work continues in Desktop, but Telegram does not resume its old topics or
-writer ownership. This trades transparent restart continuation for predictable
-MVP recovery and eliminates stale `/sync off` refusal after reboot.
+The same database resumes the same Telegram session. Existing Status cards edit
+in place, and the latest undelivered downtime Final uses the existing fingerprint.
+The activation boundary never moves on restart. Latest-turn reads cannot promise
+every intermediate downtime Final or exactly-once delivery across an unrecorded
+Telegram success. The normal reconciliation interval and Telegram governor apply.
 
-ADR-026 shared-daemon reconciliation remains valid for connection repair
-within one process lifetime. Its rule that a bridge restart preserves an active
-`ownership-unknown` Sync session is superseded by this ADR.
+Shared daemon runtime is separate: recovery sends no interrupt, but the server's
+behavior for a request owned by a closed writer connection requires live checks.
+Spawned mode still owns its server process; preserving Telegram presentation does
+not guarantee a running turn survives server shutdown. Group/endpoint migration,
+unknown thread-create recovery, and restoring deleted topics are out of scope.
 
-## Non-goals
+## Verification
 
-- Deleting the whole SQLite database.
-- Interrupting authoritative Codex turns during bridge startup.
-- Automatically enabling Sync after restart.
-- Supervising or restarting Codex Desktop or the managed App Server daemon.
+Storage and daemon recovery suites cover preserved presentation, unknown
+operations, repeated recovery, repeated callback generations, detached terminal/
+active/superseding turns, failed-read retention protection, group/Control gates,
+and draining without replay. Deployment QA compares SQLite and Telegram IDs
+before/after bridge-only restart and reads back Control/topic behavior.
