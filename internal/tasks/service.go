@@ -12,10 +12,9 @@ import (
 )
 
 var (
-	ErrConflict      = storage.ErrTaskConflict
-	ErrInvalid       = storage.ErrTaskInvalid
-	ErrNotFound      = storage.ErrTaskNotFound
-	ErrTemplateInUse = storage.ErrTaskTemplateInUse
+	ErrConflict = storage.ErrTaskConflict
+	ErrInvalid  = storage.ErrTaskInvalid
+	ErrNotFound = storage.ErrTaskNotFound
 )
 
 type Service struct {
@@ -93,18 +92,7 @@ func (s *Service) AddChat(ctx context.Context, threadID, title string) (*model.T
 	}
 	return s.store.CreateTask(ctx, model.CreateTaskInput{Title: title, ThreadID: threadID, Column: model.TaskTODO})
 }
-func (s *Service) ListTaskTemplates(ctx context.Context) ([]model.TaskTemplate, error) {
-	return s.store.ListTaskTemplates(ctx)
-}
-func (s *Service) CreateTaskTemplate(ctx context.Context, in model.SaveTaskTemplateInput) (*model.TaskTemplate, error) {
-	return s.store.CreateTaskTemplate(ctx, in)
-}
-func (s *Service) UpdateTaskTemplate(ctx context.Context, id string, in model.SaveTaskTemplateInput) (*model.TaskTemplate, error) {
-	return s.store.UpdateTaskTemplate(ctx, id, in)
-}
-func (s *Service) DeleteTaskTemplate(ctx context.Context, id string, v int64) error {
-	return s.store.DeleteTaskTemplate(ctx, id, v)
-}
+
 func (s *Service) ListTaskEvents(ctx context.Context, id string) ([]model.TaskEvent, error) {
 	return s.store.ListTaskEvents(ctx, id)
 }

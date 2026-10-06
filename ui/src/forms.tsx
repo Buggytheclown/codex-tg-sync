@@ -1,7 +1,7 @@
 import { cloneElement, useId, useState } from "react";
 import type { FormEvent, ReactElement } from "react";
-import type { Polling, TaskConfig, Template } from "./model";
-import { defaultPolling, emptyConfig, pollingProblem } from "./model";
+import type { Polling, TaskConfig, ExecutionSettings } from "./model";
+import { defaultPolling, pollingProblem } from "./model";
 export function Field({
   label,
   children,
@@ -32,8 +32,6 @@ export function PromptFields({
 }) {
   const update = (key: keyof TaskConfig, text: string) =>
     onChange({ ...value, [key]: text });
-  const execution = (key: keyof TaskConfig["execution"], text: string) =>
-    onChange({ ...value, execution: { ...value.execution, [key]: text } });
   return (
     <>
       <Field label="Initial prompt" hint="Used for the first launch request.">
@@ -57,67 +55,10 @@ export function PromptFields({
       </Field>
       <details className="form-section">
         <summary>Execution settings</summary>
-        <div className="section-content">
-          <Field label="Working directory">
-            <input
-              value={value.execution.cwd}
-              onChange={(e) => execution("cwd", e.target.value)}
-              placeholder="Use daemon default"
-            />
-          </Field>
-          <div className="field-pair">
-            <Field label="Model">
-              <input
-                value={value.execution.model}
-                onChange={(e) => execution("model", e.target.value)}
-                placeholder="Default"
-              />
-            </Field>
-            <Field label="Reasoning">
-              <select
-                value={value.execution.reasoning_effort}
-                onChange={(e) => execution("reasoning_effort", e.target.value)}
-              >
-                <option value="">Default</option>
-                {["low", "medium", "high", "xhigh", "max"].map((x) => (
-                  <option key={x}>{x}</option>
-                ))}
-              </select>
-            </Field>
-          </div>
-          <Field label="Approval policy">
-            <select
-              value={value.execution.approval_policy}
-              onChange={(e) => execution("approval_policy", e.target.value)}
-            >
-              {["on-request", "untrusted", "never"].map((x) => (
-                <option key={x}>{x}</option>
-              ))}
-            </select>
-          </Field>
-          <Field label="Approval reviewer">
-            <select
-              value={value.execution.approvals_reviewer}
-              onChange={(e) => execution("approvals_reviewer", e.target.value)}
-            >
-              {["auto_review", "user"].map((x) => (
-                <option key={x}>{x}</option>
-              ))}
-            </select>
-          </Field>
-          <Field label="Sandbox">
-            <select
-              value={value.execution.sandbox_mode}
-              onChange={(e) => execution("sandbox_mode", e.target.value)}
-            >
-              {["workspace-write", "read-only", "danger-full-access"].map(
-                (x) => (
-                  <option key={x}>{x}</option>
-                ),
-              )}
-            </select>
-          </Field>
-        </div>
+        <ExecutionFields
+          value={value.execution}
+          onChange={(execution) => onChange({ ...value, execution })}
+        />
       </details>
     </>
   );
@@ -131,14 +72,14 @@ export const conditionLabels: Record<string, string> = {
 export function PollingFields({
   value,
   onChange,
-  templates,
   child = false,
+  variables = true,
   sourceOnly = false,
 }: {
   value: Polling;
   onChange: (p: Polling) => void;
-  templates: Template[];
   child?: boolean;
+  variables?: boolean;
   sourceOnly?: boolean;
 }) {
   const cfg = (key: string, v: unknown) =>
@@ -148,7 +89,7 @@ export function PollingFields({
     onChange({
       ...p,
       config: { ...p.config, login: value.config.login || "" },
-      action: { ...p.action, template_id: value.action.template_id },
+      action: { ...p.action, child_definition: value.action.child_definition },
     });
   };
   const source =
@@ -159,7 +100,7 @@ export function PollingFields({
     <>
       <Field label="Polling type">
         <select value={value.type} onChange={(e) => changeType(e.target.value)}>
-          {!child && (
+          {sourceOnly && (
             <>
               <option value="pr_review_source">Assigned PRs</option>
               <option value="pr_changes_source">
@@ -227,7 +168,7 @@ export function PollingFields({
                   required
                   value={value.config.pr_id || ""}
                   onChange={(e) => cfg("pr_id", e.target.value)}
-                  placeholder={child ? "{{pr_id}}" : "12345678"}
+                  placeholder={child && variables ? "{{pr_id}}" : "12345678"}
                 />
               </Field>
               <Field
@@ -237,7 +178,7 @@ export function PollingFields({
                 <input
                   value={value.config.author || ""}
                   onChange={(e) => cfg("author", e.target.value)}
-                  placeholder={child ? "{{author}}" : "author"}
+                  placeholder={child && variables ? "{{author}}" : "author"}
                 />
               </Field>
               <fieldset className="conditions">
@@ -280,56 +221,23 @@ export function PollingFields({
           </Field>
         </>
       )}
-      <div className="field-pair">
-        <Field label="Mode">
-          <select
-            value={value.mode}
-            disabled={source}
-            onChange={(e) => onChange({ ...value, mode: e.target.value })}
-          >
-            <option value="once">Once</option>
-            <option value="repeat">Repeat</option>
-          </select>
-        </Field>
-        <Field label="Action">
-          <select
-            value={value.action.type}
-            disabled={source}
-            onChange={(e) =>
-              onChange({ ...value, action: { type: e.target.value } })
-            }
-          >
-            <option value="return_task">Return to Inbox</option>
-            <option value="resume_task">Request continuation</option>
-            <option value="create_task">Create task</option>
-          </select>
-        </Field>
-      </div>
-      {value.action.type === "create_task" && (
-        <Field
-          label="Template for new tasks"
-          hint="The current template is copied when a new task is created."
-        >
-          <select
-            required
-            value={value.action.template_id || ""}
-            onChange={(e) =>
-              onChange({
-                ...value,
-                action: { ...value.action, template_id: e.target.value },
-              })
-            }
-          >
-            <option value="">Select a template</option>
-            {templates.map((t) => (
-              <option key={t.id} value={t.id}>
-                {t.name}
-              </option>
-            ))}
-          </select>
-        </Field>
+      {!sourceOnly && (
+        <div>
+          <Field label="Action">
+            <select
+              value={value.action.type}
+              disabled={source}
+              onChange={(e) =>
+                onChange({ ...value, action: { type: e.target.value } })
+              }
+            >
+              <option value="return_task">Return to Inbox</option>
+              <option value="resume_task">Request continuation</option>
+            </select>
+          </Field>
+        </div>
       )}
-      {child && (
+      {child && variables && (
         <p className="note">
           Copied to each child as inactive settings. Use {"{{pr_id}}"} and{" "}
           {"{{author}}"} for values from the source event.
@@ -341,14 +249,12 @@ export function PollingFields({
 export function PollingForm({
   initial,
   expectedVersion,
-  templates,
   onSave,
   activate = false,
   busy = false,
 }: {
   initial?: Polling;
   expectedVersion: number;
-  templates: Template[];
   onSave: (p: Polling, activate: boolean, version: number) => Promise<number>;
   activate?: boolean;
   busy?: boolean;
@@ -373,7 +279,7 @@ export function PollingForm({
   };
   return (
     <form onSubmit={(e) => void submit(e, activate)}>
-      <PollingFields value={value} onChange={setValue} templates={templates} />
+      <PollingFields value={value} onChange={setValue} />
       {error && (
         <p role="alert" className="error-note">
           {error}
@@ -400,8 +306,120 @@ export function PollingForm({
     </form>
   );
 }
-export const blankDefinition = () => ({
-  title: "",
-  description: "",
-  config: emptyConfig(),
-});
+export function ExecutionFields({
+  value,
+  onChange,
+  compact = false,
+}: {
+  value: ExecutionSettings;
+  onChange: (value: ExecutionSettings) => void;
+  compact?: boolean;
+}) {
+  const execution = (key: keyof ExecutionSettings, text: string) =>
+    onChange({ ...value, [key]: text });
+  return (
+    <div className="section-content">
+      {" "}
+      <Field label="Working directory">
+        <input
+          value={value.cwd}
+          onChange={(e) => execution("cwd", e.target.value)}
+          placeholder="Use daemon default"
+        />
+      </Field>
+      <div className="field-pair">
+        <Field label="Model">
+          <input
+            value={value.model}
+            onChange={(e) => execution("model", e.target.value)}
+            placeholder="Default"
+          />
+        </Field>
+        <Field label="Reasoning">
+          <select
+            value={value.reasoning_effort}
+            onChange={(e) => execution("reasoning_effort", e.target.value)}
+          >
+            <option value="">Default</option>
+            {["low", "medium", "high", "xhigh", "max"].map((x) => (
+              <option key={x}>{x}</option>
+            ))}
+          </select>
+        </Field>
+      </div>
+      {compact ? (
+        <details className="form-section">
+          <summary>Permissions</summary>{" "}
+          <Field label="Approval policy">
+            <select
+              value={value.approval_policy}
+              onChange={(e) => execution("approval_policy", e.target.value)}
+            >
+              {["on-request", "untrusted", "never"].map((x) => (
+                <option key={x}>{x}</option>
+              ))}
+            </select>
+          </Field>
+          <Field label="Approval reviewer">
+            <select
+              value={value.approvals_reviewer}
+              onChange={(e) => execution("approvals_reviewer", e.target.value)}
+            >
+              {["auto_review", "user"].map((x) => (
+                <option key={x}>{x}</option>
+              ))}
+            </select>
+          </Field>
+          <Field label="Sandbox">
+            <select
+              value={value.sandbox_mode}
+              onChange={(e) => execution("sandbox_mode", e.target.value)}
+            >
+              {["workspace-write", "read-only", "danger-full-access"].map(
+                (x) => (
+                  <option key={x}>{x}</option>
+                ),
+              )}
+            </select>
+          </Field>
+        </details>
+      ) : (
+        <>
+          {" "}
+          <Field label="Approval policy">
+            <select
+              value={value.approval_policy}
+              onChange={(e) => execution("approval_policy", e.target.value)}
+            >
+              {["on-request", "untrusted", "never"].map((x) => (
+                <option key={x}>{x}</option>
+              ))}
+            </select>
+          </Field>
+          <Field label="Approval reviewer">
+            <select
+              value={value.approvals_reviewer}
+              onChange={(e) => execution("approvals_reviewer", e.target.value)}
+            >
+              {["auto_review", "user"].map((x) => (
+                <option key={x}>{x}</option>
+              ))}
+            </select>
+          </Field>
+          <Field label="Sandbox">
+            <select
+              value={value.sandbox_mode}
+              onChange={(e) => execution("sandbox_mode", e.target.value)}
+            >
+              {["workspace-write", "read-only", "danger-full-access"].map(
+                (x) => (
+                  <option key={x}>{x}</option>
+                ),
+              )}
+            </select>
+          </Field>
+        </>
+      )}
+    </div>
+  );
+}

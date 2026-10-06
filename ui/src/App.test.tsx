@@ -8,8 +8,8 @@ import {
   waitFor,
 } from "@testing-library/react";
 import { App } from "./App";
-import { emptyConfig } from "./model";
-import type { Task, Template } from "./model";
+import { defaultPolling, emptyConfig } from "./model";
+import type { Task, Polling } from "./model";
 const makeTask = (extra: Partial<Task> = {}): Task => ({
   id: "task-1",
   title: "Review the next revision",
@@ -19,8 +19,7 @@ const makeTask = (extra: Partial<Task> = {}): Task => ({
   thread_id: "thread-1",
   source_url: "",
   source_key: "",
-  template_id: "",
-  template_version: 0,
+  source_task_id: "",
   config: emptyConfig(),
   version: 1,
   created_at: "",
@@ -28,14 +27,19 @@ const makeTask = (extra: Partial<Task> = {}): Task => ({
   requests: [],
   ...extra,
 });
-let rows: Task[],
-  templates: Template[],
-  calls: { path: string; method: string; body: unknown }[];
+let rows: Task[], calls: { path: string; method: string; body: unknown }[];
 it("shows the Telegram gate for an actual pending approval request", async () => {
   rows = [
     makeTask({
       column: "inbox",
-      requests: [{ id: "request-1", status: "pending_approval", prompt: "Review", created_at: "" }],
+      requests: [
+        {
+          id: "request-1",
+          status: "pending_approval",
+          prompt: "Review",
+          created_at: "",
+        },
+      ],
     }),
   ];
   render(<App />);
@@ -43,7 +47,6 @@ it("shows the Telegram gate for an actual pending approval request", async () =>
 });
 beforeEach(() => {
   rows = [makeTask()];
-  templates = [];
   calls = [];
   window.history.replaceState(null, "", "/");
   vi.stubGlobal(
@@ -64,14 +67,27 @@ beforeEach(() => {
         method,
         body: options?.body ? JSON.parse(options.body as string) : undefined,
       });
-      const payload =
-        path === "/v1/tasks"
-          ? rows
-          : path === "/v1/task-templates"
-            ? templates
-            : path.endsWith("/events")
-              ? []
-              : {};
+      const body = options?.body
+        ? JSON.parse(options.body as string)
+        : undefined;
+      let payload: unknown =
+        path === "/v1/tasks" ? rows : path.endsWith("/events") ? [] : {};
+      if (method === "PUT" && path.endsWith("/polling")) {
+        const id = path.split("/")[3];
+        const task = rows.find((t) => t.id === id)!;
+        payload = { ...task, polling: body.polling, version: task.version + 1 };
+        rows = rows.map((t) => (t.id === id ? (payload as Task) : t));
+      }
+      if (method === "POST" && path === "/v1/tasks") {
+        payload = makeTask({ id: "new-source", ...body });
+        rows = [...rows, payload as Task];
+      }
+      if (method === "POST" && path.endsWith("/move")) {
+        const id = path.split("/")[3];
+        const task = rows.find((t) => t.id === id)!;
+        payload = { ...task, column: body.column, version: task.version + 1 };
+        rows = rows.map((t) => (t.id === id ? (payload as Task) : t));
+      }
       return { ok: true, status: 200, json: async () => payload };
     }),
   );
@@ -132,7 +148,14 @@ describe("board operator flows", () => {
           type: "pr_review_source",
           mode: "repeat",
           config: { login: "me", interval_seconds: 60 },
-          action: { type: "create_task", template_id: "tpl" },
+          action: {
+            type: "create_task",
+            child_definition: {
+              title: "Review PR",
+              description: "",
+              config: { ...emptyConfig(), initial_prompt: "Review the PR" },
+            },
+          },
         },
       }),
     ];
@@ -143,131 +166,293 @@ describe("board operator flows", () => {
     fireEvent.click(screen.getByRole("button", { name: "Expand sources" }));
     expect(screen.getByText("Paused · Done")).toBeTruthy();
   });
-  it("distinguishes future template edits from copied task overrides", async () => {
+  it("shows only a source's actual child definition on one page", async () => {
+    rows = [sourceTask()];
+    window.history.replaceState(null, "", "/?task=source");
+    render(<App />);
+    await screen.findByRole("heading", { name: "Task to create" });
+    expect(
+      screen.getByRole("heading", { name: "When to create a task" }),
+    ).toBeTruthy();
+    expect((screen.getByLabelText("Prompt") as HTMLTextAreaElement).value).toBe(
+      "Use $scan-internal-radar",
+    );
+    expect(
+      (screen.getByLabelText("Working directory") as HTMLInputElement).value,
+    ).toBe("/workspace/journalist");
+    expect(screen.queryByRole("tab")).toBeNull();
+    expect(screen.queryByRole("button", { name: /Templates/ })).toBeNull();
+    expect(calls.some((c) => c.path.includes("template"))).toBe(false);
+    expect(screen.queryByDisplayValue("unused source prompt")).toBeNull();
+    expect(screen.queryByDisplayValue("/workspace/remote_debugger")).toBeNull();
+  });
+  it("creates a source directly with its child definition", async () => {
     render(<App />);
     await screen.findByRole("button", {
       name: /CHAT Review the next revision/,
     });
-    fireEvent.click(screen.getByRole("button", { name: /Templates/ }));
-    expect(
-      screen.getByText(/Template changes affect future tasks/),
-    ).toBeTruthy();
-    expect(screen.getByLabelText("Initial prompt")).toBeTruthy();
-    expect(screen.getByLabelText("Continuation prompt")).toBeTruthy();
-    expect(screen.queryByRole("textbox", { name: /JSON/ })).toBeNull();
-  });
-  it("creates from the template id so the server copies it atomically", async () => {
-    templates = [
-      {
-        id: "tpl",
-        name: "Review",
-        version: 3,
-        updated_at: "",
-        definition: {
-          title: "Review PR",
-          description: "Copied review settings",
-          config: emptyConfig(),
-        },
-      },
-    ];
-    render(<App />);
-    await waitFor(() =>
-      expect(
-        screen.getByRole("button", { name: /Templates/ }).textContent,
-      ).toContain("1"),
-    );
-    fireEvent.click(screen.getByRole("button", { name: /New task/ }));
-    fireEvent.change(screen.getByLabelText("Template"), {
-      target: { value: "tpl" },
+    fireEvent.click(screen.getByRole("button", { name: /Add source/ }));
+    fireEvent.change(screen.getByLabelText("Source name"), {
+      target: { value: "My reviews" },
     });
-    fireEvent.click(screen.getByRole("button", { name: "Create task" }));
+    fireEvent.change(screen.getByLabelText("Your Arcanum login"), {
+      target: { value: "reviewer" },
+    });
+    fireEvent.change(screen.getByLabelText("Task title"), {
+      target: { value: "Review {{pr_id}}" },
+    });
+    fireEvent.change(screen.getByLabelText("Prompt"), {
+      target: { value: "Check {{pr_url}}" },
+    });
+    fireEvent.change(screen.getByLabelText("Working directory"), {
+      target: { value: "/workspace/review" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Create source" }));
     await waitFor(() =>
       expect(calls.some((c) => c.method === "POST")).toBe(true),
     );
-    expect(calls.find((c) => c.method === "POST")?.body).toEqual({
-      template_id: "tpl",
+    expect(calls.find((c) => c.method === "POST")?.body).toMatchObject({
+      title: "My reviews",
       column: "todo",
-      title: "",
-    });
-  });
-});
-
-describe("template concurrency", () => {
-  it("keeps the version captured with the draft when SSE supplies another edit", async () => {
-    const { TemplateEditor } = await import("./App");
-    const original: Template = {
-      id: "tpl",
-      name: "Review",
-      version: 3,
-      updated_at: "",
-      definition: {
-        title: "Review PR",
-        description: "",
-        config: emptyConfig(),
+      polling: {
+        action: {
+          type: "create_task",
+          child_definition: {
+            title: "Review {{pr_id}}",
+            config: {
+              initial_prompt: "Check {{pr_url}}",
+              execution: { cwd: "/workspace/review" },
+            },
+          },
+        },
       },
-    };
-    const save = vi.fn(async (_t: Template | undefined, input: unknown) => ({
-      ...original,
-      version: (input as { expected_version: number }).expected_version + 1,
-    }));
-    const props = {
-      template: original,
-      templates: [original],
-      busy: false,
-      onSave: save,
-      onDelete: async () => {},
-    };
-    const view = render(<TemplateEditor {...props} />);
-    fireEvent.change(screen.getByLabelText("Template name"), {
-      target: { value: "My draft" },
     });
-    view.rerender(
-      <TemplateEditor
-        {...props}
-        template={{ ...original, name: "Other browser", version: 4 }}
-      />,
+    expect(JSON.stringify(calls)).not.toContain("template");
+  });
+  it("saves trigger and child settings together without changing existing children", async () => {
+    rows = [
+      sourceTask(),
+      makeTask({ id: "child", source_task_id: "source", column: "inbox" }),
+    ];
+    window.history.replaceState(null, "", "/?task=source");
+    render(<App />);
+    await screen.findByLabelText("Prompt");
+    fireEvent.change(screen.getByLabelText("Prompt"), {
+      target: { value: "Future instruction" },
+    });
+    fireEvent.change(screen.getByLabelText("Check every · seconds"), {
+      target: { value: "120" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save source" }));
+    await waitFor(() =>
+      expect(calls.some((c) => c.method === "PUT")).toBe(true),
     );
-    fireEvent.click(screen.getByRole("button", { name: "Save template" }));
-    await waitFor(() => expect(save).toHaveBeenCalledTimes(1));
-    expect(save.mock.calls[0][1]).toMatchObject({
-      expected_version: 3,
-      name: "My draft",
+    const writes = calls.filter((c) => c.method !== "GET");
+    expect(writes).toHaveLength(1);
+    expect(writes[0]).toMatchObject({
+      path: "/v1/tasks/source/polling",
+      body: {
+        expected_version: 3,
+        polling: {
+          config: { interval_seconds: 120 },
+          action: {
+            child_definition: {
+              config: { initial_prompt: "Future instruction" },
+            },
+          },
+        },
+      },
     });
-    fireEvent.click(screen.getByRole("button", { name: "Save template" }));
-    await waitFor(() => expect(save).toHaveBeenCalledTimes(2));
-    expect(save.mock.calls[1][1]).toMatchObject({
-      expected_version: 4,
-      name: "My draft",
-    });
+    expect(rows.find((t) => t.id === "child")?.config.initial_prompt).toBe("");
+  });
+  it("links a generated task back to its source without template metadata", async () => {
+    rows = [makeTask({ source_task_id: "source" })];
+    window.history.replaceState(null, "", "/?task=task-1");
+    render(<App />);
+    expect(
+      (
+        await screen.findByRole("link", { name: "Created by source" })
+      ).getAttribute("href"),
+    ).toBe("?task=source");
+    expect(screen.queryByText(/Template snapshot/)).toBeNull();
   });
 });
-
-it("deletes against the captured editor version after a concurrent template edit", async () => {
-  const { TemplateEditor } = await import("./App");
-  const original: Template = {
-    id: "tpl",
-    name: "Review",
+function sourceTask(): Task {
+  return makeTask({
+    id: "source",
+    title: "Monday radar",
+    column: "polling",
     version: 3,
-    updated_at: "",
-    definition: { title: "Review PR", description: "", config: emptyConfig() },
-  };
-  const remove = vi.fn(async (_template: Template) => {});
-  const props = {
-    template: original,
-    templates: [original],
-    busy: false,
-    onSave: async () => original,
-    onDelete: remove,
-  };
-  const view = render(<TemplateEditor {...props} />);
+    thread_id: "",
+    config: {
+      ...emptyConfig(),
+      initial_prompt: "unused source prompt",
+      execution: {
+        ...emptyConfig().execution,
+        cwd: "/workspace/remote_debugger",
+      },
+    },
+    polling: {
+      type: "pr_review_source",
+      mode: "repeat",
+      config: { login: "reviewer", interval_seconds: 60 },
+      action: {
+        type: "create_task",
+        child_definition: {
+          title: "Review {{pr_id}}",
+          description: "",
+          config: {
+            ...emptyConfig(),
+            initial_prompt: "Use $scan-internal-radar",
+            execution: {
+              ...emptyConfig().execution,
+              cwd: "/workspace/journalist",
+            },
+          },
+        },
+      },
+    },
+  });
+}
+it("retains the source draft's captured version across an external update", async () => {
+  const { SourceEditor } = await import("./SourceEditor");
+  const original = sourceTask();
+  const save = vi.fn(
+    async (_p: unknown, _enabled: boolean, version: number) => version + 1,
+  );
+  const view = render(
+    <SourceEditor task={original} busy={false} onSave={save} />,
+  );
+  fireEvent.change(screen.getByLabelText("Prompt"), {
+    target: { value: "My draft" },
+  });
   view.rerender(
-    <TemplateEditor
-      {...props}
-      template={{ ...original, name: "Other browser", version: 4 }}
+    <SourceEditor
+      task={{ ...original, version: 4 }}
+      busy={false}
+      onSave={save}
     />,
   );
-  fireEvent.click(screen.getByRole("button", { name: "Delete" }));
-  fireEvent.click(screen.getByRole("button", { name: "Confirm delete" }));
-  await waitFor(() => expect(remove).toHaveBeenCalledTimes(1));
-  expect(remove.mock.calls[0][0]).toMatchObject({ id: "tpl", version: 3 });
+  fireEvent.click(screen.getByRole("button", { name: "Save source" }));
+  await waitFor(() => expect(save).toHaveBeenCalledTimes(1));
+  expect(save.mock.calls[0][2]).toBe(3);
+  expect(save.mock.calls[0][0]).toMatchObject({
+    action: { child_definition: { config: { initial_prompt: "My draft" } } },
+  });
+  fireEvent.click(screen.getByRole("button", { name: "Save source" }));
+  await waitFor(() => expect(save).toHaveBeenCalledTimes(2));
+  expect(save.mock.calls[1][2]).toBe(4);
+});
+
+it("pauses a source independently while preserving its unsaved child draft", async () => {
+  rows = [sourceTask()];
+  window.history.replaceState(null, "", "/?task=source");
+  render(<App />);
+  await screen.findByLabelText("Prompt");
+  fireEvent.change(screen.getByLabelText("Prompt"), {
+    target: { value: "Unsaved future prompt" },
+  });
+  fireEvent.click(screen.getByRole("button", { name: "Pause source" }));
+  await screen.findByRole("button", { name: "Enable source" });
+  expect(calls.filter((c) => c.method !== "GET")).toEqual([
+    {
+      path: "/v1/tasks/source/move",
+      method: "POST",
+      body: { expected_version: 3, column: "todo", position: 1 },
+    },
+  ]);
+  expect((screen.getByLabelText("Prompt") as HTMLTextAreaElement).value).toBe(
+    "Unsaved future prompt",
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Save source" }));
+  await waitFor(() => expect(calls.some((c) => c.method === "PUT")).toBe(true));
+  expect(calls.find((c) => c.method === "PUT")?.body).toMatchObject({
+    expected_version: 4,
+  });
+  expect(rows[0].column).toBe("todo");
+});
+it("copies optional waiting defaults inactive with one continuation instruction", async () => {
+  const { SourceEditor } = await import("./SourceEditor");
+  const save = vi.fn(async (_polling: Polling) => 4);
+  render(<SourceEditor task={sourceTask()} busy={false} onSave={save} />);
+  fireEvent.click(screen.getByLabelText("Repeat work"));
+  fireEvent.change(screen.getByLabelText("Continuation prompt"), {
+    target: { value: "Review the new revision" },
+  });
+  fireEvent.click(screen.getByRole("button", { name: "Save source" }));
+  await waitFor(() => expect(save).toHaveBeenCalledTimes(1));
+  expect(save.mock.calls[0][0]).toMatchObject({
+    action: {
+      child_definition: {
+        config: { continuation_prompt: "Review the new revision" },
+        polling: {
+          type: "pr_wait",
+          mode: "once",
+          action: { type: "resume_task" },
+          config: { pr_id: "{{pr_id}}" },
+        },
+      },
+    },
+  });
+});
+
+it("preserves a PR waiting draft when switching to cron and requires explicit PR values", async () => {
+  const { SourceEditor } = await import("./SourceEditor");
+  const t = sourceTask();
+  t.polling!.action.child_definition!.config.continuation_prompt =
+    "Keep this follow-up";
+  t.polling!.action.child_definition!.polling = {
+    ...defaultPolling(),
+    config: {
+      login: "reviewer",
+      pr_id: "{{pr_id}}",
+      author: "{{author}}",
+      conditions: ["new_commit"],
+      interval_seconds: 60,
+    },
+  };
+  const save = vi.fn(async (_p: Polling) => 4);
+  render(<SourceEditor task={t} busy={false} onSave={save} />);
+  fireEvent.change(screen.getAllByLabelText("Polling type")[0], {
+    target: { value: "cron" },
+  });
+  fireEvent.click(screen.getByRole("button", { name: "Save source" }));
+  expect(await screen.findByText(/explicit positive PR ID/)).toBeTruthy();
+  expect(save).not.toHaveBeenCalled();
+  expect((screen.getByLabelText("PR ID") as HTMLInputElement).value).toBe(
+    "{{pr_id}}",
+  );
+  expect(
+    (screen.getByLabelText("Continuation prompt") as HTMLInputElement).value,
+  ).toBe("Keep this follow-up");
+  fireEvent.change(screen.getByLabelText("PR ID"), {
+    target: { value: "123" },
+  });
+  fireEvent.click(screen.getByRole("button", { name: "Save source" }));
+  expect(await screen.findByText(/reviewer or author/)).toBeTruthy();
+  expect(save).not.toHaveBeenCalled();
+  fireEvent.change(screen.getByLabelText("PR author"), {
+    target: { value: "" },
+  });
+  fireEvent.click(screen.getByRole("button", { name: "Save source" }));
+  await waitFor(() => expect(save).toHaveBeenCalledTimes(1));
+  expect(save.mock.calls[0][0]).toMatchObject({
+    type: "cron",
+    action: {
+      child_definition: { polling: { config: { pr_id: "123", author: "" } } },
+    },
+  });
+});
+it("starts a new cron waiting definition with blank PR ID and author", async () => {
+  const { SourceEditor } = await import("./SourceEditor");
+  const save = vi.fn(async () => 1);
+  render(<SourceEditor busy={false} onSave={save} />);
+  fireEvent.change(screen.getByLabelText("Polling type"), {
+    target: { value: "cron" },
+  });
+  fireEvent.click(screen.getByLabelText("Repeat work"));
+  expect((screen.getByLabelText("PR ID") as HTMLInputElement).value).toBe("");
+  expect((screen.getByLabelText("PR author") as HTMLInputElement).value).toBe(
+    "",
+  );
 });

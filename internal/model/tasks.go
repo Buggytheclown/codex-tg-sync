@@ -28,8 +28,8 @@ type TaskConfig struct {
 	Execution          TaskExecutionSettings `json:"execution"`
 }
 type TaskPollingAction struct {
-	Type       string `json:"type"`
-	TemplateID string `json:"template_id,omitempty"`
+	Type            string          `json:"type"`
+	ChildDefinition *TaskDefinition `json:"child_definition,omitempty"`
 }
 type TaskPolling struct {
 	TaskID        string            `json:"task_id"`
@@ -45,23 +45,22 @@ type TaskPolling struct {
 	LastError     string            `json:"last_error"`
 }
 type Task struct {
-	ID              string               `json:"id"`
-	Title           string               `json:"title"`
-	Description     string               `json:"description"`
-	Column          string               `json:"column"`
-	Position        float64              `json:"position"`
-	ThreadID        string               `json:"thread_id"`
-	SourceURL       string               `json:"source_url"`
-	SourceKey       string               `json:"source_key"`
-	TemplateID      string               `json:"template_id"`
-	TemplateVersion int64                `json:"template_version"`
-	Config          TaskConfig           `json:"config"`
-	Version         int64                `json:"version"`
-	CreatedAt       TimeString           `json:"created_at"`
-	UpdatedAt       TimeString           `json:"updated_at"`
-	Polling         *TaskPolling         `json:"polling,omitempty"`
-	Execution       *ThreadSnapshotState `json:"execution,omitempty"`
-	Requests        []TaskRequestInfo    `json:"requests"`
+	ID           string               `json:"id"`
+	Title        string               `json:"title"`
+	Description  string               `json:"description"`
+	Column       string               `json:"column"`
+	Position     float64              `json:"position"`
+	ThreadID     string               `json:"thread_id"`
+	SourceURL    string               `json:"source_url"`
+	SourceKey    string               `json:"source_key"`
+	SourceTaskID string               `json:"source_task_id"`
+	Config       TaskConfig           `json:"config"`
+	Version      int64                `json:"version"`
+	CreatedAt    TimeString           `json:"created_at"`
+	UpdatedAt    TimeString           `json:"updated_at"`
+	Polling      *TaskPolling         `json:"polling,omitempty"`
+	Execution    *ThreadSnapshotState `json:"execution,omitempty"`
+	Requests     []TaskRequestInfo    `json:"requests"`
 }
 type TaskRequestInfo struct {
 	ID             string     `json:"id"`
@@ -75,19 +74,11 @@ type TaskRequestInfo struct {
 	ErrorSummary   string     `json:"error_summary"`
 	CreatedAt      TimeString `json:"created_at"`
 }
-type TaskTemplateDefinition struct {
+type TaskDefinition struct {
 	Title       string       `json:"title"`
 	Description string       `json:"description"`
 	Config      TaskConfig   `json:"config"`
 	Polling     *TaskPolling `json:"polling,omitempty"`
-}
-type TaskTemplate struct {
-	ID         string                 `json:"id"`
-	Name       string                 `json:"name"`
-	Version    int64                  `json:"version"`
-	Definition TaskTemplateDefinition `json:"definition"`
-	CreatedAt  TimeString             `json:"created_at"`
-	UpdatedAt  TimeString             `json:"updated_at"`
 }
 type TaskEvent struct {
 	ID           string          `json:"id"`
@@ -99,7 +90,6 @@ type TaskEvent struct {
 	CreatedAt    TimeString      `json:"created_at"`
 }
 type CreateTaskInput struct {
-	TemplateID  string       `json:"template_id,omitempty"`
 	Title       string       `json:"title"`
 	Description string       `json:"description"`
 	Column      string       `json:"column"`
@@ -126,11 +116,6 @@ type SetTaskPollingInput struct {
 	ExpectedVersion int64       `json:"expected_version"`
 	Polling         TaskPolling `json:"polling"`
 }
-type SaveTaskTemplateInput struct {
-	ExpectedVersion int64                  `json:"expected_version"`
-	Name            string                 `json:"name"`
-	Definition      TaskTemplateDefinition `json:"definition"`
-}
 type PollingEvent struct {
 	Cursor      json.RawMessage   `json:"cursor,omitempty"`
 	Key         string            `json:"key"`
@@ -154,13 +139,12 @@ type TaskPollingOutcome struct {
 // TaskSourceImport is a once-only bridge from a retired source owner. Keys are
 // durable source-cycle/occurrence identities selected by the source adapter.
 type TaskSourceImport struct {
-	Column       string
-	Key          string
-	Title        string
-	Polling      TaskPolling
-	TemplateName string
-	Definition   TaskTemplateDefinition
-	Legacy       []LegacyTaskImport
+	Column     string
+	Key        string
+	Title      string
+	Polling    TaskPolling
+	Definition TaskDefinition
+	Legacy     []LegacyTaskImport
 }
 type LegacyTaskImport struct {
 	Variables  map[string]string
@@ -173,8 +157,8 @@ type LegacyTaskImport struct {
 	Cursor     json.RawMessage
 }
 
-// Template waiting settings exclude runtime state, even if callers supplied it.
-func (d TaskTemplateDefinition) MarshalJSON() ([]byte, error) {
+// Source child waiting settings exclude runtime state, even if callers supplied it.
+func (d TaskDefinition) MarshalJSON() ([]byte, error) {
 	type settings struct {
 		Type   string            `json:"type"`
 		Mode   string            `json:"mode"`

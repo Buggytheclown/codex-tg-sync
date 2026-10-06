@@ -30,7 +30,7 @@ func (f *fakePR) ReadPRSnapshot(context.Context, int64) (arcanumreview.PRSnapsho
 func TestSourceEmitsBaselineAndStableCycleKey(t *testing.T) {
 	client := &fakePR{}
 	checker := NewChecker(client)
-	p := model.TaskPolling{TaskID: "source", Type: TypeReview, Mode: model.PollingRepeat, Config: jsonBytes(Config{Login: "reviewer"}), Action: model.TaskPollingAction{Type: model.PollingCreateTask, TemplateID: "review"}}
+	p := model.TaskPolling{TaskID: "source", Type: TypeReview, Mode: model.PollingRepeat, Config: jsonBytes(Config{Login: "reviewer"}), Action: model.TaskPollingAction{Type: model.PollingCreateTask, ChildDefinition: &model.TaskDefinition{Title: "child", Config: model.TaskConfig{InitialPrompt: "prompt"}}}}
 	out, err := checker.Check(context.Background(), p, time.Now())
 	if err != nil {
 		t.Fatal(err)
@@ -52,7 +52,7 @@ func TestReadFailureKeepsCursorAndProducesNoEvent(t *testing.T) {
 	}
 }
 func TestCronOccurrenceIgnoresGenerationAndPreservesLateness(t *testing.T) {
-	p := model.TaskPolling{TaskID: "source", Type: TypeCron, Mode: model.PollingRepeat, Action: model.TaskPollingAction{Type: model.PollingCreateTask, TemplateID: "tpl"}, Config: jsonBytes(Config{Cron: "0 9 * * *", Timezone: "UTC", LegacyID: "daily", MaxLateness: "2h"})}
+	p := model.TaskPolling{TaskID: "source", Type: TypeCron, Mode: model.PollingRepeat, Action: model.TaskPollingAction{Type: model.PollingCreateTask, ChildDefinition: &model.TaskDefinition{Title: "child", Config: model.TaskConfig{InitialPrompt: "prompt"}}}, Config: jsonBytes(Config{Cron: "0 9 * * *", Timezone: "UTC", LegacyID: "daily", MaxLateness: "2h"})}
 	now := time.Date(2026, 10, 6, 10, 0, 0, 0, time.UTC)
 	a, err := NewChecker(nil).Check(context.Background(), p, now)
 	if err != nil {

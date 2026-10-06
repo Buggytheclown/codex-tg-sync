@@ -74,7 +74,7 @@ func (s *Store) AcceptTaskPollingOutcome(ctx context.Context, out model.TaskPoll
 			if err == nil {
 				resultID = id
 			} else if errors.Is(err, sql.ErrNoRows) {
-				child, err := taskFromTemplateTx(ctx, tx, p.Action.TemplateID, event)
+				child, err := taskFromDefinition(*p.Action.ChildDefinition, t.ID, event)
 				if err != nil {
 					return false, err
 				}

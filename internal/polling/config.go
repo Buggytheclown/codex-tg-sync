@@ -106,5 +106,45 @@ func Validate(p model.TaskPolling) error {
 	default:
 		return fmt.Errorf("unknown poller type %q", p.Type)
 	}
+	if p.Action.Type == model.PollingCreateTask {
+		return validateSourceChildWait(p, c)
+	}
+	return nil
+}
+
+// Validate child waiting before saving a source. Only PR sources supply the
+// PR ID/reviewer/author substitutions used by their default wait settings.
+func validateSourceChildWait(source model.TaskPolling, sourceConfig Config) error {
+	if source.Action.ChildDefinition == nil || source.Action.ChildDefinition.Polling == nil {
+		return nil
+	}
+	wait := *source.Action.ChildDefinition.Polling
+	if wait.Type != TypePRWait {
+		return errors.New("child waiting must be a once PR wait")
+	}
+	c, err := DecodeConfig(wait)
+	if err != nil {
+		return fmt.Errorf("child waiting: %w", err)
+	}
+	if source.Type == TypeReview || source.Type == TypeChanges {
+		replace := strings.NewReplacer("{{pr_id}}", "1", "{{login}}", sourceConfig.Login, "{{author}}", "pr-author")
+		c.PRID = replace.Replace(c.PRID)
+		c.Login = replace.Replace(c.Login)
+		c.Author = replace.Replace(c.Author)
+	}
+	raw, err := json.Marshal(c)
+	if err != nil {
+		return err
+	}
+	if bytes.Contains(raw, []byte("{{")) {
+		if source.Type == TypeCron {
+			return errors.New("cron child waiting needs explicit PR ID, reviewer and author values; remove PR placeholders or disable Repeat work")
+		}
+		return errors.New("child waiting contains an unsupported source variable; use {{pr_id}}, {{login}} or {{author}}")
+	}
+	wait.Config = raw
+	if err := Validate(wait); err != nil {
+		return fmt.Errorf("child waiting: %w", err)
+	}
 	return nil
 }

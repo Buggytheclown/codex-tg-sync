@@ -1,7 +1,7 @@
 # Local task board UI
 
 React, TypeScript and Vite frontend for the daemon's loopback control API.
-SQLite is the authority for tasks and templates; the UI refetches the existing
+SQLite is the authority for tasks and source definitions; the UI refetches the existing
 read model after commands, SSE invalidations, reconnects, window focus, and a
 30-second reconciliation interval.
 
@@ -49,7 +49,12 @@ Open the dev server using that exact origin. No wildcard CORS is used.
 ## Operator behavior
 
 - Sources stay in the left list, including paused sources. A source is a task
-  with a `create_task` polling action and a selected child template.
+  with a `create_task` polling action and its own child task definition.
+- A source has one settings page: **When to create a task** holds its trigger,
+  schedule, explicit enable/pause action and diagnostics; **Task to create** holds title, prompt
+  and working directory, plus model/reasoning and optional repeat-work settings.
+  Saving the trigger and child definition uses one version-guarded command.
+  Sources create new Inbox tasks and require Telegram launch approval.
 - Move cards by dragging them or using the accessible **Move task** dropdown.
   Reading a card never moves it. An invalid move to Polling opens its form.
 - **No polling**, **Configured · paused**, and **Waiting** are separate labels.
@@ -57,8 +62,12 @@ Open the dev server using that exact origin. No wildcard CORS is used.
   check, last attempt, last success and an error when present.
 - Running/completed are independent chat projections. A card without a run has
   neither label; failed and interrupted terminal runs are completed executions.
-- Initial and continuation prompts are separate. Template edits affect future
-  tasks; Settings overrides affect the selected task. Pending requests retain
+- Initial and continuation prompts are separate. Source edits affect future
+  tasks; task Settings edits affect the selected task. Optional child waiting
+  settings start inactive. Generated tasks link back to their source and keep
+  independent copied settings. Scheduled repeat work requires an explicit
+  positive PR ID; PR event placeholders cannot supply its reviewer or author.
+  Pending requests retain
   their frozen prompt and execution settings.
 - The UI exposes launch request status and Codex links. Start, dismiss, retry
   and approvals remain in the existing Telegram Control topic.

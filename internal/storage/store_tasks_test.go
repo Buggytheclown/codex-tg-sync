@@ -55,18 +55,16 @@ func TestTaskVersionsGenerationAndChatDedup(t *testing.T) {
 	}
 }
 
-func TestTaskAcceptanceFreezesTemplateAndRequest(t *testing.T) {
+func TestTaskAcceptanceFreezesOwnedDefinitionAndRequest(t *testing.T) {
 	s, err := Open(filepath.Join(t.TempDir(), "tasks.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer s.Close()
 	ctx := context.Background()
-	tmpl, err := s.CreateTaskTemplate(ctx, model.SaveTaskTemplateInput{Name: "review", Definition: model.TaskTemplateDefinition{Title: "Review {{pr}}", Config: model.TaskConfig{InitialPrompt: "Review {{pr}}", ContinuationPrompt: "Continue {{pr}}", Execution: model.TaskExecutionSettings{CWD: "/workspace", Model: "test", ApprovalPolicy: "on-request", ApprovalsReviewer: "auto_review", SandboxMode: "workspace-write"}}, Polling: &model.TaskPolling{Type: "pr", Mode: model.PollingOnce, Config: []byte(`{}`), Action: model.TaskPollingAction{Type: model.PollingResumeTask}}}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	source, err := s.CreateTask(ctx, model.CreateTaskInput{Title: "source", Column: model.TaskPollingColumn, Polling: &model.TaskPolling{Type: "pr", Mode: model.PollingRepeat, Config: []byte(`{}`), Action: model.TaskPollingAction{Type: model.PollingCreateTask, TemplateID: tmpl.ID}}})
+	def := model.TaskDefinition{Title: "Review {{pr}}", Config: model.TaskConfig{InitialPrompt: "Review {{pr}}", ContinuationPrompt: "Continue {{pr}}", Execution: model.TaskExecutionSettings{CWD: "/workspace", Model: "test", ApprovalPolicy: "on-request", ApprovalsReviewer: "auto_review", SandboxMode: "workspace-write"}}, Polling: &model.TaskPolling{Type: "pr", Mode: model.PollingOnce, Config: []byte(`{}`), Action: model.TaskPollingAction{Type: model.PollingResumeTask}}}
+
+	source, err := s.CreateTask(ctx, model.CreateTaskInput{Title: "source", Column: model.TaskPollingColumn, Polling: &model.TaskPolling{Type: "pr", Mode: model.PollingRepeat, Config: []byte(`{}`), Action: model.TaskPollingAction{Type: model.PollingCreateTask, ChildDefinition: &def}}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -75,10 +73,18 @@ func TestTaskAcceptanceFreezesTemplateAndRequest(t *testing.T) {
 	if err != nil || !accepted {
 		t.Fatalf("accept: %v %v", accepted, err)
 	}
-	_, err = s.UpdateTaskTemplate(ctx, tmpl.ID, model.SaveTaskTemplateInput{ExpectedVersion: tmpl.Version, Name: tmpl.Name, Definition: model.TaskTemplateDefinition{Title: "changed", Config: model.TaskConfig{InitialPrompt: "changed"}}})
+	def.Title = "changed"
+	def.Config.InitialPrompt = "changed"
+	def.Config.ContinuationPrompt = "future continuation"
+	def.Config.Execution.CWD = "/future-workspace"
+	def.Polling.Config = []byte(`{"future_wait":true}`)
+	source.Polling.Action.ChildDefinition = &def
+	source, err = s.SetTaskPolling(ctx, source.ID, model.SetTaskPollingInput{ExpectedVersion: source.Version, Polling: *source.Polling})
 	if err != nil {
 		t.Fatal(err)
 	}
+	outcome.Generation = source.Polling.Generation
+
 	accepted, err = s.AcceptTaskPollingOutcome(ctx, outcome, 123)
 	if err != nil || !accepted {
 		t.Fatalf("duplicate check: %v %v", accepted, err)
@@ -103,6 +109,32 @@ func TestTaskAcceptanceFreezesTemplateAndRequest(t *testing.T) {
 	if request.AutoStart || !strings.HasPrefix(request.Prompt, "Review 1\n\nPolling event facts") || request.TaskID != child.ID || request.ApprovalPolicy == nil || *request.ApprovalPolicy != "on-request" {
 		t.Fatalf("request: %#v", request)
 	}
+	if child.SourceTaskID != source.ID || child.Config.Execution.CWD != "/workspace" || child.Config.ContinuationPrompt != "Continue 1" || string(child.Polling.Config) != `{}` {
+		t.Fatalf("child lost owned settings or source link: %#v", child)
+	}
+	outcome.Events[0].Key = "pr:2"
+	outcome.Events[0].SourceKey = "pr:2"
+	outcome.Events[0].Variables["pr"] = "2"
+	if accepted, err := s.AcceptTaskPollingOutcome(ctx, outcome, 123); err != nil || !accepted {
+		t.Fatalf("future event: %v %v", accepted, err)
+	}
+	all, err := s.ListTasks(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var future *model.Task
+	for i := range all {
+		if all[i].SourceKey == "pr:2" {
+			future = &all[i]
+		}
+	}
+	if future == nil || future.Title != "changed" || future.Config.InitialPrompt != "changed" || future.Config.ContinuationPrompt != "future continuation" || future.Config.Execution.CWD != "/future-workspace" || future.Column != model.TaskInbox || future.Polling == nil || string(future.Polling.Config) != `{"future_wait":true}` {
+		t.Fatalf("future task did not copy source definition with inactive waiting: %#v", future)
+	}
+	frozen, err := s.GetExternalLaunchRequest(ctx, request.ID)
+	if err != nil || frozen.Prompt != request.Prompt || frozen.CWD != request.CWD {
+		t.Fatalf("source edit changed pending request: %#v %v", frozen, err)
+	}
 	_, err = s.MoveTask(ctx, child.ID, model.MoveTaskInput{ExpectedVersion: child.Version, Column: model.TaskDone})
 	if err != nil {
 		t.Fatal(err)
@@ -120,11 +152,9 @@ func TestTaskAcceptanceFreezesTemplateAndRequest(t *testing.T) {
 func makeTaskBoardSource(t *testing.T, s *Store, mode string) (*model.Task, model.TaskPollingOutcome) {
 	t.Helper()
 	ctx := context.Background()
-	tmpl, err := s.CreateTaskTemplate(ctx, model.SaveTaskTemplateInput{Name: "default", Definition: model.TaskTemplateDefinition{Title: "Review {{pr_id}}", Config: model.TaskConfig{InitialPrompt: "Review {{pr_id}}", ContinuationPrompt: "Continue {{pr_id}}", Execution: model.TaskExecutionSettings{CWD: "/project", Model: "fixed-model", ReasoningEffort: "high"}}, Polling: &model.TaskPolling{Type: "pr_wait", Mode: model.PollingOnce, Config: []byte(`{"pr_id":"{{pr_id}}"}`), Action: model.TaskPollingAction{Type: model.PollingResumeTask}}}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	source, err := s.CreateTask(ctx, model.CreateTaskInput{Title: "source", Column: model.TaskPollingColumn, Polling: &model.TaskPolling{Type: "pr_source", Mode: model.PollingRepeat, Config: []byte(`{}`), Action: model.TaskPollingAction{Type: model.PollingCreateTask, TemplateID: tmpl.ID}}})
+	def := model.TaskDefinition{Title: "Review {{pr_id}}", Config: model.TaskConfig{InitialPrompt: "Review {{pr_id}}", ContinuationPrompt: "Continue {{pr_id}}", Execution: model.TaskExecutionSettings{CWD: "/project", Model: "fixed-model", ReasoningEffort: "high"}}, Polling: &model.TaskPolling{Type: "pr_wait", Mode: model.PollingOnce, Config: []byte(`{"pr_id":"{{pr_id}}"}`), Action: model.TaskPollingAction{Type: model.PollingResumeTask}}}
+
+	source, err := s.CreateTask(ctx, model.CreateTaskInput{Title: "source", Column: model.TaskPollingColumn, Polling: &model.TaskPolling{Type: "pr_source", Mode: model.PollingRepeat, Config: []byte(`{}`), Action: model.TaskPollingAction{Type: model.PollingCreateTask, ChildDefinition: &def}}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -453,21 +483,19 @@ func TestTaskRequestAppendsSourceFactsAndRejectsAutoApproval(t *testing.T) {
 	}
 }
 
-func TestTaskTemplateCopiesDataWithoutRecursiveVariableExpansion(t *testing.T) {
+func TestTaskDefinitionCopiesDataWithoutRecursiveVariableExpansion(t *testing.T) {
 	s := openTestStore(t)
 	ctx := context.Background()
-	tmpl, err := s.CreateTaskTemplate(ctx, model.SaveTaskTemplateInput{Name: "template", Definition: model.TaskTemplateDefinition{Title: "Review {{title}}", Config: model.TaskConfig{InitialPrompt: "Review {{title}} and {{other}}", ContinuationPrompt: "continue"}, Polling: &model.TaskPolling{Type: "pr_wait", Mode: model.PollingOnce, Config: []byte(`{"pr_id":"{{pr_id}}","label":"{{title}}"}`), Action: model.TaskPollingAction{Type: model.PollingReturnTask}, Generation: 999, Cursor: []byte(`{"illegal":true}`)}}})
+	def := model.TaskDefinition{Title: "Review {{title}}", Config: model.TaskConfig{InitialPrompt: "Review {{title}} and {{other}}", ContinuationPrompt: "continue"}, Polling: &model.TaskPolling{Type: "pr_wait", Mode: model.PollingOnce, Config: []byte(`{"pr_id":"{{pr_id}}","label":"{{title}}"}`), Action: model.TaskPollingAction{Type: model.PollingReturnTask}, Generation: 999, Cursor: []byte(`{"illegal":true}`)}}
+
+	raw, err := json.Marshal(def)
 	if err != nil {
 		t.Fatal(err)
 	}
-	var raw string
-	if err := s.db.QueryRowContext(ctx, `SELECT definition_json FROM task_templates WHERE id=?`, tmpl.ID).Scan(&raw); err != nil {
-		t.Fatal(err)
+	if strings.Contains(string(raw), "illegal") || strings.Contains(string(raw), "generation") {
+		t.Fatalf("definition contains runtime state %s", raw)
 	}
-	if strings.Contains(raw, `"cursor"`) || strings.Contains(raw, `"generation"`) || strings.Contains(raw, `"last_attempt_at"`) {
-		t.Fatalf("template contains runtime state %s", raw)
-	}
-	source, err := s.CreateTask(ctx, model.CreateTaskInput{Title: "source", Column: model.TaskPollingColumn, Polling: &model.TaskPolling{Type: "pr_source", Mode: model.PollingRepeat, Config: []byte(`{}`), Action: model.TaskPollingAction{Type: model.PollingCreateTask, TemplateID: tmpl.ID}}})
+	source, err := s.CreateTask(ctx, model.CreateTaskInput{Title: "source", Column: model.TaskPollingColumn, Polling: &model.TaskPolling{Type: "pr_source", Mode: model.PollingRepeat, Config: []byte(`{}`), Action: model.TaskPollingAction{Type: model.PollingCreateTask, ChildDefinition: &def}}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -568,5 +596,58 @@ func TestTaskCannotClearActiveContinuationOrCombineDistinctIdentities(t *testing
 	}
 	if _, err := s.CreateTask(ctx, model.CreateTaskInput{Title: "conflicting identities", ThreadID: "thread-one", SourceKey: "source-two"}); !errors.Is(err, ErrTaskConflict) {
 		t.Fatalf("contradictory identity accepted: %v", err)
+	}
+}
+
+func TestSourceDefinitionValidationAndAtomicEdit(t *testing.T) {
+	s := openTestStore(t)
+	ctx := context.Background()
+	def := model.TaskDefinition{Title: "child", Config: model.TaskConfig{InitialPrompt: "first", ContinuationPrompt: "again", Execution: model.TaskExecutionSettings{CWD: "/work"}}}
+	p := model.TaskPolling{Type: "pr", Mode: model.PollingRepeat, Config: []byte(`{}`), Action: model.TaskPollingAction{Type: model.PollingCreateTask, ChildDefinition: &def}}
+	source, err := s.CreateTask(ctx, model.CreateTaskInput{Title: "source", Column: model.TaskPollingColumn, Polling: &p})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, kind := range []string{"missing definition", "blank prompt", "recursive source", "repeat child", "resume missing prompt"} {
+		t.Run(kind, func(t *testing.T) {
+			d := def
+			bad := p
+			bad.Config = []byte(`{"changed":true}`)
+			bad.Action.ChildDefinition = &d
+			switch kind {
+			case "missing definition":
+				bad.Action.ChildDefinition = nil
+			case "blank prompt":
+				d.Config.InitialPrompt = ""
+			case "recursive source":
+				d.Polling = &p
+			case "repeat child":
+				d.Polling = &model.TaskPolling{Type: "pr", Mode: model.PollingRepeat, Config: []byte(`{}`), Action: model.TaskPollingAction{Type: model.PollingReturnTask}}
+			case "resume missing prompt":
+				d.Config.ContinuationPrompt = ""
+				d.Polling = &model.TaskPolling{Type: "pr", Mode: model.PollingOnce, Config: []byte(`{}`), Action: model.TaskPollingAction{Type: model.PollingResumeTask}}
+			}
+			if _, err := s.SetTaskPolling(ctx, source.ID, model.SetTaskPollingInput{ExpectedVersion: source.Version, Polling: bad}); !errors.Is(err, ErrTaskInvalid) {
+				t.Fatalf("invalid source accepted: %v", err)
+			}
+			got, err := s.GetTask(ctx, source.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.Version != source.Version || string(got.Polling.Config) != `{}` || got.Polling.Action.ChildDefinition.Config.InitialPrompt != "first" {
+				t.Fatalf("invalid edit partially persisted: %#v", got)
+			}
+		})
+	}
+	d := def
+	d.Config.InitialPrompt = "future"
+	p.Action.ChildDefinition = &d
+	p.Config = []byte(`{"changed":true}`)
+	got, err := s.SetTaskPolling(ctx, source.ID, model.SetTaskPollingInput{ExpectedVersion: source.Version, Polling: p})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got.Polling.Config) != `{"changed":true}` || got.Polling.Action.ChildDefinition.Config.InitialPrompt != "future" || got.Version != source.Version+1 || got.Polling.Generation != source.Polling.Generation+1 {
+		t.Fatalf("source definition and trigger not saved together: %#v", got)
 	}
 }

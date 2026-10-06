@@ -14,20 +14,16 @@ import (
 )
 
 var (
-	ErrTaskConflict      = errors.New("task version conflict")
-	ErrTaskInvalid       = errors.New("invalid task settings")
-	ErrTaskNotFound      = errors.New("task not found")
-	ErrTaskTemplateInUse = errors.New("task template in use")
+	ErrTaskConflict = errors.New("task version conflict")
+	ErrTaskInvalid  = errors.New("invalid task settings")
+	ErrTaskNotFound = errors.New("task not found")
 )
 
 func (s *Store) initializeTasks(ctx context.Context) error {
 	_, err := s.db.ExecContext(ctx, `
- CREATE TABLE IF NOT EXISTS task_templates (
- id TEXT PRIMARY KEY, name TEXT NOT NULL, version INTEGER NOT NULL, definition_json TEXT NOT NULL,
- created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
  CREATE TABLE IF NOT EXISTS tasks (
  id TEXT PRIMARY KEY, title TEXT NOT NULL, description TEXT NOT NULL DEFAULT '', column TEXT NOT NULL CHECK(column IN ('inbox','todo','polling','done')),
- position REAL NOT NULL DEFAULT 0, thread_id TEXT, source_url TEXT, source_key TEXT, template_id TEXT, template_version INTEGER NOT NULL DEFAULT 0,
+ position REAL NOT NULL DEFAULT 0, thread_id TEXT, source_url TEXT, source_key TEXT, source_task_id TEXT,
  task_config_json TEXT NOT NULL, version INTEGER NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
  CREATE UNIQUE INDEX IF NOT EXISTS idx_tasks_thread ON tasks(thread_id) WHERE thread_id IS NOT NULL AND thread_id<>'';
  CREATE UNIQUE INDEX IF NOT EXISTS idx_tasks_source ON tasks(source_key) WHERE source_key IS NOT NULL AND source_key<>'';
@@ -44,7 +40,10 @@ func (s *Store) initializeTasks(ctx context.Context) error {
  CREATE INDEX IF NOT EXISTS idx_external_launch_task ON external_launch_requests(task_id,created_at);
  CREATE UNIQUE INDEX IF NOT EXISTS idx_external_launch_task_event ON external_launch_requests(trigger_event_id) WHERE trigger_event_id IS NOT NULL AND trigger_event_id<>'';
  `)
-	return err
+	if err != nil {
+		return err
+	}
+	return s.migrateOwnedSourceDefinitions(ctx)
 }
 
 func validTaskColumn(c string) bool {
@@ -72,12 +71,18 @@ func validatePolling(p model.TaskPolling) error {
 	}
 	switch p.Action.Type {
 	case model.PollingReturnTask, model.PollingResumeTask:
+		if p.Action.ChildDefinition != nil {
+			return fmt.Errorf("%w: only sources own child definitions", ErrTaskInvalid)
+		}
 		if p.Mode != model.PollingOnce {
 			return fmt.Errorf("%w: working task waiting must be once", ErrTaskInvalid)
 		}
 	case model.PollingCreateTask:
-		if p.Mode != model.PollingRepeat || p.Action.TemplateID == "" {
-			return fmt.Errorf("%w: sources require repeat and template", ErrTaskInvalid)
+		if p.Mode != model.PollingRepeat || p.Action.ChildDefinition == nil {
+			return fmt.Errorf("%w: sources require repeat and child definition", ErrTaskInvalid)
+		}
+		if err := validateChildDefinition(*p.Action.ChildDefinition); err != nil {
+			return err
 		}
 	default:
 		return fmt.Errorf("%w: unknown polling action", ErrTaskInvalid)
@@ -88,12 +93,12 @@ func validatePolling(p model.TaskPolling) error {
 	return nil
 }
 
-const taskColumns = `id,title,description,column,position,coalesce(thread_id,''),coalesce(source_url,''),coalesce(source_key,''),coalesce(template_id,''),template_version,task_config_json,version,created_at,updated_at`
+const taskColumns = `id,title,description,column,position,coalesce(thread_id,''),coalesce(source_url,''),coalesce(source_key,''),coalesce(source_task_id,''),task_config_json,version,created_at,updated_at`
 
 func scanTask(row rowScanner) (*model.Task, error) {
 	var t model.Task
 	var raw string
-	err := row.Scan(&t.ID, &t.Title, &t.Description, &t.Column, &t.Position, &t.ThreadID, &t.SourceURL, &t.SourceKey, &t.TemplateID, &t.TemplateVersion, &raw, &t.Version, &t.CreatedAt, &t.UpdatedAt)
+	err := row.Scan(&t.ID, &t.Title, &t.Description, &t.Column, &t.Position, &t.ThreadID, &t.SourceURL, &t.SourceKey, &t.SourceTaskID, &raw, &t.Version, &t.CreatedAt, &t.UpdatedAt)
 	if err != nil {
 		return nil, err
 	}
@@ -220,7 +225,7 @@ func insertTaskTx(ctx context.Context, tx *sql.Tx, t model.Task) error {
 	if err != nil {
 		return err
 	}
-	_, err = tx.ExecContext(ctx, `INSERT INTO tasks(id,title,description,column,position,thread_id,source_url,source_key,template_id,template_version,task_config_json,version,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, t.ID, t.Title, t.Description, t.Column, t.Position, nullable(t.ThreadID), nullable(t.SourceURL), nullable(t.SourceKey), nullable(t.TemplateID), t.TemplateVersion, string(raw), t.Version, t.CreatedAt, t.UpdatedAt)
+	_, err = tx.ExecContext(ctx, `INSERT INTO tasks(id,title,description,column,position,thread_id,source_url,source_key,source_task_id,task_config_json,version,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)`, t.ID, t.Title, t.Description, t.Column, t.Position, nullable(t.ThreadID), nullable(t.SourceURL), nullable(t.SourceKey), nullable(t.SourceTaskID), string(raw), t.Version, t.CreatedAt, t.UpdatedAt)
 	return err
 }
 func setPollingTx(ctx context.Context, tx *sql.Tx, p model.TaskPolling) error {
@@ -243,9 +248,13 @@ func addTaskEventTx(ctx context.Context, tx *sql.Tx, taskID, kind string, payloa
 	return err
 }
 func (s *Store) CreateTask(ctx context.Context, in model.CreateTaskInput) (*model.Task, error) {
+	if in.Polling != nil {
+		p := s.normalizeSourcePolling(*in.Polling)
+		in.Polling = &p
+	}
 	in.ThreadID = strings.TrimSpace(in.ThreadID)
 	in.SourceKey = strings.TrimSpace(in.SourceKey)
-	if strings.TrimSpace(in.Title) == "" && in.TemplateID == "" {
+	if strings.TrimSpace(in.Title) == "" {
 		return nil, fmt.Errorf("%w: title required", ErrTaskInvalid)
 	}
 	if in.Column == "" {
@@ -262,7 +271,7 @@ func (s *Store) CreateTask(ctx context.Context, in model.CreateTaskInput) (*mode
 			return nil, err
 		}
 	}
-	if in.Column == model.TaskPollingColumn && in.Polling == nil && in.TemplateID == "" {
+	if in.Column == model.TaskPollingColumn && in.Polling == nil {
 		return nil, fmt.Errorf("%w: configure polling first", ErrTaskInvalid)
 	}
 	tx, err := s.db.BeginTx(ctx, nil)
@@ -283,27 +292,6 @@ func (s *Store) CreateTask(ctx context.Context, in model.CreateTaskInput) (*mode
 	}
 	now := model.NowString()
 	t := model.Task{ID: uuid.NewString(), Title: in.Title, Description: in.Description, Column: in.Column, Position: in.Position, ThreadID: in.ThreadID, SourceURL: in.SourceURL, SourceKey: in.SourceKey, Config: s.normalizeTaskConfig(in.Config), Version: 1, CreatedAt: now, UpdatedAt: now}
-	if in.TemplateID != "" {
-		copied, err := taskFromTemplateTx(ctx, tx, in.TemplateID, model.PollingEvent{})
-		if err != nil {
-			return nil, err
-		}
-		copied.Column = in.Column
-		copied.ThreadID = in.ThreadID
-		copied.SourceKey = in.SourceKey
-		copied.SourceURL = in.SourceURL
-		copied.Position = in.Position
-		if in.Title != "" {
-			copied.Title = in.Title
-		}
-		if in.Description != "" {
-			copied.Description = in.Description
-		}
-		t = copied
-		if in.Polling == nil {
-			in.Polling = copied.Polling
-		}
-	}
 	if t.Column == model.TaskPollingColumn {
 		if in.Polling == nil {
 			return nil, ErrTaskInvalid
@@ -326,7 +314,7 @@ func (s *Store) CreateTask(ctx context.Context, in model.CreateTaskInput) (*mode
 		p.LastAttemptAt = ""
 		p.LastSuccessAt = ""
 		p.LastError = ""
-		if err := validatePollingTemplateTx(ctx, tx, p); err != nil {
+		if err := validatePolling(p); err != nil {
 			return nil, err
 		}
 		if err := setPollingTx(ctx, tx, p); err != nil {
@@ -420,7 +408,7 @@ func (s *Store) MoveTask(ctx context.Context, id string, in model.MoveTaskInput)
 		if err := validateTaskPollingReadiness(t, *t.Polling); err != nil {
 			return nil, err
 		}
-		if err := validatePollingTemplateTx(ctx, tx, *t.Polling); err != nil {
+		if err := validatePolling(*t.Polling); err != nil {
 			return nil, err
 		}
 	}
@@ -456,20 +444,8 @@ func cancelUnstartedTaskRequestsTx(ctx context.Context, tx *sql.Tx, id string, n
 	_, err = tx.ExecContext(ctx, `UPDATE external_launch_requests SET status=?,error_type='task_cancelled',error_summary='Task moved to TODO or Done before dispatch.',updated_at=? WHERE task_id=? AND status IN (?,?,?) AND coalesce(thread_id,'')='' AND coalesce(turn_id,'')=''`, model.ExternalLaunchDismissed, now, id, model.ExternalLaunchPendingApproval, model.ExternalLaunchStarting, model.ExternalLaunchFailed)
 	return err
 }
-func validatePollingTemplateTx(ctx context.Context, tx *sql.Tx, p model.TaskPolling) error {
-	if p.Action.Type != model.PollingCreateTask {
-		return nil
-	}
-	var n int
-	if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM task_templates WHERE id=?`, p.Action.TemplateID).Scan(&n); err != nil {
-		return err
-	}
-	if n != 1 {
-		return fmt.Errorf("%w: polling template not found", ErrTaskInvalid)
-	}
-	return nil
-}
 func (s *Store) SetTaskPolling(ctx context.Context, id string, in model.SetTaskPollingInput) (*model.Task, error) {
+	in.Polling = s.normalizeSourcePolling(in.Polling)
 	if err := s.validateResolvedTaskPolling(in.Polling); err != nil {
 		return nil, err
 	}
@@ -509,7 +485,7 @@ func (s *Store) SetTaskPolling(ctx context.Context, id string, in model.SetTaskP
 			return nil, err
 		}
 	}
-	if err := validatePollingTemplateTx(ctx, tx, p); err != nil {
+	if err := validatePolling(p); err != nil {
 		return nil, err
 	}
 	if err := setPollingTx(ctx, tx, p); err != nil {
@@ -583,7 +559,7 @@ func samePollingIdentity(a, b model.TaskPolling) bool {
 }
 
 // SetTaskPollingValidator installs the pure typed adapter validator used inside
-// atomic child creation. Template definitions may still contain placeholders.
+// atomic child creation. Source child definitions may still contain placeholders.
 func (s *Store) SetTaskPollingValidator(fn func(model.TaskPolling) error) {
 	s.taskValidatorMu.Lock()
 	s.taskValidator = fn

@@ -79,18 +79,7 @@ func (s *Service) AddChat(ctx context.Context, threadID, title string) (*model.T
 	}
 	return task, err
 }
-func (s *Service) ListTaskTemplates(ctx context.Context) ([]model.TaskTemplate, error) {
-	return s.taskBoard.ListTaskTemplates(ctx)
-}
-func (s *Service) CreateTaskTemplate(ctx context.Context, in model.SaveTaskTemplateInput) (*model.TaskTemplate, error) {
-	return s.taskBoard.CreateTaskTemplate(ctx, in)
-}
-func (s *Service) UpdateTaskTemplate(ctx context.Context, id string, in model.SaveTaskTemplateInput) (*model.TaskTemplate, error) {
-	return s.taskBoard.UpdateTaskTemplate(ctx, id, in)
-}
-func (s *Service) DeleteTaskTemplate(ctx context.Context, id string, version int64) error {
-	return s.taskBoard.DeleteTaskTemplate(ctx, id, version)
-}
+
 func (s *Service) ListTaskEvents(ctx context.Context, id string) ([]model.TaskEvent, error) {
 	return s.taskBoard.ListTaskEvents(ctx, id)
 }

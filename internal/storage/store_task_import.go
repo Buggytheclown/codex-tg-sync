@@ -13,7 +13,7 @@ import (
 )
 
 // BootstrapTaskSource atomically imports a retired owner's source and barriers.
-// It never modifies a source/template after the durable import marker exists.
+// It never modifies a source after the durable import marker exists.
 // Adapter code owns mapping legacy IDs to cycle/occurrence event keys.
 func (s *Store) BootstrapTaskSource(ctx context.Context, in model.TaskSourceImport) (*model.Task, error) {
 	if strings.TrimSpace(in.Key) == "" || strings.TrimSpace(in.Title) == "" {
@@ -47,23 +47,10 @@ func (s *Store) BootstrapTaskSource(ctx context.Context, in model.TaskSourceImpo
 	}
 	now := model.NowString()
 	if errors.Is(err, sql.ErrNoRows) {
-		tmplID := uuid.NewSHA1(uuid.NameSpaceOID, []byte("task_board.template."+in.Key)).String()
-		name := in.TemplateName
-		if name == "" {
-			name = in.Title
-		}
-		input := model.SaveTaskTemplateInput{Name: name, Definition: in.Definition}
-		if err := validateTaskTemplate(input); err != nil {
-			return nil, err
-		}
-		input.Definition.Config = s.normalizeTaskConfig(input.Definition.Config)
-		input.Definition.Polling = cleanTemplatePolling(input.Definition.Polling)
-		raw, err := json.Marshal(input.Definition)
-		if err != nil {
-			return nil, err
-		}
-		_, err = tx.ExecContext(ctx, `INSERT INTO task_templates(id,name,version,definition_json,created_at,updated_at) VALUES(?,?,1,?,?,?) ON CONFLICT(id) DO NOTHING`, tmplID, name, string(raw), now, now)
-		if err != nil {
+		d := in.Definition
+		d.Config = s.normalizeTaskConfig(d.Config)
+		d.Polling = cleanChildPolling(d.Polling)
+		if err := validateChildDefinition(d); err != nil {
 			return nil, err
 		}
 		sourceID = uuid.NewSHA1(uuid.NameSpaceOID, []byte("task_board.source."+in.Key)).String()
@@ -73,7 +60,7 @@ func (s *Store) BootstrapTaskSource(ctx context.Context, in model.TaskSourceImpo
 		}
 		p := in.Polling
 		p.TaskID = sourceID
-		p.Action = model.TaskPollingAction{Type: model.PollingCreateTask, TemplateID: tmplID}
+		p.Action = model.TaskPollingAction{Type: model.PollingCreateTask, ChildDefinition: &d}
 		p.Generation = 1
 		if len(p.Cursor) == 0 {
 			p.Cursor = json.RawMessage(`{}`)
@@ -120,7 +107,7 @@ func (s *Store) BootstrapTaskSource(ctx context.Context, in model.TaskSourceImpo
 			return nil, err
 		}
 		if errors.Is(err, sql.ErrNoRows) {
-			child, err := taskFromTemplateTx(ctx, tx, source.Polling.Action.TemplateID, model.PollingEvent{SourceKey: legacy.SourceKey, SourceURL: legacy.SourceURL, Title: legacy.Title, Cursor: legacy.Cursor, Variables: legacy.Variables})
+			child, err := taskFromDefinition(*source.Polling.Action.ChildDefinition, sourceID, model.PollingEvent{SourceKey: legacy.SourceKey, SourceURL: legacy.SourceURL, Title: legacy.Title, Cursor: legacy.Cursor, Variables: legacy.Variables})
 			if err != nil {
 				return nil, err
 			}

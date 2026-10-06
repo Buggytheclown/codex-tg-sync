@@ -1,18 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { FormEvent } from "react";
 import { api, APIError } from "./api";
-import type {
-  Column,
-  Definition,
-  Polling,
-  Task,
-  TaskEvent,
-  Template,
-} from "./model";
+import type { Column, Polling, Task, TaskEvent } from "./model";
 import {
   codexURL,
   columns,
-  defaultPolling,
   emptyConfig,
   executionLabel,
   formatTime,
@@ -23,16 +15,11 @@ import {
   safeExternalURL,
   parseThreadID,
 } from "./model";
-import {
-  Field,
-  PollingFields,
-  PollingForm,
-  PromptFields,
-  blankDefinition,
-  conditionLabels,
-} from "./forms";
+import { Field, PollingForm, PromptFields, conditionLabels } from "./forms";
 
-type Panel = "details" | "new-task" | "new-source" | "add-chat" | "templates";
+type Panel = "details" | "new-task" | "new-source" | "add-chat";
+import { SourceEditor } from "./SourceEditor";
+import { PollingDiagnostics } from "./PollingDiagnostics";
 type Tab = "overview" | "settings" | "polling" | "activity";
 export function TaskCard({
   task,
@@ -87,8 +74,7 @@ export function TaskCard({
   );
 }
 export function App() {
-  const [tasks, setTasks] = useState<Task[]>([]),
-    [templates, setTemplates] = useState<Template[]>([]);
+  const [tasks, setTasks] = useState<Task[]>([]);
   const [selectedID, setSelectedID] = useState(
       () => new URLSearchParams(window.location.search).get("task") || "",
     ),
@@ -107,13 +93,9 @@ export function App() {
   const refresh = useCallback(async () => {
     const id = ++refreshID.current;
     try {
-      const [next, ts] = await Promise.all([
-        api<Task[]>("/v1/tasks"),
-        api<Template[]>("/v1/task-templates"),
-      ]);
+      const next = await api<Task[]>("/v1/tasks");
       if (mounted.current && id === refreshID.current) {
         setTasks(next);
-        setTemplates(ts);
         setLoaded(true);
         setError("");
       }
@@ -230,7 +212,11 @@ export function App() {
     setSelectedID(task.id);
     setPanel("details");
     setTab("overview");
-    setInfo("Task created. Launch requests are started in Telegram.");
+    setInfo(
+      isSource(task)
+        ? "Source created."
+        : "Task created. Launch requests are started in Telegram.",
+    );
   };
   const sources = tasks.filter(isSource),
     cards = tasks.filter(
@@ -257,9 +243,6 @@ export function App() {
           {connection}
           <span className="local-label">Local workspace</span>
         </div>
-        <button className="quiet" onClick={() => open("templates")}>
-          Templates <span>{templates.length}</span>
-        </button>
         <button onClick={() => open("add-chat")}>Add chat</button>
         <button className="primary" onClick={() => open("new-task")}>
           ＋ New task
@@ -324,12 +307,9 @@ export function App() {
             <div className="sidebar-footer">
               <span className="tiny-label">HOW IT WORKS</span>
               <p>
-                Sources copy a template into Inbox. Each new task gets its own
-                launch request.
+                Sources create tasks in Inbox. Each new task gets its own launch
+                request.
               </p>
-              <button className="text-button" onClick={() => open("templates")}>
-                Manage templates →
-              </button>
             </div>
           </>
         )}
@@ -459,14 +439,14 @@ export function App() {
         <div className="panel-header">
           <span className="eyebrow">
             {panel === "details"
-              ? "TASK DETAILS"
-              : panel === "templates"
-                ? "TEMPLATES"
-                : panel === "new-source"
-                  ? "NEW SOURCE"
-                  : panel === "add-chat"
-                    ? "LINK A CHAT"
-                    : "NEW TASK"}
+              ? selected && isSource(selected)
+                ? "SOURCE SETTINGS"
+                : "TASK DETAILS"
+              : panel === "new-source"
+                ? "NEW SOURCE"
+                : panel === "add-chat"
+                  ? "LINK A CHAT"
+                  : "NEW TASK"}
           </span>
           {panel !== "details" && (
             <button
@@ -478,7 +458,40 @@ export function App() {
             </button>
           )}
         </div>
-        {panel === "details" && selected ? (
+        {panel === "details" && selected && isSource(selected) ? (
+          <>
+            <div className="detail-heading">
+              <h2>{selected.title}</h2>
+            </div>
+            <div className="panel-body">
+              <SourceEditor
+                key={selected.id}
+                task={selected}
+                busy={busy}
+                onSave={async (p, _enabled, expectedVersion) => {
+                  const saved = await mutate<Task>(
+                    `/v1/tasks/${selected.id}/polling`,
+                    "PUT",
+                    { expected_version: expectedVersion, polling: p },
+                  );
+                  return saved.version;
+                }}
+                onToggle={async (enabled, expectedVersion) => {
+                  const moved = await mutate<Task>(
+                    `/v1/tasks/${selected.id}/move`,
+                    "POST",
+                    {
+                      expected_version: expectedVersion,
+                      column: enabled ? "polling" : "todo",
+                      position: selected.position,
+                    },
+                  );
+                  return moved.version;
+                }}
+              />
+            </div>
+          </>
+        ) : panel === "details" && selected ? (
           <>
             <div className="detail-heading">
               <h2>{selected.title}</h2>
@@ -532,7 +545,7 @@ export function App() {
             )}
             <div className="panel-body">
               {tab === "overview" ? (
-                <Overview task={selected} templates={templates} />
+                <Overview task={selected} />
               ) : tab === "settings" ? (
                 <TaskSettings
                   key={selected.id}
@@ -549,7 +562,6 @@ export function App() {
                     key={selected.id}
                     initial={selected.polling}
                     expectedVersion={selected.version}
-                    templates={templates}
                     busy={busy}
                     activate={activationRequested}
                     onSave={async (p, activate, expectedVersion) => {
@@ -611,7 +623,6 @@ export function App() {
           </div>
         ) : panel === "new-task" ? (
           <NewTask
-            templates={templates}
             busy={busy}
             onSave={async (input) =>
               created(await mutate<Task>("/v1/tasks", "POST", input))
@@ -619,12 +630,10 @@ export function App() {
           />
         ) : panel === "new-source" ? (
           <NewSource
-            templates={templates}
             busy={busy}
             onSave={async (input) =>
               created(await mutate<Task>("/v1/tasks", "POST", input))
             }
-            onTemplates={() => open("templates")}
           />
         ) : panel === "add-chat" ? (
           <AddChat
@@ -638,26 +647,7 @@ export function App() {
               )
             }
           />
-        ) : (
-          <TemplateManager
-            templates={templates}
-            busy={busy}
-            onSave={async (template, input) => {
-              return mutate<Template>(
-                template
-                  ? `/v1/task-templates/${template.id}`
-                  : "/v1/task-templates",
-                template ? "PUT" : "POST",
-                input,
-              );
-            }}
-            onDelete={async (template) => {
-              await mutate(`/v1/task-templates/${template.id}`, "DELETE", {
-                expected_version: template.version,
-              });
-            }}
-          />
-        )}
+        ) : null}
       </aside>
     </div>
   );
@@ -675,7 +665,7 @@ function ExternalLink({ url, label }: { url: string; label: string }) {
     </span>
   );
 }
-function Overview({ task, templates }: { task: Task; templates: Template[] }) {
+function Overview({ task }: { task: Task }) {
   return (
     <div className="overview">
       {task.description && <p className="description">{task.description}</p>}
@@ -698,19 +688,13 @@ function Overview({ task, templates }: { task: Task; templates: Template[] }) {
           </ul>
         </div>
       )}
-      {task.template_id && (
-        <div className="summary-block">
-          <h3>Template snapshot</h3>
-          <p>
-            {templates.find((t) => t.id === task.template_id)?.name ||
-              "Template"}{" "}
-            · v{task.template_version}
-          </p>
-          <small>
-            Copied when this task was created. Later template edits affect
-            future tasks.
-          </small>
-        </div>
+      {task.source_task_id && (
+        <a
+          className="detail-link"
+          href={`?task=${encodeURIComponent(task.source_task_id)}`}
+        >
+          Created by source
+        </a>
       )}
       <dl className="metadata">
         <div>
@@ -730,54 +714,6 @@ function Overview({ task, templates }: { task: Task; templates: Template[] }) {
       </dl>
       <RequestHistory task={task} />
     </div>
-  );
-}
-export function PollingDiagnostics({ task }: { task: Task }) {
-  const p = task.polling;
-  return (
-    <section className="poll-diagnostics">
-      <div className="diagnostic-heading">
-        <span
-          className={`connection-dot ${task.column === "polling" ? "live" : ""}`}
-        />
-        <strong>{pollingLabel(task)}</strong>
-      </div>
-      {p ? (
-        <>
-          <p>
-            {p.type === "pr_review_source"
-              ? "Assigned PRs"
-              : p.type === "pr_changes_source"
-                ? "My PRs requesting changes"
-                : p.type === "cron"
-                  ? "Cron schedule"
-                  : "PR waiting"}{" "}
-            · {p.mode}
-          </p>
-          <dl className="metadata">
-            <div>
-              <dt>Next check</dt>
-              <dd>
-                {task.column === "polling"
-                  ? formatTime(p.next_check_at)
-                  : "Paused"}
-              </dd>
-            </div>
-            <div>
-              <dt>Last attempt</dt>
-              <dd>{formatTime(p.last_attempt_at)}</dd>
-            </div>
-            <div>
-              <dt>Last success</dt>
-              <dd>{formatTime(p.last_success_at)}</dd>
-            </div>
-          </dl>
-          {p.last_error && <p className="error-note">{p.last_error}</p>}
-        </>
-      ) : (
-        <p>No polling settings. Add them in the Polling tab.</p>
-      )}
-    </section>
   );
 }
 function RequestHistory({ task }: { task: Task }) {
@@ -842,7 +778,7 @@ function TaskSettings({
   return (
     <form onSubmit={(e) => void save(e)}>
       <p className="note">
-        Overrides apply to this task. Pending launch requests keep their frozen
+        Changes apply to this task. Pending launch requests keep their frozen
         prompt and settings.
       </p>
       <Field label="Title">
@@ -917,83 +853,45 @@ function Activity({ task }: { task: Task }) {
   );
 }
 function NewTask({
-  templates,
   busy,
   onSave,
 }: {
-  templates: Template[];
   busy: boolean;
   onSave: (input: unknown) => Promise<void>;
 }) {
   const [title, setTitle] = useState(""),
     [description, setDescription] = useState(""),
     [config, setConfig] = useState(emptyConfig()),
-    [templateID, setTemplateID] = useState(""),
     [error, setError] = useState("");
   const submit = async (e: FormEvent) => {
     e.preventDefault();
     try {
-      await onSave(
-        templateID
-          ? { template_id: templateID, column: "todo", title }
-          : { title, description, column: "todo", config },
-      );
-    } catch (e) {
-      setError((e as Error).message);
+      await onSave({ title, description, column: "todo", config });
+    } catch (err) {
+      setError((err as Error).message);
     }
   };
-  const template = templates.find((t) => t.id === templateID);
   return (
     <div className="panel-body">
       <h2>Something to work on</h2>
       <p className="note">New manual tasks start in TODO.</p>
       <form onSubmit={(e) => void submit(e)}>
-        <Field label="Template">
-          <select
-            value={templateID}
-            onChange={(e) => setTemplateID(e.target.value)}
-          >
-            <option value="">Start blank</option>
-            {templates.map((t) => (
-              <option key={t.id} value={t.id}>
-                {t.name}
-              </option>
-            ))}
-          </select>
-        </Field>
         <Field label="Title">
           <input
-            required={!templateID}
+            required
             value={title}
-            placeholder={template?.definition.title || "Give your task a name"}
             onChange={(e) => setTitle(e.target.value)}
+            placeholder="Give your task a name"
           />
         </Field>
-        {template ? (
-          <div className="template-preview">
-            <strong>
-              {template.name} · v{template.version}
-            </strong>
-            <p>
-              {template.definition.description ||
-                "Prompts and execution settings will be copied."}
-            </p>
-            <p className="note">
-              After creation, use the task Settings tab for overrides.
-            </p>
-          </div>
-        ) : (
-          <>
-            <Field label="Description">
-              <textarea
-                rows={3}
-                value={description}
-                onChange={(e) => setDescription(e.target.value)}
-              />
-            </Field>
-            <PromptFields value={config} onChange={setConfig} />
-          </>
-        )}
+        <Field label="Description">
+          <textarea
+            rows={3}
+            value={description}
+            onChange={(e) => setDescription(e.target.value)}
+          />
+        </Field>
+        <PromptFields value={config} onChange={setConfig} />
         {error && (
           <p role="alert" className="error-note">
             {error}
@@ -1007,71 +905,27 @@ function NewTask({
   );
 }
 function NewSource({
-  templates,
   busy,
   onSave,
-  onTemplates,
 }: {
-  templates: Template[];
   busy: boolean;
   onSave: (input: unknown) => Promise<void>;
-  onTemplates: () => void;
 }) {
-  const [title, setTitle] = useState(""),
-    [polling, setPolling] = useState(defaultPolling("pr_review_source")),
-    [error, setError] = useState("");
-  const submit = async (e: FormEvent) => {
-    e.preventDefault();
-    const problem = pollingProblem(polling);
-    if (problem) {
-      setError(problem);
-      return;
-    }
-    try {
-      await onSave({ title, column: "todo", config: emptyConfig(), polling });
-    } catch (e) {
-      setError((e as Error).message);
-    }
-  };
   return (
     <div className="panel-body">
       <h2>Connect a source</h2>
-      <p className="note">
-        Sources are tasks that create other tasks. Start paused, then move to
-        Polling when ready.
-      </p>
-      {!templates.length && (
-        <div className="info-note">
-          Create a task template first.
-          <button className="text-button" onClick={onTemplates}>
-            Manage templates →
-          </button>
-        </div>
-      )}
-      <form onSubmit={(e) => void submit(e)}>
-        <Field label="Source name">
-          <input
-            required
-            value={title}
-            onChange={(e) => setTitle(e.target.value)}
-            placeholder="My assigned PRs"
-          />
-        </Field>
-        <PollingFields
-          value={polling}
-          onChange={setPolling}
-          templates={templates}
-          sourceOnly
-        />
-        {error && (
-          <p role="alert" className="error-note">
-            {error}
-          </p>
-        )}
-        <button className="primary" disabled={busy}>
-          Create paused source
-        </button>
-      </form>
+      <SourceEditor
+        busy={busy}
+        onSave={async (polling, enabled, _version, title) => {
+          await onSave({
+            title,
+            column: enabled ? "polling" : "todo",
+            config: emptyConfig(),
+            polling,
+          });
+          return 1;
+        }}
+      />
     </div>
   );
 }
@@ -1177,221 +1031,5 @@ function AddChat({
         </button>
       </form>
     </div>
-  );
-}
-function TemplateManager({
-  templates,
-  busy,
-  onSave,
-  onDelete,
-}: {
-  templates: Template[];
-  busy: boolean;
-  onSave: (t: Template | undefined, input: unknown) => Promise<Template>;
-  onDelete: (t: Template) => Promise<void>;
-}) {
-  const [selected, setSelected] = useState("new"),
-    [message, setMessage] = useState("");
-  return (
-    <div className="panel-body">
-      <h2>Task templates</h2>
-      <p className="note">
-        Template changes affect future tasks. Existing tasks and launch requests
-        keep their copied settings.
-      </p>
-      <Field label="Template">
-        <select
-          value={selected}
-          onChange={(e) => {
-            setSelected(e.target.value);
-            setMessage("");
-          }}
-        >
-          <option value="new">＋ Create a template</option>
-          {templates.map((t) => (
-            <option value={t.id} key={t.id}>
-              {t.name} · v{t.version}
-            </option>
-          ))}
-        </select>
-      </Field>
-      <TemplateEditor
-        key={selected}
-        template={templates.find((t) => t.id === selected)}
-        templates={templates}
-        busy={busy}
-        onSave={async (t, input) => {
-          try {
-            const saved = await onSave(t, input);
-            setSelected(saved.id);
-            setMessage("Template saved for future tasks.");
-            return saved;
-          } catch (e) {
-            setMessage((e as Error).message);
-            throw e;
-          }
-        }}
-        onDelete={async (t) => {
-          try {
-            await onDelete(t);
-            setSelected("new");
-            setMessage("Template deleted.");
-          } catch (e) {
-            setMessage((e as Error).message);
-          }
-        }}
-      />
-      {message && (
-        <p className="info-note" role="status">
-          {message}
-        </p>
-      )}
-    </div>
-  );
-}
-export function TemplateEditor({
-  template,
-  templates,
-  busy,
-  onSave,
-  onDelete,
-}: {
-  template?: Template;
-  templates: Template[];
-  busy: boolean;
-  onSave: (t: Template | undefined, input: unknown) => Promise<Template>;
-  onDelete: (t: Template) => Promise<void>;
-}) {
-  const [version, setVersion] = useState(template?.version || 0);
-  const [name, setName] = useState(template?.name || ""),
-    [definition, setDefinition] = useState<Definition>(
-      template?.definition || blankDefinition(),
-    ),
-    [child, setChild] = useState(!!template?.definition.polling),
-    [polling, setPolling] = useState<Polling>(
-      template?.definition.polling || {
-        ...defaultPolling(),
-        config: {
-          login: "",
-          pr_id: "{{pr_id}}",
-          author: "{{author}}",
-          conditions: ["new_commit", "all_answered"],
-          interval_seconds: 60,
-        },
-      },
-    ),
-    [error, setError] = useState(""),
-    [confirmDelete, setConfirmDelete] = useState(false);
-  const save = async (e: FormEvent) => {
-    e.preventDefault();
-    if (child) {
-      const problem = pollingProblem(polling, true);
-      if (problem) {
-        setError(problem);
-        return;
-      }
-    }
-    setError("");
-    try {
-      const saved = await onSave(template, {
-        expected_version: version,
-        name,
-        definition: {
-          ...definition,
-          ...(child ? { polling } : { polling: undefined }),
-        },
-      });
-      setVersion(saved.version);
-    } catch (e) {
-      setError((e as Error).message);
-    }
-  };
-  return (
-    <form onSubmit={(e) => void save(e)}>
-      <Field label="Template name">
-        <input
-          required
-          value={name}
-          onChange={(e) => setName(e.target.value)}
-          placeholder="PR review"
-        />
-      </Field>
-      <Field
-        label="Task title"
-        hint="PR variables: {{pr_title}}, {{pr_id}}, {{pr_url}}, {{author}}, {{login}}. Cron: {{date}}, {{scheduled_at}}."
-      >
-        <input
-          required
-          value={definition.title}
-          onChange={(e) =>
-            setDefinition({ ...definition, title: e.target.value })
-          }
-          placeholder="Review PR {{pr_id}}"
-        />
-      </Field>
-      <Field label="Description">
-        <textarea
-          rows={2}
-          value={definition.description}
-          onChange={(e) =>
-            setDefinition({ ...definition, description: e.target.value })
-          }
-        />
-      </Field>
-      <PromptFields
-        value={definition.config}
-        onChange={(config) => setDefinition({ ...definition, config })}
-      />
-      <label className="check-line">
-        <input
-          type="checkbox"
-          checked={child}
-          onChange={(e) => setChild(e.target.checked)}
-        />
-        Default child waiting settings
-      </label>
-      {child && (
-        <div className="child-settings">
-          <PollingFields
-            value={polling}
-            onChange={setPolling}
-            templates={templates}
-            child
-          />
-        </div>
-      )}
-      {error && (
-        <p role="alert" className="error-note">
-          {error}
-        </p>
-      )}
-      <div className="form-actions">
-        <button className="primary" disabled={busy}>
-          {template ? "Save template" : "Create template"}
-        </button>
-        {template && (
-          <button
-            type="button"
-            className="danger-button"
-            onClick={() => setConfirmDelete(!confirmDelete)}
-          >
-            Delete
-          </button>
-        )}
-      </div>
-      {template && confirmDelete && (
-        <div className="error-note">
-          Delete this template? Tasks already created will stay.
-          <button
-            className="danger-button"
-            type="button"
-            disabled={busy}
-            onClick={() => void onDelete({ ...template, version })}
-          >
-            Confirm delete
-          </button>
-        </div>
-      )}
-    </form>
   );
 }

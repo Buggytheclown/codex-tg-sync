@@ -33,10 +33,6 @@ type BoardBackend interface {
 	SetTaskPolling(context.Context, string, model.SetTaskPollingInput) (*model.Task, error)
 	AddChat(context.Context, string, string) (*model.Task, error)
 	ListTaskEvents(context.Context, string) ([]model.TaskEvent, error)
-	ListTaskTemplates(context.Context) ([]model.TaskTemplate, error)
-	CreateTaskTemplate(context.Context, model.SaveTaskTemplateInput) (*model.TaskTemplate, error)
-	UpdateTaskTemplate(context.Context, string, model.SaveTaskTemplateInput) (*model.TaskTemplate, error)
-	DeleteTaskTemplate(context.Context, string, int64) error
 }
 
 type Options struct {
@@ -156,59 +152,6 @@ func registerBoard(mux *http.ServeMux, b BoardBackend, opts Options) {
 				writeError(w, 404, "not found")
 			}
 		})
-		mux.HandleFunc("/v1/task-templates", func(w http.ResponseWriter, r *http.Request) {
-			switch r.Method {
-			case http.MethodGet:
-				value, err := b.ListTaskTemplates(r.Context())
-				if err != nil {
-					boardError(w, err)
-					return
-				}
-				if value == nil {
-					value = []model.TaskTemplate{}
-				}
-				writeJSON(w, 200, value)
-			case http.MethodPost:
-				var input model.SaveTaskTemplateInput
-				if !decodeCommand(w, r, &input) {
-					return
-				}
-				value, err := b.CreateTaskTemplate(r.Context(), input)
-				boardResult(w, 201, value, err)
-			default:
-				writeError(w, 405, "method not allowed")
-			}
-		})
-		mux.HandleFunc("/v1/task-templates/", func(w http.ResponseWriter, r *http.Request) {
-			id := strings.TrimPrefix(r.URL.Path, "/v1/task-templates/")
-			if id == "" || strings.Contains(id, "/") {
-				writeError(w, 404, "not found")
-				return
-			}
-			switch r.Method {
-			case http.MethodPut:
-				var input model.SaveTaskTemplateInput
-				if !decodeCommand(w, r, &input) {
-					return
-				}
-				value, err := b.UpdateTaskTemplate(r.Context(), id, input)
-				boardResult(w, 200, value, err)
-			case http.MethodDelete:
-				var input struct {
-					ExpectedVersion int64 `json:"expected_version"`
-				}
-				if !decodeCommand(w, r, &input) {
-					return
-				}
-				if err := b.DeleteTaskTemplate(r.Context(), id, input.ExpectedVersion); err != nil {
-					boardError(w, err)
-					return
-				}
-				w.WriteHeader(204)
-			default:
-				writeError(w, 405, "method not allowed")
-			}
-		})
 		hub := newBoardHub(b, opts.EventInterval)
 		mux.HandleFunc("/v1/task-events", hub.serve)
 	}
@@ -227,7 +170,7 @@ func boardResult(w http.ResponseWriter, status int, value any, err error) {
 func boardError(w http.ResponseWriter, err error) {
 	status := 500
 	switch {
-	case errors.Is(err, tasks.ErrConflict), errors.Is(err, tasks.ErrTemplateInUse):
+	case errors.Is(err, tasks.ErrConflict):
 		status = 409
 	case errors.Is(err, tasks.ErrInvalid):
 		status = 400
@@ -400,13 +343,9 @@ func (h *boardHub) reconcile(ctx context.Context) {
 	for {
 		callCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 		ts, err := h.backend.ListTasks(callCtx)
-		var templates []model.TaskTemplate
-		if err == nil {
-			templates, err = h.backend.ListTaskTemplates(callCtx)
-		}
 		cancel()
 		if err == nil {
-			data, _ := json.Marshal([]any{ts, templates})
+			data, _ := json.Marshal(ts)
 			hash := sha256.Sum256(data)
 			revision := hex.EncodeToString(hash[:])
 			if revision != last {

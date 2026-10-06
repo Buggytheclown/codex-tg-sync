@@ -1073,20 +1073,28 @@ form > button {
 .timeline small {
   font-size: 9px;
 }
-.template-preview {
-  border: 1px solid #e0ead6;
-  border-radius: 6px;
-  padding: 14px;
-  margin: 20px 0;
-  font-size: 11px;
-  color: #7e946c;
-  line-height: 1.8;
+.source-section {
+  margin-bottom: 26px;
 }
-.template-preview strong {
-  font-size: 11px;
+.source-section + .source-section {
+  border-top: 1px solid var(--border);
+  padding-top: 22px;
 }
-.template-preview p {
-  margin-top: 10px;
+.source-section h3 {
+  color: #547247;
+  font-size: 13px;
+  margin-bottom: 14px;
+}
+.source-state {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+  font-size: 12px;
+}
+.source-section > .section-content {
+  padding: 0;
 }
 @media (min-width: 1700px) {
   .app {

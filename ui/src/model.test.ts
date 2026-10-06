@@ -18,8 +18,7 @@ const task = (extra: Partial<Task> = {}): Task => ({
   thread_id: "",
   source_url: "",
   source_key: "",
-  template_id: "",
-  template_version: 0,
+  source_task_id: "",
   config: emptyConfig(),
   version: 1,
   created_at: "",
@@ -65,7 +64,7 @@ describe("card states", () => {
     };
     expect(pollingProblem(p)).toContain("at least one");
   });
-  it("allows template variables only in template child wait", () => {
+  it("allows source variables only in child waiting defaults", () => {
     const p = defaultPolling();
     p.config = {
       login: "me",
@@ -95,4 +94,70 @@ describe("card states", () => {
       "https://example.test/review/123",
     );
   });
+});
+
+it("requires a self-contained child definition for source polling", () => {
+  const p = defaultPolling("pr_review_source");
+  p.config = { login: "reviewer", interval_seconds: 60 };
+  expect(pollingProblem(p)).toContain("title");
+  p.action.child_definition = {
+    title: "Review {{pr_id}}",
+    description: "",
+    config: { ...emptyConfig(), initial_prompt: "Review it" },
+  };
+  expect(pollingProblem(p)).toBe("");
+});
+
+it("rejects recursive source definitions and repeat waiting", () => {
+  const p = defaultPolling("pr_review_source");
+  p.config = { login: "reviewer", interval_seconds: 60 };
+  p.action.child_definition = {
+    title: "Child",
+    description: "",
+    config: { ...emptyConfig(), initial_prompt: "Work" },
+    polling: defaultPolling("cron"),
+  };
+  expect(pollingProblem(p)).toContain("one PR once");
+  const wait = defaultPolling();
+  wait.config = {
+    pr_id: "0",
+    conditions: ["new_commit"],
+    interval_seconds: 60,
+  };
+  expect(pollingProblem(wait)).toContain("numeric");
+  wait.config.pr_id = "123";
+  wait.mode = "repeat";
+  expect(pollingProblem(wait)).toContain("once");
+});
+
+it("requires explicit PR coordinates when a source uses a schedule", () => {
+  const p = defaultPolling("cron");
+  p.action.child_definition = {
+    title: "Scheduled work",
+    description: "",
+    config: {
+      ...emptyConfig(),
+      initial_prompt: "Work",
+      continuation_prompt: "Follow up",
+    },
+    polling: {
+      ...defaultPolling(),
+      config: {
+        pr_id: "{{pr_id}}",
+        author: "{{author}}",
+        login: "reviewer",
+        conditions: ["new_commit"],
+        interval_seconds: 60,
+      },
+    },
+  };
+  expect(pollingProblem(p)).toContain("explicit positive PR ID");
+  const wait = p.action.child_definition.polling!;
+  wait.config.pr_id = "123";
+  expect(pollingProblem(p)).toContain("reviewer or author");
+  wait.config.author = "";
+  wait.config.login = "{{login}}";
+  expect(pollingProblem(p)).toContain("reviewer or author");
+  wait.config.login = "reviewer";
+  expect(pollingProblem(p)).toBe("");
 });

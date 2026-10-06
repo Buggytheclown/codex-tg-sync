@@ -155,7 +155,7 @@ All sources enter the same durable request lifecycle. The Requests topic shows a
 
 PR and cron sources live in the local task board's SQLite database. Existing cron schedules from `~/.codex-tg/cron.json` are imported once; edit them on the board afterward.
 
-Arcanum polling uses the authenticated `ya tool gena-arcanum-cli`. Assigned PRs authored by the configured reviewer are skipped. Sources create one board task per PR cycle, with a copied template and Telegram launch request. New board requests require `Start`; legacy requests retain their previous policy. Moving a task to Polling enables its prepared wait. A matching event returns it to Inbox and can request continuation of the same chat.
+Arcanum polling uses the authenticated `ya tool gena-arcanum-cli`. Assigned PRs authored by the configured reviewer are skipped. Sources create one board task per PR cycle, with a copied source-owned task definition and Telegram launch request. New board requests require `Start`; legacy requests retain their previous policy. Moving a task to Polling enables its prepared wait. A matching event returns it to Inbox and can request continuation of the same chat.
 
 ## Local task board
 
@@ -174,7 +174,7 @@ Set `CTR_GO_CONTROL_API_LISTEN` to a loopback address such as `127.0.0.1:8765`, 
 
 After each production UI update, rebuild and copy `dist/.` into the configured static directory again, then refresh the browser. Building alone does not update the installed UI. See [UI run instructions](ui/README.md) for validation and development.
 
-Use templates for initial/continuation prompts and default child waits. Template edits affect future tasks. Moving to TODO/Done cancels unstarted requests; it does not interrupt an active turn. A busy chat requires another explicit Start after it completes. The explicit [codex-task skill](skills/codex-task/SKILL.md) adds the current or linked chat to TODO without starting it.
+Each source owns the task it creates: title, initial/continuation prompts, CWD, execution settings and optional child wait. Edit these alongside the source trigger in one panel. Source edits affect future tasks; existing tasks and pending requests keep their copied settings. Moving to TODO/Done cancels unstarted requests; it does not interrupt an active turn. A busy chat requires another explicit Start after it completes. The explicit [codex-task skill](skills/codex-task/SKILL.md) adds the current or linked chat to TODO without starting it.
 
 For UI development, run `npm run dev` in `ui/`; its proxy forwards API requests to the daemon. Configure the explicit loopback `CTR_GO_UI_DEV_ORIGIN` when using a different browser origin. Go changes require a normal rebuild/restart, preserving Sync and tasks; no `/sync off`/`on` cycle is needed. See [ADR-035](docs/adr/ADR-035-local-task-board.md) and the [API contract](docs/process/local-task-board-api.md).
 

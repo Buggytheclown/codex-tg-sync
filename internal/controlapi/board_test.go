@@ -55,16 +55,6 @@ func (b *fakeBoard) AddChat(context.Context, string, string) (*model.Task, error
 func (b *fakeBoard) ListTaskEvents(context.Context, string) ([]model.TaskEvent, error) {
 	return []model.TaskEvent{}, nil
 }
-func (b *fakeBoard) ListTaskTemplates(context.Context) ([]model.TaskTemplate, error) {
-	return []model.TaskTemplate{}, nil
-}
-func (b *fakeBoard) CreateTaskTemplate(context.Context, model.SaveTaskTemplateInput) (*model.TaskTemplate, error) {
-	return &model.TaskTemplate{ID: "template-1"}, nil
-}
-func (b *fakeBoard) UpdateTaskTemplate(context.Context, string, model.SaveTaskTemplateInput) (*model.TaskTemplate, error) {
-	return &model.TaskTemplate{ID: "template-1"}, nil
-}
-func (b *fakeBoard) DeleteTaskTemplate(context.Context, string, int64) error { return nil }
 
 func boardRequest(handler http.Handler, method, path, body, host, origin, contentType string) *httptest.ResponseRecorder {
 	r := httptest.NewRequest(method, path, strings.NewReader(body))
@@ -116,7 +106,7 @@ func TestBoardConflictAndInvalidErrors(t *testing.T) {
 	for _, c := range []struct {
 		err    error
 		status int
-	}{{tasks.ErrConflict, 409}, {tasks.ErrInvalid, 400}, {tasks.ErrNotFound, 404}, {tasks.ErrTemplateInUse, 409}} {
+	}{{tasks.ErrConflict, 409}, {tasks.ErrInvalid, 400}, {tasks.ErrNotFound, 404}} {
 		h := NewHandler("test", &fakeBackend{}, Options{Board: &fakeBoard{err: c.err}, ListenAddress: "localhost:8099"})
 		w := boardRequest(h, "POST", "/v1/tasks/task-1/move", `{"expected_version":2,"column":"done"}`, "localhost:8099", "", "application/json")
 		if w.Code != c.status {
@@ -202,11 +192,23 @@ func TestBoardSSEInvalidatesAfterMutation(t *testing.T) {
 }
 func TestBoardListsAreArrays(t *testing.T) {
 	h := NewHandler("test", &fakeBackend{}, Options{Board: &fakeBoard{}})
-	for _, path := range []string{"/v1/tasks", "/v1/task-templates", "/v1/tasks/task-1/events"} {
+	for _, path := range []string{"/v1/tasks", "/v1/tasks/task-1/events"} {
 		w := boardRequest(h, "GET", path, "", "localhost:8099", "", "")
 		var array []json.RawMessage
 		if err := json.Unmarshal(w.Body.Bytes(), &array); err != nil {
 			t.Fatalf("%s: %s %v", path, w.Body.String(), err)
+		}
+	}
+}
+
+func TestTemplateAPIIsRemoved(t *testing.T) {
+	h := NewHandler("test", &fakeBackend{}, Options{Board: &fakeBoard{}, ListenAddress: "127.0.0.1:8765"})
+	for _, path := range []string{"/v1/task-templates", "/v1/task-templates/old"} {
+		r := httptest.NewRequest(http.MethodGet, "http://127.0.0.1:8765"+path, nil)
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, r)
+		if w.Code != http.StatusNotFound {
+			t.Fatalf("retired route %s: %d", path, w.Code)
 		}
 	}
 }

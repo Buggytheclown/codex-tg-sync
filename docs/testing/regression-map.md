@@ -195,14 +195,15 @@ Configuration must not reintroduce retired chat allowlists, observer intervals, 
 
 ## Local task board
 
-ADR-035 adds database-owned PR/cron sources, templates and the local browser UI.
+ADR-035 adds database-owned PR/cron sources, owned child definitions and the local browser UI.
 
-- `internal/storage/store_tasks_test.go` and task import tests cover fresh/old databases, template snapshots, optimistic versions, generation fencing, atomic events/requests, legacy barriers, cancellation and chat binding.
+- `internal/storage/store_task_source_migration_test.go` covers atomic/idempotent legacy template-reference upgrade, preservation of four definitions, 82 historical configs, frozen requests and provenance.
+- `internal/storage/store_tasks_test.go` and task import tests cover fresh/old databases, source definition snapshots, optimistic versions, generation fencing, atomic events/requests, legacy barriers, cancellation and chat binding.
 - `internal/polling/*_test.go` covers ANY conditions, empty/draft/self/nested comments, all-resolved and status edges, published heads, cron occurrence identity, lateness, resume stabilization and partial read failures.
 - `internal/daemon/board_launch_test.go` covers same-thread continuation, busy/missing chats, move versus launch, and projection without Telegram topics or enabled Sync.
 - `internal/controlapi/board_test.go` covers exact Host/Origin and JSON boundaries, conflict responses, static/API separation and SSE invalidation.
 - `cmd/ctr-go/board_test.go` covers one-time legacy import and sole runner ownership; UI tests/build live under `ui/`.
-- Browser acceptance: compact collapsible sources, four columns, right details, template versus instance edits, invalid Polling move, add-chat idempotency, task deep link, execution badge and reconnect.
+- Browser acceptance: compact collapsible sources, four columns, right details, source versus existing child edits, invalid Polling move, add-chat idempotency, task deep link, execution badge and reconnect.
 
 Run `npm ci`, `npm test` and `npm run build` in `ui/`. Include polling/controlapi in targeted race tests. Live QA uses dedicated personal test tasks/chats; it must not post or change user PRs.
 

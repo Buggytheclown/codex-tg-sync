@@ -407,11 +407,9 @@ func (boardNoopChecker) Check(_ context.Context, p model.TaskPolling, _ time.Tim
 func TestBoardPollerTypeEditPreservesOneHealthEntryAndTitle(t *testing.T) {
 	s := newTestService(t)
 	ctx := context.Background()
-	tmpl, err := s.CreateTaskTemplate(ctx, model.SaveTaskTemplateInput{Name: "source template", Definition: model.TaskTemplateDefinition{Title: "new task", Config: model.TaskConfig{InitialPrompt: "prompt"}}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	p := model.TaskPolling{Type: polling.TypeReview, Mode: model.PollingRepeat, Config: json.RawMessage(`{"login":"reviewer"}`), Action: model.TaskPollingAction{Type: model.PollingCreateTask, TemplateID: tmpl.ID}}
+	def := model.TaskDefinition{Title: "new task", Config: model.TaskConfig{InitialPrompt: "prompt"}}
+
+	p := model.TaskPolling{Type: polling.TypeReview, Mode: model.PollingRepeat, Config: json.RawMessage(`{"login":"reviewer"}`), Action: model.TaskPollingAction{Type: model.PollingCreateTask, ChildDefinition: &def}}
 	task, err := s.CreateTask(ctx, model.CreateTaskInput{Title: "My source", Column: model.TaskPollingColumn, Polling: &p})
 	if err != nil {
 		t.Fatal(err)

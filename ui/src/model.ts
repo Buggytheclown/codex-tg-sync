@@ -34,7 +34,7 @@ export type Polling = {
   type: string;
   mode: string;
   config: PollConfig;
-  action: { type: string; template_id?: string };
+  action: { type: string; child_definition?: Definition };
   cursor?: unknown;
   generation?: number;
   next_check_at?: string;
@@ -60,8 +60,7 @@ export type Task = {
   thread_id: string;
   source_url: string;
   source_key: string;
-  template_id: string;
-  template_version: number;
+  source_task_id?: string;
   config: TaskConfig;
   version: number;
   created_at: string;
@@ -79,13 +78,6 @@ export type Definition = {
   description: string;
   config: TaskConfig;
   polling?: Polling;
-};
-export type Template = {
-  id: string;
-  name: string;
-  version: number;
-  definition: Definition;
-  updated_at: string;
 };
 export type TaskEvent = {
   id: string;
@@ -129,7 +121,17 @@ export const defaultPolling = (type = "pr_wait"): Polling => ({
             : {}),
           interval_seconds: 60,
         },
-  action: { type: type === "pr_wait" ? "return_task" : "create_task" },
+  action:
+    type === "pr_wait"
+      ? { type: "return_task" }
+      : {
+          type: "create_task",
+          child_definition: {
+            title: "",
+            description: "",
+            config: emptyConfig(),
+          },
+        },
 });
 export const isSource = (task: Task) =>
   task.polling?.action.type === "create_task";
@@ -145,7 +147,7 @@ export const executionLabel = (task: Task): string => {
   if (status === "failed" || status === "interrupted") return "Completed";
   return "";
 };
-export function pollingProblem(p?: Polling, template = false): string {
+export function pollingProblem(p?: Polling, child = false): string {
   if (!p) return "Add a polling configuration before moving to Polling.";
   if (
     !["pr_review_source", "pr_changes_source", "pr_wait", "cron"].includes(
@@ -156,8 +158,38 @@ export function pollingProblem(p?: Polling, template = false): string {
   if (!["once", "repeat"].includes(p.mode)) return "Choose a polling mode.";
   if (!["return_task", "resume_task", "create_task"].includes(p.action.type))
     return "Choose an action.";
-  if (p.action.type === "create_task" && !p.action.template_id)
-    return "Choose the template for created tasks.";
+  if (
+    child &&
+    (p.type !== "pr_wait" ||
+      p.mode !== "once" ||
+      !["return_task", "resume_task"].includes(p.action.type))
+  )
+    return "Child waiting settings must wait on one PR once.";
+  if (p.action.type === "create_task") {
+    const d = p.action.child_definition;
+    if (!d?.title.trim()) return "Enter the title for created tasks.";
+    if (!d.config.initial_prompt.trim())
+      return "Enter the prompt for created tasks.";
+    if (d.polling) {
+      if (p.type === "cron") {
+        if (!/^[1-9]\d*$/.test(d.polling.config.pr_id || ""))
+          return "Scheduled repeat work needs an explicit positive PR ID. Enter one or turn Repeat work off.";
+        if (
+          [d.polling.config.login, d.polling.config.author].some((value) =>
+            /\{\{|\}\}/.test(value || ""),
+          )
+        )
+          return "Scheduled repeat work cannot use PR placeholders for the reviewer or author. Enter real values (author may be blank), or turn Repeat work off.";
+      }
+      const problem = pollingProblem(d.polling, true);
+      if (problem) return problem;
+      if (
+        d.polling.action.type === "resume_task" &&
+        !d.config.continuation_prompt.trim()
+      )
+        return "Enter a continuation prompt for repeat work.";
+    }
+  }
   if (p.type === "cron") {
     if (!p.config.cron?.trim() || !p.config.timezone?.trim())
       return "Enter a cron schedule and timezone.";
@@ -177,8 +209,14 @@ export function pollingProblem(p?: Polling, template = false): string {
       return "Enter a check interval between 10 and 86400 seconds.";
     if (p.type === "pr_wait") {
       if (
+        p.mode !== "once" ||
+        !["return_task", "resume_task"].includes(p.action.type)
+      )
+        return "PR waiting returns or resumes this task once.";
+      if (
         !p.config.pr_id?.trim() ||
-        (!template && !/^\d+$/.test(p.config.pr_id))
+        (!/^[1-9]\d*$/.test(p.config.pr_id) &&
+          !(child && p.config.pr_id === "{{pr_id}}"))
       )
         return "Enter the numeric PR ID.";
       if (!p.config.conditions?.length) return "Select at least one condition.";
