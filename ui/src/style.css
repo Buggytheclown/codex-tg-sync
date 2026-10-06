@@ -358,6 +358,13 @@ small {
   border-radius: 5px;
   background: #eaf0e2;
 }
+.board-tools {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 8px;
+}
 .search {
   display: flex;
   align-items: center;
@@ -388,9 +395,12 @@ small {
   font-size: 9px;
   color: #a9b0a2;
 }
+.board-columns.done-hidden {
+  --board-column-count: 3;
+}
 .board-columns {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(var(--board-column-count, 4), minmax(0, 1fr));
   gap: 13px;
   flex: 1;
   min-height: 380px;

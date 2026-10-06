@@ -84,6 +84,13 @@ export function App() {
     [query, setQuery] = useState(""),
     [error, setError] = useState(""),
     [info, setInfo] = useState("");
+  const [showDone, setShowDone] = useState(() => {
+    try {
+      return window.localStorage.getItem("codex-tg.show-done") === "true";
+    } catch {
+      return false;
+    }
+  });
   const [activationRequested, setActivationRequested] = useState(false);
   const [connection, setConnection] = useState("Connecting"),
     [loaded, setLoaded] = useState(false),
@@ -218,6 +225,7 @@ export function App() {
         : "Task created. Launch requests are started in Telegram.",
     );
   };
+  const visibleColumns = columns.filter((column) => showDone || column !== "done");
   const sources = tasks.filter(isSource),
     cards = tasks.filter(
       (t) =>
@@ -328,16 +336,32 @@ export function App() {
               </span>
             </h1>
           </div>
-          <label className="search">
-            <span aria-hidden="true">⌕</span>
-            <input
-              aria-label="Search tasks"
-              placeholder="Find a task…"
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-            />
-            <kbd>⌕</kbd>
-          </label>
+          <div className="board-tools">
+            <label className="search">
+              <span aria-hidden="true">⌕</span>
+              <input
+                aria-label="Search tasks"
+                placeholder="Find a task…"
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+              />
+              <kbd>⌕</kbd>
+            </label>
+            <button
+              aria-pressed={showDone}
+              onClick={() => {
+                const visible = !showDone;
+                setShowDone(visible);
+                try {
+                  window.localStorage.setItem("codex-tg.show-done", String(visible));
+                } catch {
+                  // The toggle still works when browser storage is unavailable.
+                }
+              }}
+            >
+              {showDone ? "Hide Done" : "Show Done"}
+            </button>
+          </div>
         </div>
         {error && (
           <div role="alert" className="error-banner">
@@ -345,8 +369,8 @@ export function App() {
             <button onClick={() => void refresh()}>Refresh</button>
           </div>
         )}
-        <div className="board-columns">
-          {columns.map((column) => {
+        <div className={`board-columns${showDone ? "" : " done-hidden"}`}>
+          {visibleColumns.map((column) => {
             const list = cards
               .filter((t) => t.column === column)
               .sort(
