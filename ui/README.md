@@ -7,17 +7,31 @@ read model after commands, SSE invalidations, reconnects, window focus, and a
 
 ## Production
 
+Run from `ui/`:
+
 ```sh
 npm ci
 npm test
 npm run build
+mkdir -p "$HOME/.codex-tg/ui"
+cp -R dist/. "$HOME/.codex-tg/ui/"
 ```
 
 Configure the daemon with `CTR_GO_CONTROL_API_LISTEN=127.0.0.1:8765` and an explicit
-`CTR_GO_UI_STATIC_DIR` pointing to this directory's `dist` subdirectory.
+`CTR_GO_UI_STATIC_DIR` pointing to the expanded absolute path of
+`$HOME/.codex-tg/ui`, then restart it. Set this in the daemon's configuration;
+an export in an interactive shell does not configure an existing launchd service.
+Install assets in the daemon's application directory because macOS privacy
+restrictions can prevent launchd from reading a checkout under Documents while
+the API still responds. Do not rely on the service's working directory or on
+literal `$HOME` expansion inside a configuration value.
 Open [the local board](http://127.0.0.1:8765). A missing build produces an explicit
 503 instruction. Unknown `/v1` routes and missing assets never return the SPA.
 No machine-specific paths belong in the repository.
+
+For every production UI update, run the build and copy commands again, then
+refresh the browser. `npm run build` only changes the checkout's `dist`; the
+daemon serves the installed copy. UI asset updates do not require a Go rebuild.
 
 ## Development
 

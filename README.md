@@ -161,7 +161,18 @@ Arcanum polling uses the authenticated `ya tool gena-arcanum-cli`. Assigned PRs 
 
 The board has a collapsible source list on the left, Inbox / TODO / Polling / Done in the center, and card details on the right. Running/completed describes the chat pass, independently of the column. Launch approval stays in Telegram; discussion and result review stay in Codex.
 
-Build the frontend with `npm ci` and `npm run build` in `ui/`. Set `CTR_GO_CONTROL_API_LISTEN` to a loopback address such as `127.0.0.1:8765`, and `CTR_GO_UI_STATIC_DIR` to the absolute path of `ui/dist`, then restart the daemon and open that address. The static path must not depend on the service's working directory.
+Build and install the frontend from `ui/`:
+
+```sh
+npm ci
+npm run build
+mkdir -p "$HOME/.codex-tg/ui"
+cp -R dist/. "$HOME/.codex-tg/ui/"
+```
+
+Set `CTR_GO_CONTROL_API_LISTEN` to a loopback address such as `127.0.0.1:8765`, and `CTR_GO_UI_STATIC_DIR` to the expanded absolute path of `$HOME/.codex-tg/ui` in the daemon's configuration. Restart the daemon and open that address. Keep installed assets in the daemon's application directory: macOS privacy restrictions can prevent a launchd service from reading a checkout under Documents even when API requests work. The static path must not depend on the service's working directory.
+
+After each production UI update, rebuild and copy `dist/.` into the configured static directory again, then refresh the browser. Building alone does not update the installed UI. See [UI run instructions](ui/README.md) for validation and development.
 
 Use templates for initial/continuation prompts and default child waits. Template edits affect future tasks. Moving to TODO/Done cancels unstarted requests; it does not interrupt an active turn. A busy chat requires another explicit Start after it completes. The explicit [codex-task skill](skills/codex-task/SKILL.md) adds the current or linked chat to TODO without starting it.
 
