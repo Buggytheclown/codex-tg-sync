@@ -258,6 +258,7 @@ func (s *Service) dispatchSyncMessage(ctx context.Context, topic model.SyncTopic
 	}
 	if _, err := lease.Process.ThreadResume(ctx, topic.ThreadID, cwd); err != nil {
 		delete(s.syncLeases, topic.ThreadID)
+		delete(s.boardContinuationLeases, topic.ThreadID)
 		if isSyncNoRolloutError(err) {
 			_ = s.syncWriter.Abort(lease)
 			draft := model.SyncTopicDraft{SessionID: topic.SessionID, ChatID: topic.ChatID, TopicID: topic.TopicID,
@@ -314,6 +315,7 @@ func (s *Service) dispatchSyncMessage(ctx context.Context, topic model.SyncTopic
 			return &DirectResponse{Text: "Sync dispatch outcome is unknown. This Telegram message will never be replayed automatically."}, nil
 		}
 		delete(s.syncLeases, topic.ThreadID)
+		delete(s.boardContinuationLeases, topic.ThreadID)
 		_ = s.syncWriter.Abort(lease)
 		_ = s.store.MarkSyncDispatchFailure(ctx, receipt, model.SyncReceiptRejected, model.SyncTurnTerminal, lease.Generation)
 		return &DirectResponse{Text: fmt.Sprintf("Sync rejected the prompt before dispatch: %v", turnErr)}, nil
@@ -691,6 +693,7 @@ func (s *Service) reconcileSync(ctx context.Context) {
 	s.syncMu.Lock()
 	defer s.syncMu.Unlock()
 	_, _ = s.reconcileSyncLocked(ctx)
+	s.reconcileBoardThreadsLocked(ctx)
 }
 
 type reconcileSyncResult struct {
@@ -1150,7 +1153,7 @@ func (s *Service) handleSyncPollEvent(ctx context.Context, process Session, even
 		return
 	}
 	state, err := s.store.GetSyncState(ctx)
-	if err != nil || (state.State != model.SyncStateActive && state.State != model.SyncStateDraining) {
+	if err != nil {
 		s.syncMu.Unlock()
 		return
 	}
@@ -1159,8 +1162,12 @@ func (s *Service) handleSyncPollEvent(ctx context.Context, process Session, even
 		s.syncMu.Unlock()
 		return
 	}
-	if topic == nil {
+	if topic == nil || (state.State != model.SyncStateActive && state.State != model.SyncStateDraining) {
+		tracked := s.boardTracksThreadLocked(ctx, threadID)
 		s.syncMu.Unlock()
+		if tracked && syncEventInvalidatesSnapshot(event) {
+			s.markSyncThreadDirty(threadID)
+		}
 		if state.State == model.SyncStateActive && syncEventMayDiscoverThread(event) {
 			s.wakeSyncReconcile()
 		}
@@ -1204,13 +1211,21 @@ func (s *Service) handleSyncWriterEvent(ctx context.Context, process Session, ev
 		return
 	}
 	state, err := s.store.GetSyncState(ctx)
-	if err != nil || (state.State != model.SyncStateActive && state.State != model.SyncStateDraining) {
+	if err != nil {
 		s.syncMu.Unlock()
 		return
 	}
 	topic, err := s.store.GetActiveSyncTopicByThread(ctx, state.SessionID, threadID)
-	if err != nil || topic == nil || topic.WriterGeneration != generation {
+	if err != nil {
 		s.syncMu.Unlock()
+		return
+	}
+	if topic == nil || topic.WriterGeneration != generation || (state.State != model.SyncStateActive && state.State != model.SyncStateDraining) {
+		tracked := s.boardTracksThreadLocked(ctx, threadID)
+		s.syncMu.Unlock()
+		if tracked && syncEventInvalidatesSnapshot(event) {
+			s.markSyncThreadDirty(threadID)
+		}
 		return
 	}
 	if eventTurnID := syncEventTurnID(event); eventTurnID != "" && topic.ActiveTurnID != "" && eventTurnID != topic.ActiveTurnID {
@@ -1339,38 +1354,39 @@ func (s *Service) reconcileDirtySyncThreads(ctx context.Context) {
 func (s *Service) reconcileSyncThread(ctx context.Context, threadID string) {
 	s.syncMu.Lock()
 	defer s.syncMu.Unlock()
-	if err := s.syncAccessErrorLocked(ctx); err != nil {
-		return
-	}
 	state, err := s.store.GetSyncState(ctx)
-	if err != nil || (state.State != model.SyncStateActive && state.State != model.SyncStateDraining) {
+	if err != nil {
 		return
 	}
 	topic, err := s.store.GetActiveSyncTopicByThread(ctx, state.SessionID, threadID)
-	if err != nil || topic == nil {
+	if err != nil {
 		return
 	}
-	var session Session
-	if lease, ok := s.syncLeases[threadID]; ok && lease.Generation == topic.WriterGeneration {
+	topicEnabled := topic != nil && (state.State == model.SyncStateActive || state.State == model.SyncStateDraining) && s.syncAccessErrorLocked(ctx) == nil
+	if !topicEnabled && !s.boardTracksThreadLocked(ctx, threadID) {
+		return
+	}
+	s.mu.RLock()
+	poll, connected := s.poll, s.pollConnected
+	s.mu.RUnlock()
+	var session Session = poll
+	if lease, ok := s.syncLeases[threadID]; ok {
 		session = lease.Process
-	} else {
-		s.mu.RLock()
-		poll, connected := s.poll, s.pollConnected
-		s.mu.RUnlock()
-		if !connected {
-			return
-		}
-		session = poll
 	}
-	if session == nil {
+	if session == nil || (session == poll && !connected) {
 		return
 	}
-	current, err := readLatestSyncSnapshot(ctx, session, threadID)
+	current, err := readAuthoritativeSyncSnapshot(ctx, session, threadID)
 	if err != nil {
 		s.wakeSyncReconcile()
 		return
 	}
-	s.processSyncSnapshotLocked(ctx, state, s.getSyncForum(), *topic, current, "sync_event_read")
+	if topicEnabled {
+		s.processSyncSnapshotLocked(ctx, state, s.getSyncForum(), *topic, current, "sync_event_read")
+	} else {
+		s.processBoardSnapshotLocked(ctx, current)
+	}
+	s.releaseBoardContinuationLeaseLocked(ctx, current)
 }
 
 func (s *Service) processSyncSnapshotLocked(ctx context.Context, state model.SyncState, forum SyncForum, topic model.SyncTopic, current appserver.ThreadReadSnapshot, operation string) {
@@ -1423,6 +1439,9 @@ func (s *Service) processSyncSnapshotLocked(ctx context.Context, state model.Syn
 		topic.StatusTurnID, topic.LastFinalFP = current.LatestTurnID, current.LatestFinalFP
 	}
 	s.queueExternalReplyFromSnapshot(ctx, current)
+	if forum == nil {
+		s.persistSyncSnapshot(ctx, topic, current)
+	}
 	if forum != nil {
 		s.mu.RLock()
 		started := s.started
@@ -1435,6 +1454,7 @@ func (s *Service) processSyncSnapshotLocked(ctx context.Context, state model.Syn
 		}
 	}
 	s.completeSyncTurnLocked(ctx, state, topic, current)
+	s.releaseBoardContinuationLeaseLocked(ctx, current)
 }
 
 func (s *Service) completeSyncTurnLocked(ctx context.Context, state model.SyncState, topic model.SyncTopic, current appserver.ThreadReadSnapshot) {
@@ -1454,6 +1474,7 @@ func (s *Service) releaseSyncTurnLeaseLocked(ctx context.Context, state model.Sy
 	}
 	_ = s.store.ExpireSyncCallbackRoutes(ctx, topic.ThreadID, turnID)
 	delete(s.syncLeases, topic.ThreadID)
+	delete(s.boardContinuationLeases, topic.ThreadID)
 	if err := s.syncWriter.MarkTerminal(lease); err != nil {
 		return false
 	}

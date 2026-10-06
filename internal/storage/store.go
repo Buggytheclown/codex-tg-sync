@@ -9,6 +9,7 @@ import (
 	"reflect"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/mideco-tech/codex-tg/internal/model"
@@ -17,7 +18,10 @@ import (
 )
 
 type Store struct {
-	db *sql.DB
+	db                    *sql.DB
+	taskValidatorMu       sync.RWMutex
+	taskValidator         func(model.TaskPolling) error
+	taskExecutionDefaults model.TaskExecutionSettings
 }
 
 var telegramBotCredentialPattern = regexp.MustCompile(`bot[0-9]+:[A-Za-z0-9_-]+`)
@@ -280,6 +284,9 @@ func (s *Store) initialize(ctx context.Context) error {
 	if err := s.ensureColumn(ctx, "sync_topics", "pending_telegram_turn_id", `ALTER TABLE sync_topics ADD COLUMN pending_telegram_turn_id TEXT`); err != nil {
 		return err
 	}
+	if err := s.ensureColumn(ctx, "sync_message_receipts", "turn_id", `ALTER TABLE sync_message_receipts ADD COLUMN turn_id TEXT`); err != nil {
+		return err
+	}
 	externalColumns := []struct {
 		name string
 		sql  string
@@ -300,6 +307,12 @@ func (s *Store) initialize(ctx context.Context) error {
 		{"reply_attempts", `ALTER TABLE external_launch_requests ADD COLUMN reply_attempts INTEGER NOT NULL DEFAULT 0`},
 		{"reply_available_at", `ALTER TABLE external_launch_requests ADD COLUMN reply_available_at TEXT`},
 		{"reply_error", `ALTER TABLE external_launch_requests ADD COLUMN reply_error TEXT`},
+		{"task_id", `ALTER TABLE external_launch_requests ADD COLUMN task_id TEXT`},
+		{"trigger_event_id", `ALTER TABLE external_launch_requests ADD COLUMN trigger_event_id TEXT`},
+		{"target_thread_id", `ALTER TABLE external_launch_requests ADD COLUMN target_thread_id TEXT`},
+		{"approval_policy", `ALTER TABLE external_launch_requests ADD COLUMN approval_policy TEXT`},
+		{"approvals_reviewer", `ALTER TABLE external_launch_requests ADD COLUMN approvals_reviewer TEXT`},
+		{"sandbox_mode", `ALTER TABLE external_launch_requests ADD COLUMN sandbox_mode TEXT`},
 		{"model", `ALTER TABLE external_launch_requests ADD COLUMN model TEXT`},
 		{"reasoning_effort", `ALTER TABLE external_launch_requests ADD COLUMN reasoning_effort TEXT`},
 	}
@@ -334,7 +347,7 @@ func (s *Store) initialize(ctx context.Context) error {
 	)`); err != nil {
 		return err
 	}
-	return nil
+	return s.initializeTasks(ctx)
 }
 
 func (s *Store) ensureColumn(ctx context.Context, tableName, columnName, alterSQL string) error {

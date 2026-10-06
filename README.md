@@ -153,9 +153,19 @@ All sources enter the same durable request lifecycle. The Requests topic shows a
 - `/requests` for active, non-closed requests and their status.
 - `/pollers` for enabled pollers, last attempt/success, consecutive failures, and current activity.
 
-Cron schedules live in `~/.codex-tg/cron.json`.
+PR and cron sources live in the local task board's SQLite database. Existing cron schedules from `~/.codex-tg/cron.json` are imported once; edit them on the board afterward.
 
-Arcanum polling uses the authenticated `ya tool gena-arcanum-cli`. Assigned PRs authored by the configured reviewer are skipped. Other assigned PRs require `Start`, unless their authors are listed in `CTR_GO_ARCANUM_REVIEW_AUTO_START_AUTHORS`. The same setting also polls the reviewer's own open, published PRs in `Waiting for changes` and automatically starts one Codex task per PR to summarize the feedback after its Requests card is visible.
+Arcanum polling uses the authenticated `ya tool gena-arcanum-cli`. Assigned PRs authored by the configured reviewer are skipped. Sources create one board task per PR cycle, with a copied template and Telegram launch request. New board requests require `Start`; legacy requests retain their previous policy. Moving a task to Polling enables its prepared wait. A matching event returns it to Inbox and can request continuation of the same chat.
+
+## Local task board
+
+The board has a collapsible source list on the left, Inbox / TODO / Polling / Done in the center, and card details on the right. Running/completed describes the chat pass, independently of the column. Launch approval stays in Telegram; discussion and result review stay in Codex.
+
+Build the frontend with `npm ci` and `npm run build` in `ui/`. Set `CTR_GO_CONTROL_API_LISTEN` to a loopback address such as `127.0.0.1:8765`, and `CTR_GO_UI_STATIC_DIR` to the absolute path of `ui/dist`, then restart the daemon and open that address. The static path must not depend on the service's working directory.
+
+Use templates for initial/continuation prompts and default child waits. Template edits affect future tasks. Moving to TODO/Done cancels unstarted requests; it does not interrupt an active turn. A busy chat requires another explicit Start after it completes. The explicit [codex-task skill](skills/codex-task/SKILL.md) adds the current or linked chat to TODO without starting it.
+
+For UI development, run `npm run dev` in `ui/`; its proxy forwards API requests to the daemon. Configure the explicit loopback `CTR_GO_UI_DEV_ORIGIN` when using a different browser origin. Go changes require a normal rebuild/restart, preserving Sync and tasks; no `/sync off`/`on` cycle is needed. See [ADR-035](docs/adr/ADR-035-local-task-board.md) and the [API contract](docs/process/local-task-board-api.md).
 
 Yandex Messenger requests can require Telegram approval or auto-start according to configuration. When a launched turn reaches a terminal state, the adapter sends a short terminal reply back to the originating Messenger thread.
 
@@ -188,6 +198,8 @@ Common optional settings:
 - `CTR_GO_SYNC_INITIAL_TOPIC_LIMIT`
 - `CTR_GO_SYNC_POLL_SECONDS`
 - `CTR_GO_CONTROL_API_LISTEN`
+- `CTR_GO_UI_STATIC_DIR`
+- `CTR_GO_UI_DEV_ORIGIN`
 - `CTR_GO_LOG_ENABLED`
 - `CTR_GO_DIAGNOSTIC_LOGS`
 

@@ -28,3 +28,7 @@ tmp/
 
 .DS_Store
 **/.DS_Store
+
+# Local task board frontend dependencies and compiler cache.
+ui/node_modules/
+ui/*.tsbuildinfo

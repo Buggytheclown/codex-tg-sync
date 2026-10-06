@@ -51,6 +51,8 @@ type Config struct {
 	AppServerListen           string
 	AppServerSocket           string
 	ControlAPIListen          string
+	UIStaticDir               string
+	UIDevOrigin               string
 	YMessengerEnabled         bool
 	YMessengerRobotLogin      string
 	YMessengerOAuthTeamToken  string
@@ -162,6 +164,8 @@ func fromSource(source envSource) Config {
 		AppServerListen:           listen,
 		AppServerSocket:           source.get("CTR_GO_APP_SERVER_SOCKET"),
 		ControlAPIListen:          source.get("CTR_GO_CONTROL_API_LISTEN"),
+		UIStaticDir:               source.path("CTR_GO_UI_STATIC_DIR", ""),
+		UIDevOrigin:               source.get("CTR_GO_UI_DEV_ORIGIN"),
 		YMessengerEnabled:         source.bool("CTR_GO_YMESSENGER_ENABLED", false),
 		YMessengerRobotLogin:      source.get("CTR_GO_YMESSENGER_ROBOT_LOGIN"),
 		YMessengerOAuthTeamToken:  source.get("CTR_GO_YMESSENGER_OAUTH_TEAM_TOKEN"),

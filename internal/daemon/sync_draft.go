@@ -105,6 +105,7 @@ func (s *Service) startClaimedSyncDraftLocked(ctx context.Context, draft model.S
 			return &DirectResponse{Text: "Sync first-turn outcome is unknown. This Telegram message will never be replayed automatically."}, nil
 		}
 		delete(s.syncLeases, thread.ID)
+		delete(s.boardContinuationLeases, thread.ID)
 		_ = s.syncWriter.Abort(lease)
 		if err := s.store.DematerializeSyncTopicDraft(ctx, draft, receipt, thread.ID, draft.Title, lease.Generation); err != nil {
 			return nil, err

@@ -193,7 +193,20 @@ Primary tests:
 
 Configuration must not reintroduce retired chat allowlists, observer intervals, notification switches, panel modes, or Telegram model/settings state. External tokens and Telegram Bot API URLs must remain redacted in config JSON, logs, SQLite errors, and snapshots.
 
-## Required checks
+## Local task board
+
+ADR-035 adds database-owned PR/cron sources, templates and the local browser UI.
+
+- `internal/storage/store_tasks_test.go` and task import tests cover fresh/old databases, template snapshots, optimistic versions, generation fencing, atomic events/requests, legacy barriers, cancellation and chat binding.
+- `internal/polling/*_test.go` covers ANY conditions, empty/draft/self/nested comments, all-resolved and status edges, published heads, cron occurrence identity, lateness, resume stabilization and partial read failures.
+- `internal/daemon/board_launch_test.go` covers same-thread continuation, busy/missing chats, move versus launch, and projection without Telegram topics or enabled Sync.
+- `internal/controlapi/board_test.go` covers exact Host/Origin and JSON boundaries, conflict responses, static/API separation and SSE invalidation.
+- `cmd/ctr-go/board_test.go` covers one-time legacy import and sole runner ownership; UI tests/build live under `ui/`.
+- Browser acceptance: compact collapsible sources, four columns, right details, template versus instance edits, invalid Polling move, add-chat idempotency, task deep link, execution badge and reconnect.
+
+Run `npm ci`, `npm test` and `npm run build` in `ui/`. Include polling/controlapi in targeted race tests. Live QA uses dedicated personal test tasks/chats; it must not post or change user PRs.
+
+## Required checks (all surfaces)
 
 Run targeted tests first, then:
 

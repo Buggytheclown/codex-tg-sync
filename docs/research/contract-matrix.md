@@ -115,8 +115,10 @@ Cron, Yandex Messenger, and Arcanum review pollers insert requests through the s
 - A launch `createForumTopic` `429` is returned after one attempt and rendered as a retryable failed card; it is not hidden by an internal retry loop.
 - Ambiguous thread creation is never replayed automatically.
 - Terminal Codex state closes the request and queues a short terminal reply when the source supports replies.
-- Arcanum authors in `CTR_GO_ARCANUM_REVIEW_AUTO_START_AUTHORS` auto-start after card creation; other authors require approval.
-- Arcanum assigned reviews skip PRs authored by the configured reviewer. Own PRs in `Waiting for changes` auto-start one feedback summary per PR after card creation.
+- New database-owned board PR/cron sources always require Telegram approval. Legacy launch requests preserve their prior auto/manual policy; the former Arcanum author allowlist no longer grants approval to new board work.
+- Arcanum assigned reviews skip PRs authored by the configured reviewer. Own PRs in `Waiting for changes` create one fix task per cycle from their template.
+- One task can have multiple sequential requests. Continuation uses its exact target chat, never steers a busy turn or creates a replacement. Busy requests stay pending for another explicit Start.
+- TODO/Done cancels definitely unstarted board requests under the launch gate; active and ambiguous operations are not interrupted or replayed.
 - Poller status is durable enough to show enabled state, current work, last attempt/success, and consecutive failures.
 
 ## Storage compatibility

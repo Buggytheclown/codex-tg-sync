@@ -20,7 +20,15 @@ type Backend interface {
 	ControlThreadRead(ctx context.Context, threadID string, includeTurns bool) (map[string]any, error)
 }
 
-func NewHandler(version string, backend Backend) http.Handler {
+func NewHandler(version string, backend Backend, options ...Options) http.Handler {
+	opts := Options{}
+	if len(options) > 0 {
+		opts = options[0]
+	}
+	board := opts.Board
+	if board == nil {
+		board, _ = backend.(BoardBackend)
+	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
@@ -84,6 +92,10 @@ func NewHandler(version string, backend Backend) http.Handler {
 		}
 		writeJSON(w, http.StatusOK, payload)
 	})
+	registerBoard(mux, board, opts)
+	if board != nil || opts.ListenAddress != "" || opts.StaticDir != "" {
+		return boardGuard(mux, opts)
+	}
 	return mux
 }
 

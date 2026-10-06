@@ -153,10 +153,10 @@ func (s *Store) ClaimSyncTopicDraftMessage(ctx context.Context, chatID, topicID,
 	}
 	defer rollback(tx)
 	var existing model.SyncMessageReceipt
-	err = tx.QueryRowContext(ctx, `SELECT chat_id,topic_id,message_id,session_id,thread_id,state,created_at,updated_at
+	err = tx.QueryRowContext(ctx, `SELECT chat_id,topic_id,message_id,session_id,thread_id,state,created_at,updated_at,coalesce(turn_id,'')
 		FROM sync_message_receipts WHERE chat_id=? AND topic_id=? AND message_id=?`, chatID, topicID, messageID).Scan(
 		&existing.ChatID, &existing.TopicID, &existing.MessageID, &existing.SessionID, &existing.ThreadID,
-		&existing.State, &existing.CreatedAt, &existing.UpdatedAt)
+		&existing.State, &existing.CreatedAt, &existing.UpdatedAt, &existing.TurnID)
 	if err == nil {
 		return model.SyncTopicDraft{}, existing, false, tx.Commit()
 	}
@@ -531,9 +531,9 @@ func (s *Store) AcceptSyncMessage(ctx context.Context, chatID, topicID, messageI
 	}
 	defer rollback(tx)
 	var receipt model.SyncMessageReceipt
-	err = tx.QueryRowContext(ctx, `SELECT chat_id, topic_id, message_id, session_id, thread_id, state, created_at, updated_at
+	err = tx.QueryRowContext(ctx, `SELECT chat_id, topic_id, message_id, session_id, thread_id, state, created_at, updated_at, coalesce(turn_id,'')
 		FROM sync_message_receipts WHERE chat_id=? AND topic_id=? AND message_id=?`, chatID, topicID, messageID).Scan(
-		&receipt.ChatID, &receipt.TopicID, &receipt.MessageID, &receipt.SessionID, &receipt.ThreadID, &receipt.State, &receipt.CreatedAt, &receipt.UpdatedAt)
+		&receipt.ChatID, &receipt.TopicID, &receipt.MessageID, &receipt.SessionID, &receipt.ThreadID, &receipt.State, &receipt.CreatedAt, &receipt.UpdatedAt, &receipt.TurnID)
 	if err == nil {
 		return receipt, false, tx.Commit()
 	}
@@ -580,8 +580,8 @@ func (s *Store) markSyncDispatchState(ctx context.Context, receipt model.SyncMes
 	}
 	defer rollback(tx)
 	now := model.NowString()
-	result, err := tx.ExecContext(ctx, `UPDATE sync_message_receipts SET state=?, updated_at=?
-		WHERE chat_id=? AND topic_id=? AND message_id=? AND session_id=? AND state=?`, receiptState, now,
+	result, err := tx.ExecContext(ctx, `UPDATE sync_message_receipts SET state=?, updated_at=?, turn_id=?
+		WHERE chat_id=? AND topic_id=? AND message_id=? AND session_id=? AND state=?`, receiptState, now, nullable(turnID),
 		receipt.ChatID, receipt.TopicID, receipt.MessageID, receipt.SessionID, model.SyncReceiptAccepted)
 	if err != nil {
 		return err
@@ -702,8 +702,8 @@ func (s *Store) MarkSyncDispatched(ctx context.Context, sessionID string, topicI
 
 func (s *Store) GetSyncReceipt(ctx context.Context, topicID, messageID int64) (*model.SyncMessageReceipt, error) {
 	var receipt model.SyncMessageReceipt
-	err := s.db.QueryRowContext(ctx, `SELECT chat_id,topic_id,message_id,session_id,thread_id,state,created_at,updated_at
-		FROM sync_message_receipts WHERE topic_id=? AND message_id=?`, topicID, messageID).Scan(&receipt.ChatID, &receipt.TopicID, &receipt.MessageID, &receipt.SessionID, &receipt.ThreadID, &receipt.State, &receipt.CreatedAt, &receipt.UpdatedAt)
+	err := s.db.QueryRowContext(ctx, `SELECT chat_id,topic_id,message_id,session_id,thread_id,state,created_at,updated_at,coalesce(turn_id,'')
+		FROM sync_message_receipts WHERE topic_id=? AND message_id=?`, topicID, messageID).Scan(&receipt.ChatID, &receipt.TopicID, &receipt.MessageID, &receipt.SessionID, &receipt.ThreadID, &receipt.State, &receipt.CreatedAt, &receipt.UpdatedAt, &receipt.TurnID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}

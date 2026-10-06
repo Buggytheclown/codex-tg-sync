@@ -126,6 +126,7 @@ type SyncTopicDraft struct {
 }
 
 type SyncMessageReceipt struct {
+	TurnID    string
 	ChatID    int64
 	TopicID   int64
 	MessageID int64
@@ -139,6 +140,12 @@ type SyncMessageReceipt struct {
 type TimeString string
 
 type ExternalLaunchRequest struct {
+	TaskID                 string
+	TriggerEventID         string
+	TargetThreadID         string
+	ApprovalPolicy         *string
+	ApprovalsReviewer      *string
+	SandboxMode            *string
 	ID                     string
 	Source                 string
 	ExternalID             string

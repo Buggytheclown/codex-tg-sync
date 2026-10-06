@@ -19,6 +19,7 @@ import (
 	"github.com/mideco-tech/codex-tg/internal/control"
 	"github.com/mideco-tech/codex-tg/internal/model"
 	"github.com/mideco-tech/codex-tg/internal/storage"
+	"github.com/mideco-tech/codex-tg/internal/tasks"
 )
 
 type Session = control.RuntimeSession
@@ -57,8 +58,9 @@ func notifySendOptions() model.SendOptions {
 }
 
 type Service struct {
-	cfg   config.Config
-	store *storage.Store
+	cfg       config.Config
+	store     *storage.Store
+	taskBoard *tasks.Service
 
 	liveFactory  func() Session
 	pollFactory  func() Session
@@ -77,6 +79,7 @@ type Service struct {
 	syncMu                       sync.Mutex
 	syncForum                    SyncForum
 	syncLeases                   map[string]appserver.WriterLease[Session]
+	boardContinuationLeases      map[string]boardContinuationLease
 	syncEventProcess             Session
 	syncEventGeneration          uint64
 	syncEventCancel              context.CancelFunc
@@ -145,6 +148,7 @@ func New(cfg config.Config) (*Service, error) {
 	service := &Service{
 		cfg:                 cfg,
 		store:               store,
+		taskBoard:           tasks.New(store),
 		externalLaunchWake:  make(chan struct{}, 1),
 		syncReconcileWake:   make(chan struct{}, 1),
 		syncDirtyWake:       make(chan struct{}, 1),
@@ -160,6 +164,11 @@ func New(cfg config.Config) (*Service, error) {
 		now:                 time.Now,
 		phase:               "created",
 	}
+	defaultsCWD := cfg.ExternalRequestDefaultCWD
+	if strings.TrimSpace(defaultsCWD) == "" {
+		defaultsCWD = cfg.DefaultCWD
+	}
+	service.taskBoard.SetExecutionDefaults(model.TaskExecutionSettings{CWD: defaultsCWD, ApprovalPolicy: "on-request", ApprovalsReviewer: "auto_review", SandboxMode: "workspace-write"})
 	transport := appserver.TransportConfig{
 		Mode:       appserver.TransportMode(cfg.AppServerMode),
 		ListenURL:  cfg.AppServerListen,
@@ -176,6 +185,7 @@ func New(cfg config.Config) (*Service, error) {
 		return service.liveFactory(), nil
 	})
 	service.syncLeases = map[string]appserver.WriterLease[Session]{}
+	service.boardContinuationLeases = map[string]boardContinuationLease{}
 	service.syncSubscribedThreads = map[string]struct{}{}
 	service.poll = service.pollFactory()
 	return service, nil
@@ -668,6 +678,7 @@ func (s *Service) softResetSyncAfterTransportLoss(ctx context.Context, cause err
 	s.syncSubscribedPollGeneration = 0
 	s.syncSubscribedThreads = map[string]struct{}{}
 	s.syncLeases = map[string]appserver.WriterLease[Session]{}
+	s.boardContinuationLeases = map[string]boardContinuationLease{}
 	if err := s.syncWriter.ForceClose(); err != nil {
 		s.logLifecycle("sync_writer_close_failed", lifecycleFields{"error": err})
 	} else {

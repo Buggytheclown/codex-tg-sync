@@ -1,0 +1,6 @@
+interface:
+  display_name: "Codex task"
+  short_description: "Add this chat to the personal task board"
+  default_prompt: "Use $codex-task to add this chat to my personal queue."
+policy:
+  allow_implicit_invocation: false

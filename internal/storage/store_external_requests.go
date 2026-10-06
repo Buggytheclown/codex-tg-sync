@@ -19,6 +19,12 @@ func externalSourceCursorKey(source string) string {
 }
 
 func validateExternalLaunchRequest(request model.ExternalLaunchRequest, source string) error {
+	if request.TaskID != "" || request.Source == "task_board" {
+		if request.TaskID == "" || request.TriggerEventID == "" || request.AutoStart || request.ApprovalPolicy == nil || request.ApprovalsReviewer == nil || request.SandboxMode == nil || *request.ApprovalPolicy == "" || *request.ApprovalsReviewer == "" || *request.SandboxMode == "" {
+			return errors.New("board launch requires task/event linkage, manual approval and explicit frozen permissions")
+		}
+	}
+
 	if strings.TrimSpace(request.ID) == "" || strings.TrimSpace(request.Source) != source || strings.TrimSpace(request.ExternalID) == "" {
 		return errors.New("external launch request requires id, matching source, and external id")
 	}
@@ -77,37 +83,11 @@ func (s *Store) writeExternalLaunchRequests(ctx context.Context, source string, 
 	defer tx.Rollback()
 	created := 0
 	for _, request := range requests {
-		telegramRenderedStatus := request.TelegramRenderedStatus
-		if request.AutoStart && request.TelegramTopicID != 0 && strings.TrimSpace(telegramRenderedStatus) == "" {
-			telegramRenderedStatus = externalTelegramVisibilityPending
-		}
-		result, err := tx.ExecContext(ctx, `
-		INSERT INTO external_launch_requests(
-			id, source, external_id, sender, title, safe_preview, source_url, prompt, cwd, model, reasoning_effort, status,
-			telegram_topic_id, telegram_message_id, telegram_rendered_status, thread_id, turn_id,
-			auto_start, source_chat_id, source_message_id, source_thread_id,
-			ack_status, ack_text, ack_message_id, ack_attempts, ack_available_at, ack_error,
-			reply_status, reply_text,
-			reply_message_id, reply_attempts, reply_available_at, reply_error,
-			error_type, error_summary, created_at, updated_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-		ON CONFLICT(source, external_id) DO NOTHING`,
-			request.ID, request.Source, request.ExternalID, request.Sender, request.Title, nullable(request.SafePreview), nullable(request.SourceURL),
-			request.Prompt, nullable(request.CWD), nullable(request.Model), nullable(request.ReasoningEffort), request.Status, request.TelegramTopicID, request.TelegramMessageID,
-			nullable(telegramRenderedStatus), nullable(request.ThreadID), nullable(request.TurnID), boolToInt(request.AutoStart),
-			nullable(request.SourceChatID), request.SourceMessageID, request.SourceThreadID,
-			nullable(request.AckStatus), nullable(request.AckText), request.AckMessageID, request.AckAttempts, nullable(string(request.AckAvailableAt)), nullable(request.AckError),
-			nullable(request.ReplyStatus), nullable(request.ReplyText),
-			request.ReplyMessageID, request.ReplyAttempts, nullable(string(request.ReplyAvailableAt)), nullable(request.ReplyError), nullable(request.ErrorType),
-			nullable(request.ErrorSummary), request.CreatedAt, request.UpdatedAt)
+		n, err := insertExternalLaunchRequestTx(ctx, tx, request)
 		if err != nil {
 			return 0, err
 		}
-		rows, err := result.RowsAffected()
-		if err != nil {
-			return 0, err
-		}
-		created += int(rows)
+		created += n
 	}
 	if cursor != nil {
 		now := model.NowString()
@@ -221,7 +201,8 @@ const externalLaunchRequestColumns = `
 	auto_start, coalesce(source_chat_id,''), source_message_id, source_thread_id,
 	coalesce(ack_status,''), coalesce(ack_text,''), ack_message_id, ack_attempts, coalesce(ack_available_at,''), coalesce(ack_error,''),
 	coalesce(reply_status,''), coalesce(reply_text,''), reply_message_id, reply_attempts, coalesce(reply_available_at,''), coalesce(reply_error,''),
-	coalesce(error_type,''), coalesce(error_summary,''), created_at, updated_at`
+	coalesce(error_type,''), coalesce(error_summary,''), created_at, updated_at,
+ coalesce(task_id,''), coalesce(trigger_event_id,''), coalesce(target_thread_id,''), approval_policy, approvals_reviewer, sandbox_mode`
 
 type rowScanner interface {
 	Scan(dest ...any) error
@@ -236,7 +217,7 @@ func scanExternalLaunchRequest(scanner rowScanner, request *model.ExternalLaunch
 		&request.AckStatus, &request.AckText, &request.AckMessageID, &request.AckAttempts, &request.AckAvailableAt, &request.AckError,
 		&request.ReplyStatus, &request.ReplyText, &request.ReplyMessageID,
 		&request.ReplyAttempts, &request.ReplyAvailableAt, &request.ReplyError, &request.ErrorType, &request.ErrorSummary,
-		&request.CreatedAt, &request.UpdatedAt)
+		&request.CreatedAt, &request.UpdatedAt, &request.TaskID, &request.TriggerEventID, &request.TargetThreadID, &request.ApprovalPolicy, &request.ApprovalsReviewer, &request.SandboxMode)
 	request.AutoStart = autoStart != 0
 	return err
 }
@@ -315,7 +296,7 @@ func (s *Store) RetryExternalLaunchRequest(ctx context.Context, id string) (bool
 	SET status=?, thread_id=NULL, turn_id=NULL, error_type=NULL, error_summary=NULL,
 		reply_status=NULL, reply_text=NULL, reply_message_id=0, reply_attempts=0,
 		reply_available_at=NULL, reply_error=NULL, updated_at=?
-	WHERE id=? AND status=?`, model.ExternalLaunchStarting, model.NowString(), id, model.ExternalLaunchFailed)
+	WHERE id=? AND status=? AND (task_id IS NULL OR EXISTS (SELECT 1 FROM tasks WHERE tasks.id=task_id AND tasks.column IN ('inbox','polling')))`, model.ExternalLaunchStarting, model.NowString(), id, model.ExternalLaunchFailed)
 	if err != nil {
 		return false, err
 	}
@@ -329,20 +310,36 @@ func (s *Store) ResolveExternalLaunchOutcome(ctx context.Context, id, threadID, 
 	if threadID == "" || turnID == "" {
 		return false, errors.New("resolved external launch requires thread and turn")
 	}
-	result, err := s.db.ExecContext(ctx, `
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return false, err
+	}
+	defer tx.Rollback()
+	result, err := tx.ExecContext(ctx, `
 	UPDATE external_launch_requests
 	SET status=?, thread_id=?, turn_id=?, error_type=NULL, error_summary=NULL, updated_at=?
-	WHERE id=? AND status=? AND thread_id=?`, model.ExternalLaunchSessionStarted, threadID, turnID,
+	WHERE id=? AND status=? AND (coalesce(thread_id,'')='' OR thread_id=?)`, model.ExternalLaunchSessionStarted, threadID, turnID,
 		model.NowString(), id, model.ExternalLaunchOutcomeUnknown, threadID)
 	if err != nil {
 		return false, err
 	}
 	rows, err := result.RowsAffected()
-	return rows == 1, err
+	if err != nil {
+		return false, err
+	}
+	if rows == 1 {
+		if err := bindExternalTaskThreadTx(ctx, tx, id, threadID); err != nil {
+			return false, err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return false, err
+	}
+	return rows == 1, nil
 }
 
 func (s *Store) transitionExternalLaunchRequest(ctx context.Context, id, from, to string) (bool, error) {
-	result, err := s.db.ExecContext(ctx, `UPDATE external_launch_requests SET status=?, updated_at=? WHERE id=? AND status=?`,
+	result, err := s.db.ExecContext(ctx, `UPDATE external_launch_requests SET status=?, updated_at=? WHERE id=? AND status=? AND (task_id IS NULL OR EXISTS (SELECT 1 FROM tasks WHERE tasks.id=task_id AND tasks.column IN ('inbox','polling')))`,
 		to, model.NowString(), id, from)
 	if err != nil {
 		return false, err
@@ -377,7 +374,12 @@ func (s *Store) CompleteExternalLaunchRequest(ctx context.Context, id, status, t
 		replyText = "The Codex dispatch outcome is unknown. The request was not replayed automatically."
 	}
 	now := model.NowString()
-	result, err := s.db.ExecContext(ctx, `
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return false, err
+	}
+	defer tx.Rollback()
+	result, err := tx.ExecContext(ctx, `
 	UPDATE external_launch_requests
 	SET status=?, thread_id=?, turn_id=?, error_type=?, error_summary=?,
 		reply_status=CASE WHEN ?<>'' AND coalesce(source_chat_id,'')<>'' AND source_message_id<>0 AND coalesce(reply_status,'')='' THEN ? ELSE reply_status END,
@@ -390,7 +392,18 @@ func (s *Store) CompleteExternalLaunchRequest(ctx context.Context, id, status, t
 		return false, err
 	}
 	rows, err := result.RowsAffected()
-	return rows == 1, err
+	if err != nil {
+		return false, err
+	}
+	if rows == 1 && status == model.ExternalLaunchSessionStarted {
+		if err := bindExternalTaskThreadTx(ctx, tx, id, threadID); err != nil {
+			return false, err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return false, err
+	}
+	return rows == 1, nil
 }
 
 func (s *Store) ResetExternalLaunchRequestPending(ctx context.Context, id, errorType, errorSummary string) (bool, error) {
@@ -755,4 +768,68 @@ func (s *Store) ExternalReplyBacklog(ctx context.Context) (map[string]int, error
 		result["ack_"+status] = count
 	}
 	return result, ackRows.Err()
+}
+
+// insertExternalLaunchRequestTx participates in its caller's transaction.
+func insertExternalLaunchRequestTx(ctx context.Context, tx *sql.Tx, request model.ExternalLaunchRequest) (int, error) {
+	telegramRenderedStatus := request.TelegramRenderedStatus
+	if request.AutoStart && request.TelegramTopicID != 0 && strings.TrimSpace(telegramRenderedStatus) == "" {
+		telegramRenderedStatus = externalTelegramVisibilityPending
+	}
+	result, err := tx.ExecContext(ctx, `
+	INSERT INTO external_launch_requests(
+		id, source, external_id, sender, title, safe_preview, source_url, prompt, cwd, model, reasoning_effort, status,
+		telegram_topic_id, telegram_message_id, telegram_rendered_status, thread_id, turn_id,
+		auto_start, source_chat_id, source_message_id, source_thread_id,
+		ack_status, ack_text, ack_message_id, ack_attempts, ack_available_at, ack_error,
+		reply_status, reply_text,
+		reply_message_id, reply_attempts, reply_available_at, reply_error,
+		error_type, error_summary, created_at, updated_at, task_id, trigger_event_id, target_thread_id, approval_policy, approvals_reviewer, sandbox_mode
+	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	ON CONFLICT(source, external_id) DO NOTHING`,
+		request.ID, request.Source, request.ExternalID, request.Sender, request.Title, nullable(request.SafePreview), nullable(request.SourceURL),
+		request.Prompt, nullable(request.CWD), nullable(request.Model), nullable(request.ReasoningEffort), request.Status, request.TelegramTopicID, request.TelegramMessageID,
+		nullable(telegramRenderedStatus), nullable(request.ThreadID), nullable(request.TurnID), boolToInt(request.AutoStart),
+		nullable(request.SourceChatID), request.SourceMessageID, request.SourceThreadID,
+		nullable(request.AckStatus), nullable(request.AckText), request.AckMessageID, request.AckAttempts, nullable(string(request.AckAvailableAt)), nullable(request.AckError),
+		nullable(request.ReplyStatus), nullable(request.ReplyText),
+		request.ReplyMessageID, request.ReplyAttempts, nullable(string(request.ReplyAvailableAt)), nullable(request.ReplyError), nullable(request.ErrorType),
+		nullable(request.ErrorSummary), request.CreatedAt, request.UpdatedAt, nullable(request.TaskID), nullable(request.TriggerEventID), nullable(request.TargetThreadID), request.ApprovalPolicy, request.ApprovalsReviewer, request.SandboxMode)
+	if err != nil {
+		return 0, err
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return 0, err
+	}
+	return int(rows), nil
+}
+
+func bindExternalTaskThreadTx(ctx context.Context, tx *sql.Tx, requestID, threadID string) error {
+	var taskID, targetThreadID string
+	err := tx.QueryRowContext(ctx, `SELECT coalesce(task_id,''),coalesce(target_thread_id,'') FROM external_launch_requests WHERE id=?`, requestID).Scan(&taskID, &targetThreadID)
+	if err != nil {
+		return err
+	}
+	if taskID == "" {
+		return nil
+	}
+	if targetThreadID != "" && targetThreadID != threadID {
+		return errors.New("continuation thread does not match launch target")
+	}
+	var current string
+	if err := tx.QueryRowContext(ctx, `SELECT coalesce(thread_id,'') FROM tasks WHERE id=?`, taskID).Scan(&current); err != nil {
+		return err
+	}
+	if current != "" && current != threadID {
+		return errors.New("task already bound to another thread")
+	}
+	if current == threadID {
+		return nil
+	}
+	_, err = tx.ExecContext(ctx, `UPDATE tasks SET thread_id=?,version=version+1,updated_at=? WHERE id=?`, threadID, model.NowString(), taskID)
+	if err != nil {
+		return err
+	}
+	return addTaskEventTx(ctx, tx, taskID, "thread_linked", map[string]string{"thread_id": threadID, "request_id": requestID})
 }

@@ -23,6 +23,7 @@ import (
 	"github.com/mideco-tech/codex-tg/internal/controlapi"
 	"github.com/mideco-tech/codex-tg/internal/cronpoller"
 	"github.com/mideco-tech/codex-tg/internal/daemon"
+	"github.com/mideco-tech/codex-tg/internal/polling"
 	"github.com/mideco-tech/codex-tg/internal/telegram"
 	"github.com/mideco-tech/codex-tg/internal/version"
 	"github.com/mideco-tech/codex-tg/internal/ymessenger"
@@ -111,6 +112,11 @@ func runDaemon(cfg config.Config) error {
 	}
 	defer service.Close()
 	service.SetLogger(diagnosticLogger(cfg, logger))
+	service.SetTaskPollingValidator(polling.Validate)
+	if err := bootstrapTaskBoard(ctx, cfg, service); err != nil {
+		return fmt.Errorf("bootstrap local task board: %w", err)
+	}
+
 	if cfg.YMessengerEnabled {
 		service.SetExternalReplySender(ymessenger.NewClient(cfg.YMessengerOAuthTeamToken))
 	}
@@ -135,18 +141,22 @@ func runDaemon(cfg config.Config) error {
 		enabled  bool
 	}{
 		{source: ymessenger.Source, interval: cfg.YMessengerPollInterval, enabled: cfg.YMessengerEnabled},
-		{source: arcanumreview.Source, interval: cfg.ArcanumReviewPollInterval, enabled: cfg.ArcanumReviewEnabled},
-		{source: arcanumreview.ChangesSource, interval: cfg.ArcanumReviewPollInterval, enabled: cfg.ArcanumReviewEnabled},
-		{source: cronpoller.Source, interval: cronpoller.DefaultPollInterval, enabled: true},
+		{source: arcanumreview.Source, interval: cfg.ArcanumReviewPollInterval, enabled: false},
+		{source: arcanumreview.ChangesSource, interval: cfg.ArcanumReviewPollInterval, enabled: false},
+		{source: cronpoller.Source, interval: cronpoller.DefaultPollInterval, enabled: false},
 	} {
 		if err := service.RegisterExternalPoller(ctx, poller.source, poller.interval, poller.enabled); err != nil {
 			return fmt.Errorf("register %s poller: %w", poller.source, err)
 		}
 	}
 	startYMessengerPoller(ctx, cfg, service, logger)
-	startArcanumReviewPoller(ctx, cfg, service, logger)
-	startArcanumChangesPoller(ctx, cfg, service, logger)
-	startCronPoller(ctx, cfg, service, logger)
+	checker := polling.NewChecker(arcanumreview.NewCLIClient(cfg.ArcanumYABin, nil))
+	runner := polling.NewRunner(service, checker, cfg.ExternalRequestsTopicID)
+	go runner.Run(ctx, func(err error) {
+		if err != nil {
+			logger.Printf("Task board poll failed: %s", telegram.SanitizeLogError(err))
+		}
+	})
 	service.FinishStartup(ctx)
 	logger.Printf("ctr-go daemon running with %s", bot.String())
 	return bot.Run(ctx)
@@ -243,7 +253,7 @@ func startControlAPI(ctx context.Context, cfg config.Config, service *daemon.Ser
 	}
 	logger.Printf("ctr-go control api listening on %s", listener.Addr().String())
 	go func() {
-		if err := controlapi.Serve(ctx, listener, controlapi.NewHandler(version.Version, service), logger); err != nil && ctx.Err() == nil {
+		if err := controlapi.Serve(ctx, listener, controlapi.NewHandler(version.Version, service, controlapi.Options{ListenAddress: cfg.ControlAPIListen, StaticDir: cfg.UIStaticDir, DevOrigin: cfg.UIDevOrigin}), logger); err != nil && ctx.Err() == nil {
 			logger.Printf("ctr-go control api stopped: %v", err)
 		}
 	}()

@@ -29,6 +29,7 @@ type externalPollHealthState struct {
 }
 
 type externalPollerState struct {
+	Label               string `json:"label,omitempty"`
 	Source              string `json:"source"`
 	Enabled             bool   `json:"enabled"`
 	IntervalMillis      int64  `json:"interval_millis"`
@@ -282,12 +283,22 @@ func (s *Service) RegisterExternalPoller(ctx context.Context, source string, int
 	if interval <= 0 {
 		return fmt.Errorf("poller interval must be positive")
 	}
-	state := externalPollerState{
-		Source:         source,
-		Enabled:        enabled,
-		IntervalMillis: interval.Milliseconds(),
-		RegisteredAt:   s.now().UTC().Format(time.RFC3339Nano),
+	state := s.loadExternalPollerState(ctx, source)
+	state.Source, state.Enabled, state.IntervalMillis = source, enabled, interval.Milliseconds()
+	if state.RegisteredAt == "" {
+		state.RegisteredAt = s.now().UTC().Format(time.RFC3339Nano)
 	}
+	return s.saveExternalPollerState(ctx, state)
+}
+
+// Task identity remains stable across edits to its polling type and title.
+func (s *Service) RegisterTaskPoller(ctx context.Context, taskID, title string, interval time.Duration, enabled bool) error {
+	source := "board.task." + taskID
+	if err := s.RegisterExternalPoller(ctx, source, interval, enabled); err != nil {
+		return err
+	}
+	state := s.loadExternalPollerState(ctx, source)
+	state.Label = strings.Join(strings.Fields(sanitizeDiagnosticString(title)), " ")
 	return s.saveExternalPollerState(ctx, state)
 }
 
@@ -366,7 +377,11 @@ func (s *Service) PollersSnapshot(ctx context.Context) (string, error) {
 	for _, state := range states {
 		marker, status := externalPollerDisplayState(state, now)
 		interval := time.Duration(state.IntervalMillis) * time.Millisecond
-		line := fmt.Sprintf("%s %s · %s", marker, state.Source, status)
+		label := state.Label
+		if label == "" {
+			label = state.Source
+		}
+		line := fmt.Sprintf("%s %s · %s", marker, label, status)
 		if interval > 0 {
 			line += " · every " + interval.String()
 		}

@@ -45,6 +45,7 @@ func (s *Service) finishExternalRequestIngest(ctx context.Context, requests []mo
 
 func (s *Service) processExternalLaunchRequests(ctx context.Context) {
 	s.externalRequestMu.Lock()
+	s.reconcileDurableExternalLaunchReceipts(ctx)
 	requestIDs := make([]string, 0)
 	state, stateErr := s.store.GetSyncState(ctx)
 	if stateErr != nil {
@@ -56,7 +57,9 @@ func (s *Service) processExternalLaunchRequests(ctx context.Context) {
 			s.logLifecycle("external_launch_auto_list_failed", lifecycleFields{"error": listErr})
 		}
 		for _, request := range autoRequests {
+			s.syncMu.Lock()
 			claimed, err := s.store.ClaimExternalLaunchRequest(ctx, request.ID)
+			s.syncMu.Unlock()
 			if err != nil {
 				s.logLifecycle("external_launch_auto_claim_failed", lifecycleFields{"request_id": request.ID, "source": request.Source, "error": err})
 			} else if claimed {
@@ -465,6 +468,8 @@ func (s *Service) handleExternalLaunchCallback(ctx context.Context, chatID, topi
 	if route.Action == "external_launch_check" {
 		return s.checkExternalLaunchOutcome(ctx, *request)
 	}
+	s.syncMu.Lock()
+	defer s.syncMu.Unlock()
 	var changed bool
 	switch route.Action {
 	case "external_launch_start":
@@ -516,6 +521,9 @@ func (s *Service) checkExternalLaunchOutcome(ctx context.Context, request model.
 	if strings.TrimSpace(request.ThreadID) == "" {
 		return &DirectResponse{CallbackText: "No durable thread id is available; outcome remains unknown."}, nil
 	}
+	if request.TargetThreadID != "" && request.TurnID == "" {
+		return &DirectResponse{CallbackText: "No confirmed continuation turn is available; outcome remains unknown and will not be replayed."}, nil
+	}
 	stored, err := s.store.GetSnapshot(ctx, request.ThreadID)
 	if err != nil {
 		return nil, err
@@ -526,6 +534,9 @@ func (s *Service) checkExternalLaunchOutcome(ctx context.Context, request model.
 	var snapshot appserver.ThreadReadSnapshot
 	if err := json.Unmarshal(stored.CompactJSON, &snapshot); err != nil || strings.TrimSpace(snapshot.LatestTurnID) == "" {
 		return &DirectResponse{CallbackText: "The thread snapshot has no confirmed turn; outcome remains unknown."}, nil
+	}
+	if request.TargetThreadID != "" && request.TurnID != "" && snapshot.LatestTurnID != request.TurnID {
+		return &DirectResponse{CallbackText: "The confirmed continuation turn has no matching authoritative snapshot yet; outcome remains unknown."}, nil
 	}
 	changed, err := s.store.ResolveExternalLaunchOutcome(ctx, request.ID, request.ThreadID, snapshot.LatestTurnID)
 	if err != nil {
@@ -555,4 +566,39 @@ func (s *Service) startExternalLaunchDispatch(requestID string) {
 		s.dispatchExternalLaunchRequest(ctx, requestID)
 	}()
 	s.mu.RUnlock()
+}
+
+type externalLaunchReceiptRoute struct {
+	TopicID   int64 `json:"topic_id"`
+	MessageID int64 `json:"message_id"`
+}
+
+func externalLaunchReceiptKey(requestID string) string { return "external.launch.receipt." + requestID }
+
+func (s *Service) reconcileDurableExternalLaunchReceipts(ctx context.Context) {
+	requests, err := s.store.ListExternalLaunchRequestsByStatus(ctx, []string{model.ExternalLaunchOutcomeUnknown}, 1000)
+	if err != nil {
+		return
+	}
+	for _, request := range requests {
+		if request.TargetThreadID != "" {
+			continue
+		}
+		encoded, err := s.store.GetState(ctx, externalLaunchReceiptKey(request.ID))
+		if err != nil || encoded == "" {
+			continue
+		}
+		var route externalLaunchReceiptRoute
+		if json.Unmarshal([]byte(encoded), &route) != nil {
+			continue
+		}
+		receipt, err := s.store.GetSyncReceipt(ctx, route.TopicID, route.MessageID)
+		if err != nil || receipt == nil || receipt.State != model.SyncReceiptDispatched || receipt.ThreadID == "" || receipt.TurnID == "" {
+			continue
+		}
+		changed, err := s.store.ResolveExternalLaunchOutcome(ctx, request.ID, receipt.ThreadID, receipt.TurnID)
+		if err == nil && changed {
+			s.queueExternalReplyFromStoredSnapshot(ctx, receipt.ThreadID)
+		}
+	}
 }
