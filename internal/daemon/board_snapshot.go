@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"encoding/json"
 
 	"github.com/mideco-tech/codex-tg/internal/appserver"
 	"github.com/mideco-tech/codex-tg/internal/model"
@@ -28,7 +29,7 @@ func (s *Service) reconcileBoardThreadsLocked(ctx context.Context) {
 		return
 	}
 	s.mu.RLock()
-	poll, connected, generation := s.poll, s.pollConnected, s.pollGeneration
+	poll, connected := s.poll, s.pollConnected
 	s.mu.RUnlock()
 	if poll == nil || !connected {
 		return
@@ -48,9 +49,9 @@ func (s *Service) reconcileBoardThreadsLocked(ctx context.Context) {
 				continue
 			}
 		}
-		if !s.subscribeSyncThreadLocked(ctx, poll, generation, id) {
-			continue
-		}
+		// ThreadResume is a mutation: it can update activity and cause Sync to
+		// discover a historical chat as recent. Passive board targets are read-only;
+		// the existing periodic producer reconciles them without subscribing.
 		var reader Session = poll
 		if lease, ok := s.syncLeases[id]; ok {
 			reader = lease.Process
@@ -89,4 +90,30 @@ func (s *Service) releaseBoardContinuationLeaseLocked(ctx context.Context, curre
 		delete(s.boardContinuationLeases, current.Thread.ID)
 		_ = s.syncWriter.MarkTerminal(lease)
 	}
+}
+
+// A previously observed old terminal turn cannot become fresh merely because
+// ThreadResume changed chat metadata. This narrow discovery fence applies only
+// to unbound board targets; current active/waiting status and unknown timing keep
+// the normal Sync freshness policy. Compact turn timing is observation history.
+func (s *Service) boardDiscoveryActivityRecent(ctx context.Context, thread model.Thread, cutoffUnix int64) (bool, error) {
+	if threadLooksActiveForPolling(thread) {
+		return true, nil
+	}
+	stored, err := s.store.GetSnapshot(ctx, thread.ID)
+	if err != nil {
+		return false, err
+	}
+	if stored == nil || len(stored.CompactJSON) == 0 {
+		return true, nil
+	}
+	var snapshot appserver.ThreadReadSnapshot
+	if json.Unmarshal(stored.CompactJSON, &snapshot) != nil || !isTerminalStatus(snapshot.LatestTurnStatus) {
+		return true, nil
+	}
+	observedTerminalAt := parseTime(model.TimeString(snapshot.LatestTurnUpdatedAt))
+	if observedTerminalAt.IsZero() {
+		return true, nil
+	}
+	return observedTerminalAt.Unix() >= cutoffUnix, nil
 }

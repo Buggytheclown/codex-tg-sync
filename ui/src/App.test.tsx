@@ -31,6 +31,16 @@ const makeTask = (extra: Partial<Task> = {}): Task => ({
 let rows: Task[],
   templates: Template[],
   calls: { path: string; method: string; body: unknown }[];
+it("shows the Telegram gate for an actual pending approval request", async () => {
+  rows = [
+    makeTask({
+      column: "inbox",
+      requests: [{ id: "request-1", status: "pending_approval", prompt: "Review", created_at: "" }],
+    }),
+  ];
+  render(<App />);
+  expect(await screen.findByText("Launch request · Telegram")).toBeTruthy();
+});
 beforeEach(() => {
   rows = [makeTask()];
   templates = [];

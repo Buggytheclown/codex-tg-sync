@@ -455,3 +455,41 @@ func testExternalLaunchRequest(id string) model.ExternalLaunchRequest {
 		TelegramTopicID: 77, CreatedAt: now, UpdatedAt: now,
 	}
 }
+
+func TestResetExternalLaunchPendingMakesActionableErrorRenderable(t *testing.T) {
+	for _, kind := range []string{"thread_busy", "sync_inactive"} {
+		t.Run(kind, func(t *testing.T) {
+			store := openTestStore(t)
+			ctx := context.Background()
+			request := testExternalLaunchRequest("test:reset-render:" + kind)
+			if _, err := store.IngestExternalLaunchRequests(ctx, "test", 1, []model.ExternalLaunchRequest{request}); err != nil {
+				t.Fatal(err)
+			}
+			if err := store.MarkExternalLaunchRequestTelegramSent(ctx, request.ID, 501, model.ExternalLaunchPendingApproval); err != nil {
+				t.Fatal(err)
+			}
+			if changed, err := store.ClaimExternalLaunchRequest(ctx, request.ID); err != nil || !changed {
+				t.Fatalf("claim=%t err=%v", changed, err)
+			}
+			summary := "The target chat is busy; press Start again after its current turn completes."
+			if kind == "sync_inactive" {
+				summary = "Sync is inactive; enable Sync and press Start again."
+			}
+			// Dispatch returns to pending before the renderer ever sees starting.
+			if changed, err := store.ResetExternalLaunchRequestPending(ctx, request.ID, kind, summary); err != nil || !changed {
+				t.Fatalf("reset=%t err=%v", changed, err)
+			}
+			pending, err := store.ListExternalLaunchRequestsForTelegram(ctx, 10)
+			if err != nil || len(pending) != 1 || pending[0].TelegramMessageID != 501 || pending[0].ErrorSummary != summary {
+				t.Fatalf("actionable error not queued for existing card: requests=%#v err=%v", pending, err)
+			}
+			if err := store.MarkExternalLaunchRequestTelegramRendered(ctx, request.ID, 501, model.ExternalLaunchPendingApproval); err != nil {
+				t.Fatal(err)
+			}
+			pending, err = store.ListExternalLaunchRequestsForTelegram(ctx, 10)
+			if err != nil || len(pending) != 0 {
+				t.Fatalf("rendered card remained dirty: requests=%#v err=%v", pending, err)
+			}
+		})
+	}
+}

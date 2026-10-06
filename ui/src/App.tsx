@@ -81,7 +81,7 @@ export function TaskCard({
         )}
       </span>
       {task.requests?.some((r) =>
-        ["pending", "starting"].includes(r.status),
+        ["pending_approval", "starting"].includes(r.status),
       ) && <span className="request-hint">Launch request · Telegram</span>}
     </button>
   );
@@ -572,7 +572,7 @@ export function App() {
                         savedVersion = moved.version;
                       }
                       setInfo(
-                        activate
+                        activate || task.column === "polling"
                           ? "Waiting is active."
                           : "Settings saved. Move to Polling to activate.",
                       );

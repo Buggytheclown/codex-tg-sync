@@ -409,7 +409,7 @@ func (s *Store) CompleteExternalLaunchRequest(ctx context.Context, id, status, t
 func (s *Store) ResetExternalLaunchRequestPending(ctx context.Context, id, errorType, errorSummary string) (bool, error) {
 	result, err := s.db.ExecContext(ctx, `
 	UPDATE external_launch_requests
-	SET status=?, error_type=?, error_summary=?, updated_at=?
+	SET status=?, error_type=?, error_summary=?, telegram_rendered_status='', updated_at=?
 	WHERE id=? AND status=?`, model.ExternalLaunchPendingApproval, nullable(errorType), nullable(errorSummary), model.NowString(),
 		id, model.ExternalLaunchStarting)
 	if err != nil {

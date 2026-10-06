@@ -235,3 +235,8 @@ For live Telegram QA, verify:
 - `internal/daemon/sync_recovery_test.go`: detached terminal/active/superseding turns, downtime Final fingerprint and Status anchor, failed read retention protection, Telegram/Control/group gate, resumed draining without repeated interrupt, old callback with repeated generation.
 - `internal/daemon/health_test.go`: transport loss preserves enabled state and reports disconnection without topic cleanup.
 - Startup and reconnect never call activation, replay prompts, or create/delete previously bound topics. Unknown creation pauses discovery only. A failed read is isolated to its topic.
+
+## Board passive observation
+
+- `internal/daemon/board_launch_test.go`: shared-transport board reads never resume chats with Sync off, no topic, expired topic, or dirty events; known old terminal observations block metadata-only discovery while genuine active and completed Desktop work remains discoverable.
+- `internal/storage/store_external_requests_test.go`: returning a busy or Sync-off request to pending dirties its Telegram rendering marker so Start remains actionable.

@@ -858,6 +858,14 @@ func (s *Service) discoverSyncThreadsLocked(ctx context.Context, state model.Syn
 			nextRank = draft.Rank
 		}
 	}
+	trackedBoardIDs, err := s.store.ListTrackedTaskThreadIDs(ctx)
+	if err != nil {
+		return 0, 0, fmt.Errorf("list board discovery targets: %w", err)
+	}
+	trackedBoard := make(map[string]struct{}, len(trackedBoardIDs))
+	for _, id := range trackedBoardIDs {
+		trackedBoard[id] = struct{}{}
+	}
 	sortSyncActivationThreads(threads)
 	cursorKey := "sync.discovery_after." + state.SessionID
 	after, err := s.store.GetState(ctx, cursorKey)
@@ -881,6 +889,15 @@ func (s *Service) discoverSyncThreadsLocked(ctx context.Context, state model.Syn
 		_ = s.store.UpsertThread(ctx, thread)
 		if _, ok := bound[thread.ID]; ok {
 			continue
+		}
+		if _, tracked := trackedBoard[thread.ID]; tracked {
+			recent, err := s.boardDiscoveryActivityRecent(ctx, thread, cutoff)
+			if err != nil {
+				return discovered, failures, err
+			}
+			if !recent {
+				continue
+			}
 		}
 		if attempts >= limit {
 			break

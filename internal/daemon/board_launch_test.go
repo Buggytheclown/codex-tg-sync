@@ -120,9 +120,10 @@ func TestBoardMoveCancelsClaimedRequestBeforeDispatch(t *testing.T) {
 }
 
 func TestBoardSnapshotProducerTracksChatsWithSyncOffAndNoTopic(t *testing.T) {
-	for _, syncOff := range []bool{false, true} {
-		t.Run(map[bool]string{true: "off", false: "no-topic"}[syncOff], func(t *testing.T) {
+	for _, mode := range []string{"no-topic", "off", "expired-topic"} {
+		t.Run(mode, func(t *testing.T) {
 			s := activeSyncService(t)
+			s.cfg.AppServerMode = "websocket"
 			ctx := context.Background()
 			payload := boardThreadPayload("board-projection", "completed", "terminal-turn", "shared terminal result")
 			poll := &stubSession{threadReads: map[string]map[string]any{"board-projection": payload}}
@@ -131,13 +132,25 @@ func TestBoardSnapshotProducerTracksChatsWithSyncOffAndNoTopic(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if syncOff {
+			if mode == "off" {
 				state, _ := s.store.GetSyncState(ctx)
 				if _, err := s.store.MarkSyncOff(ctx, state.SessionID); err != nil {
 					t.Fatal(err)
 				}
 			}
+			if mode == "expired-topic" {
+				state, _ := s.store.GetSyncState(ctx)
+				if err := s.store.UpsertSyncTopic(ctx, model.SyncTopic{SessionID: state.SessionID, ChatID: state.ChatID, TopicID: 30, ThreadID: "board-projection", TelegramState: model.SyncTopicCleanup}); err != nil {
+					t.Fatal(err)
+				}
+			}
 			s.reconcileSync(ctx)
+			for _, resume := range poll.threadResumeCalls {
+				if resume.threadID == "board-projection" {
+					t.Fatal("passive board projection resumed chat and changed its activity")
+				}
+			}
+
 			got, err := s.GetTask(ctx, task.ID)
 			if err != nil || got.Execution == nil || got.Execution.LastSeenTurnID != "terminal-turn" {
 				t.Fatalf("task=%#v err=%v", got, err)
@@ -150,6 +163,20 @@ func TestBoardSnapshotProducerTracksChatsWithSyncOffAndNoTopic(t *testing.T) {
 			if got.Execution.LastSeenTurnStatus != "completed" {
 				t.Fatalf("terminal regressed: %#v", got.Execution)
 			}
+			poll.threadReads["board-projection"] = boardThreadPayload("board-projection", "completed", "new-terminal-turn", "updated result")
+			s.syncPollEventProcess, s.syncPollEventGeneration = poll, 7
+			s.handleSyncPollEvent(ctx, poll, appserver.Event{Method: "turn/completed", Params: map[string]any{"threadId": "board-projection", "turnId": "new-terminal-turn"}}, 7)
+			s.reconcileDirtySyncThreads(ctx)
+			got, _ = s.GetTask(ctx, task.ID)
+			if got.Execution.LastSeenTurnID != "new-terminal-turn" {
+				t.Fatalf("dirty board event did not update projection: %#v", got.Execution)
+			}
+			for _, resume := range poll.threadResumeCalls {
+				if resume.threadID == "board-projection" {
+					t.Fatal("dirty board event resumed passive chat")
+				}
+			}
+
 		})
 	}
 }
@@ -462,5 +489,139 @@ func TestBoardContinuationSyncTerminalClearsOwnershipBeforeSameGenerationTelegra
 	s.processSyncSnapshotLocked(ctx, state, s.getSyncForum(), *topic, appserver.SnapshotFromThreadRead(syncRunningPayload("thread-1", secondID)), "sync_poll")
 	if _, ok := s.syncLeases["thread-1"]; !ok || s.syncWriter.Snapshot().Active != 2 {
 		t.Fatalf("historical ownership released same-generation new turn: %#v", s.syncWriter.Snapshot())
+	}
+}
+
+type boardActivitySession struct {
+	*stubSession
+	thread  map[string]any
+	resumed bool
+}
+
+func (s *boardActivitySession) ThreadResume(ctx context.Context, id, cwd string) (map[string]any, error) {
+	if id == s.thread["id"] {
+		s.resumed = true
+		s.thread["updatedAt"] = time.Now().Unix()
+	}
+	return s.stubSession.ThreadResume(ctx, id, cwd)
+}
+func (s *boardActivitySession) ThreadList(context.Context, int, string) (map[string]any, error) {
+	return map[string]any{"data": []any{s.thread}}, nil
+}
+func TestBoardPassiveReadCannotMakeHistoricalChatFreshForSyncDiscovery(t *testing.T) {
+	s := activeSyncService(t)
+	ctx := context.Background()
+	s.cfg.AppServerMode = "websocket"
+	old := time.Now().Add(-72 * time.Hour).Unix()
+	row := map[string]any{"id": "historical-board-chat", "title": "Historical chat", "createdAt": old, "updatedAt": old, "status": "completed"}
+	payload := syncCompletedPayload("historical-board-chat", "old-turn", "old result")
+	payload["thread"].(map[string]any)["createdAt"], payload["thread"].(map[string]any)["updatedAt"] = old, old
+	poll := &boardActivitySession{stubSession: &stubSession{threadReads: map[string]map[string]any{"historical-board-chat": payload}}, thread: row}
+	s.poll, s.pollConnected = poll, true
+	task, err := s.AddChat(ctx, "historical-board-chat", "Historical chat")
+	if err != nil {
+		t.Fatal(err)
+	}
+	forum := &fakeSyncForum{nextTopicID: 50}
+	s.SetSyncForum(forum)
+	// The second pass previously saw synthetic recent activity created by the
+	// first board pass's ThreadResume and created an unwanted Telegram topic.
+	s.reconcileSync(ctx)
+	s.reconcileSync(ctx)
+	if poll.resumed || len(forum.creates) != 0 {
+		t.Fatalf("passive read caused activity/topic creation: resumed=%t creates=%#v", poll.resumed, forum.creates)
+	}
+	linked, _ := s.GetTask(ctx, task.ID)
+	if linked.Execution == nil || linked.Execution.LastSeenTurnID != "old-turn" {
+		t.Fatalf("read-only projection unavailable: %#v", linked)
+	}
+	// Real Desktop activity remains eligible for the existing Sync discovery.
+	row["updatedAt"] = time.Now().Unix()
+	s.reconcileSync(ctx)
+	if len(forum.creates) != 1 {
+		t.Fatalf("actual recent Desktop activity was not discovered: creates=%#v", forum.creates)
+	}
+}
+
+func TestBoardHistoricalTerminalMetadataBumpDoesNotRecreateTopic(t *testing.T) {
+	for _, nextStatus := range []string{"completed", "inProgress"} {
+		t.Run(nextStatus, func(t *testing.T) {
+			s := activeSyncService(t)
+			ctx := context.Background()
+			s.cfg.AppServerMode = "websocket"
+			old := time.Now().Add(-72 * time.Hour)
+			threadID := "metadata-bumped-board-chat"
+			payload := syncCompletedPayload(threadID, "old-turn", "old result")
+			payload["thread"].(map[string]any)["updatedAt"] = time.Now().Unix()
+			row := map[string]any{"id": threadID, "title": "Historical chat", "createdAt": old.Unix(), "updatedAt": time.Now().Unix(), "status": "completed"}
+			poll := &stubSession{threadReads: map[string]map[string]any{threadID: payload}, threadListResult: map[string]any{"data": []any{row}}}
+			s.poll, s.pollConnected = poll, true
+			// Preserve an already observed terminal result from before the metadata
+			// bump; compact timing is local observation history, not raw App Server time.
+			s.now = func() time.Time { return old }
+			if _, err := s.AddChat(ctx, threadID, "Historical chat"); err != nil {
+				t.Fatal(err)
+			}
+			s.now = time.Now
+
+			forum := &fakeSyncForum{nextTopicID: 50}
+			s.SetSyncForum(forum)
+			s.reconcileSync(ctx)
+			s.reconcileSync(ctx)
+			if len(forum.creates) != 0 {
+				t.Fatalf("known old terminal turn recreated topic from bumped metadata: %#v", forum.creates)
+			}
+			if nextStatus == "inProgress" {
+				row["status"] = "inProgress"
+				poll.threadReads[threadID] = syncRunningPayload(threadID, "new-turn")
+			} else {
+				next := syncCompletedPayload(threadID, "new-turn", "new real result")
+				next["thread"].(map[string]any)["turns"].([]any)[0].(map[string]any)["updatedAt"] = time.Now().Unix()
+				poll.threadReads[threadID] = next
+			}
+			s.reconcileSync(ctx)
+			s.reconcileSync(ctx)
+			if len(forum.creates) != 1 {
+				t.Fatalf("new authoritative Desktop turn was not discovered: %#v", forum.creates)
+			}
+		})
+	}
+}
+
+func TestBoardDiscoveryKnownTerminalObservationFenceFallbacks(t *testing.T) {
+	now := time.Now().UTC()
+	old := now.Add(-72 * time.Hour).Format(time.RFC3339Nano)
+	for _, tc := range []struct {
+		name, threadStatus, turnStatus, stamp string
+		malformed, missing                    bool
+		want                                  bool
+	}{
+		{name: "known old terminal", threadStatus: "completed", turnStatus: "completed", stamp: old, want: false},
+		{name: "recent terminal", threadStatus: "completed", turnStatus: "completed", stamp: now.Format(time.RFC3339Nano), want: true},
+		{name: "current active", threadStatus: "inProgress", turnStatus: "completed", stamp: old, want: true},
+		{name: "current waiting", threadStatus: "waitingOnApproval", turnStatus: "completed", stamp: old, want: true},
+		{name: "snapshot active", threadStatus: "notLoaded", turnStatus: "inProgress", stamp: old, want: true},
+		{name: "missing snapshot", threadStatus: "completed", missing: true, want: true},
+		{name: "malformed snapshot", threadStatus: "completed", malformed: true, want: true},
+		{name: "missing timestamp", threadStatus: "completed", turnStatus: "completed", want: true},
+		{name: "malformed timestamp", threadStatus: "completed", turnStatus: "completed", stamp: "invalid", want: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := newTestService(t)
+			ctx := context.Background()
+			if !tc.missing {
+				compact, _ := json.Marshal(appserver.ThreadReadSnapshot{Thread: model.Thread{ID: "board-chat"}, LatestTurnStatus: tc.turnStatus, LatestTurnUpdatedAt: tc.stamp})
+				if tc.malformed {
+					compact = []byte(`[]`)
+				}
+				if err := s.store.UpsertSnapshot(ctx, "board-chat", model.ThreadSnapshotState{CompactJSON: compact}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			got, err := s.boardDiscoveryActivityRecent(ctx, model.Thread{ID: "board-chat", Status: tc.threadStatus}, now.Add(-24*time.Hour).Unix())
+			if err != nil || got != tc.want {
+				t.Fatalf("recent=%t err=%v want=%t", got, err, tc.want)
+			}
+		})
 	}
 }
