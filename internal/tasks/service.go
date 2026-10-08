@@ -70,8 +70,10 @@ func (s *Service) MoveTask(ctx context.Context, id string, in model.MoveTaskInpu
 		if t == nil {
 			return nil, ErrNotFound
 		}
-		if err := s.validate(t.Polling); err != nil {
-			return nil, err
+		if t.Column != in.Column {
+			if err := s.validate(t.Polling); err != nil {
+				return nil, err
+			}
 		}
 	}
 	return s.store.MoveTask(ctx, id, in)

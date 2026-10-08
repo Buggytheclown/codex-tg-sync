@@ -179,7 +179,7 @@ func (s *Store) GetTask(ctx context.Context, id string) (*model.Task, error) {
 	return t, rows.Err()
 }
 func (s *Store) ListTasks(ctx context.Context) ([]model.Task, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT id FROM tasks ORDER BY column,position,created_at,id`)
+	rows, err := s.db.QueryContext(ctx, `SELECT id FROM tasks ORDER BY column,position,id`)
 	if err != nil {
 		return nil, err
 	}
@@ -401,7 +401,7 @@ func (s *Store) MoveTask(ctx context.Context, id string, in model.MoveTaskInput)
 	if err := checkTaskVersion(t, in.ExpectedVersion); err != nil {
 		return nil, err
 	}
-	if in.Column == model.TaskPollingColumn {
+	if t.Column != in.Column && in.Column == model.TaskPollingColumn {
 		if t.Polling == nil {
 			return nil, fmt.Errorf("%w: configure polling first", ErrTaskInvalid)
 		}
@@ -418,6 +418,13 @@ func (s *Store) MoveTask(ctx context.Context, id string, in model.MoveTaskInput)
 			return nil, err
 		}
 	}
+	if in.BeforeTaskID != nil {
+		position, err := reorderTaskTx(ctx, tx, t, in.Column, *in.BeforeTaskID)
+		if err != nil {
+			return nil, err
+		}
+		in.Position = position
+	}
 	now := model.NowString()
 	_, err = tx.ExecContext(ctx, `UPDATE tasks SET column=?,position=?,version=version+1,updated_at=? WHERE id=?`, in.Column, in.Position, now, id)
 	if err != nil {
@@ -429,12 +436,16 @@ func (s *Store) MoveTask(ctx context.Context, id string, in model.MoveTaskInput)
 			return nil, err
 		}
 	}
-	if in.Column == model.TaskTODO || in.Column == model.TaskDone {
+	if t.Column != in.Column && (in.Column == model.TaskTODO || in.Column == model.TaskDone) {
 		if err := cancelUnstartedTaskRequestsTx(ctx, tx, id, now); err != nil {
 			return nil, err
 		}
 	}
-	if err := addTaskEventTx(ctx, tx, id, "moved", map[string]string{"from": t.Column, "to": in.Column}); err != nil {
+	event := "moved"
+	if t.Column == in.Column {
+		event = "reordered"
+	}
+	if err := addTaskEventTx(ctx, tx, id, event, map[string]string{"from": t.Column, "to": in.Column}); err != nil {
 		return nil, err
 	}
 	if err := tx.Commit(); err != nil {
@@ -442,6 +453,69 @@ func (s *Store) MoveTask(ctx context.Context, id string, in model.MoveTaskInput)
 	}
 	return s.GetTask(ctx, id)
 }
+
+// Rebalance ordering coordinates in one transaction, including legacy equal
+// positions. Other cards retain relative order and editable versions/state.
+func reorderTaskTx(ctx context.Context, tx *sql.Tx, task *model.Task, column, before string) (float64, error) {
+	if before != "" {
+		anchor, err := getTaskTx(ctx, tx, before)
+		if errors.Is(err, ErrTaskNotFound) {
+			return 0, fmt.Errorf("%w: insertion card disappeared", ErrTaskConflict)
+		}
+		if err != nil {
+			return 0, err
+		}
+		if before == task.ID || anchor.Column != column {
+			return 0, fmt.Errorf("%w: insertion card moved", ErrTaskConflict)
+		}
+		source := task.Polling != nil && task.Polling.Action.Type == model.PollingCreateTask
+		anchorSource := anchor.Polling != nil && anchor.Polling.Action.Type == model.PollingCreateTask
+		if source != anchorSource {
+			return 0, fmt.Errorf("%w: incompatible insertion card", ErrTaskInvalid)
+		}
+	}
+	rows, err := tx.QueryContext(ctx, `SELECT id FROM tasks WHERE column=? AND id<>? ORDER BY position,id`, column, task.ID)
+	if err != nil {
+		return 0, err
+	}
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			return 0, err
+		}
+		ids = append(ids, id)
+	}
+	err = rows.Err()
+	rows.Close()
+	if err != nil {
+		return 0, err
+	}
+	index := len(ids)
+	for i, id := range ids {
+		if id == before {
+			index = i
+			break
+		}
+	}
+	ids = append(ids, "")
+	copy(ids[index+1:], ids[index:])
+	ids[index] = task.ID
+	var position float64
+	for i, id := range ids {
+		coordinate := float64(i+1) * 1024
+		if id == task.ID {
+			position = coordinate
+			continue
+		}
+		if _, err := tx.ExecContext(ctx, `UPDATE tasks SET position=? WHERE id=?`, coordinate, id); err != nil {
+			return 0, err
+		}
+	}
+	return position, nil
+}
+
 func cancelUnstartedTaskRequestsTx(ctx context.Context, tx *sql.Tx, id string, now model.TimeString) error {
 	_, err := tx.ExecContext(ctx, `UPDATE callback_routes SET status=? WHERE action LIKE 'external_launch_%' AND request_id IN (SELECT id FROM external_launch_requests WHERE task_id=? AND status IN (?,?,?) AND coalesce(thread_id,'')='' AND coalesce(turn_id,'')='')`, model.CallbackStatusExpired, id, model.ExternalLaunchPendingApproval, model.ExternalLaunchStarting, model.ExternalLaunchFailed)
 	if err != nil {

@@ -137,3 +137,23 @@ func TestSourceSwitchRejectsUnresolvedCronWaitWithoutChangingChildren(t *testing
 		t.Fatalf("explicit child PR waiting not preserved: %#v %v", resolved, err)
 	}
 }
+
+func TestSameColumnPollingReorderSkipsReadinessValidation(t *testing.T) {
+	store, err := storage.Open(filepath.Join(t.TempDir(), "tasks.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	service := New(store)
+	ctx := context.Background()
+	task, err := service.CreateTask(ctx, model.CreateTaskInput{Title: "waiting", Column: model.TaskPollingColumn, Polling: &model.TaskPolling{Type: "known", Mode: model.PollingOnce, Config: []byte(`{}`), Action: model.TaskPollingAction{Type: model.PollingReturnTask}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	service.SetPollingValidator(func(model.TaskPolling) error { return errors.New("validator unavailable") })
+	before := ""
+	moved, err := service.MoveTask(ctx, task.ID, model.MoveTaskInput{ExpectedVersion: task.Version, Column: model.TaskPollingColumn, BeforeTaskID: &before})
+	if err != nil || moved.Polling.Generation != task.Polling.Generation {
+		t.Fatalf("reorder = %#v %v", moved, err)
+	}
+}

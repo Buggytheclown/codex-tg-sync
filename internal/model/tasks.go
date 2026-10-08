@@ -117,6 +117,8 @@ type MoveTaskInput struct {
 	ExpectedVersion int64   `json:"expected_version"`
 	Column          string  `json:"column"`
 	Position        float64 `json:"position"`
+	// Present empty appends; nil preserves legacy explicit position behavior.
+	BeforeTaskID *string `json:"before_task_id,omitempty"`
 }
 type SetTaskPollingInput struct {
 	ExpectedVersion int64       `json:"expected_version"`

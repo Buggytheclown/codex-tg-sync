@@ -1382,3 +1382,36 @@ form > button {
     transition: none !important;
   }
 }
+
+.card-slot {
+  display: flex;
+  flex-direction: column;
+  gap: 11px;
+}
+.task-card.grabbed {
+  opacity: 0.45;
+  border: 2px solid #41684e;
+  background: #e8f0e6;
+  cursor: grabbing;
+}
+.task-card.saving {
+  border-color: #87aa7b;
+  cursor: wait;
+}
+.drag-badge,
+.save-badge {
+  color: #41684e;
+  font-size: 10px;
+  font-weight: 650;
+}
+.drop-placeholder {
+  display: grid;
+  place-items: center;
+  border: 2px dashed #719569;
+  border-radius: 8px;
+  background: #e9f1e5;
+  color: #41684e;
+  font-size: 12px;
+  font-weight: 600;
+  pointer-events: none;
+}

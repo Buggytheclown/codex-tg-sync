@@ -205,7 +205,8 @@ ADR-035 adds database-owned PR/cron sources, owned child definitions and the loc
 - `internal/daemon/board_launch_test.go` covers same-thread continuation, busy/missing chats, move versus launch, and projection without Telegram topics or enabled Sync.
 - `internal/controlapi/board_test.go` covers exact Host/Origin and JSON boundaries, conflict responses, static/API separation and SSE invalidation.
 - `cmd/ctr-go/board_test.go` covers one-time legacy import and sole runner ownership; UI tests/build live under `ui/`.
-- Browser acceptance: compact collapsible sources, four columns, right details, source versus existing child edits, invalid Polling move, add-chat idempotency, task deep link, execution badge and reconnect.
+- `internal/storage/store_task_order_test.go`, `internal/controlapi/board_order_test.go` and `ui/src/drag.test.tsx` cover equal-position neighbor insertion, persistent ordering, API conflicts/backward compatibility, same-column polling/request preservation, midpoint/height placeholders, grabbed/cancel states, optimistic saves, old snapshots, rollback and queued refresh.
+- Browser acceptance: native drag ghost, grabbed indication, midpoint placeholder while moving upward, same/cross-column insertion, scroll during drag, Escape/cancel, delayed/failed saves; compact collapsible sources, four columns, right details, source versus existing child edits, invalid Polling move, add-chat idempotency, task deep link, execution badge and reconnect.
 
 Run `npm ci`, `npm test` and `npm run build` in `ui/`. Include polling/controlapi in targeted race tests. Live QA uses dedicated personal test tasks/chats; it must not post or change user PRs.
 

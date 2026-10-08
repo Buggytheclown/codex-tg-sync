@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { FormEvent } from "react";
 import { api, APIError } from "./api";
+import { compareTasks, placeTask } from "./taskOrder";
 import type { Column, Polling, Task, TaskEvent } from "./model";
 import {
   codexURL,
@@ -25,23 +26,43 @@ export function TaskCard({
   task,
   selected,
   onSelect,
+  grabbed = false,
+  saving = false,
+  disabled = false,
+  onDragStart,
+  onDragEnd,
 }: {
   task: Task;
   selected: boolean;
   onSelect: () => void;
+  grabbed?: boolean;
+  saving?: boolean;
+  disabled?: boolean;
+  onDragStart?: (e: React.DragEvent<HTMLButtonElement>) => void;
+  onDragEnd?: () => void;
 }) {
   const execution = executionLabel(task);
   return (
     <button
-      className={`task-card ${selected ? "selected" : ""}`}
+      className={`task-card ${selected ? "selected" : ""}${grabbed ? " grabbed" : ""}${saving ? " saving" : ""}`}
+      data-task-id={task.id}
+      aria-busy={saving}
       onClick={onSelect}
-      draggable
+      draggable={!disabled}
+      onDragEnd={onDragEnd}
       onDragStart={(e) => {
         e.dataTransfer.setData("text/task-id", task.id);
         e.dataTransfer.effectAllowed = "move";
+        onDragStart?.(e);
       }}
       aria-pressed={selected}
     >
+      {grabbed && <span className="drag-badge">Moving</span>}
+      {saving && (
+        <span className="save-badge" role="status">
+          Saving position…
+        </span>
+      )}
       <span className="card-top">
         <span className="eyebrow">
           {task.thread_id ? "CHAT" : task.source_key ? "AUTOMATION" : "TASK"}
@@ -95,19 +116,38 @@ export function App() {
   const [connection, setConnection] = useState("Connecting"),
     [loaded, setLoaded] = useState(false),
     [busy, setBusy] = useState(false);
+  const [drag, setDrag] = useState<{ id: string; height: number } | null>(null);
+  const [insertion, setInsertion] = useState<{ column: Column; beforeID: string } | null>(null);
+  const [savingID, setSavingID] = useState("");
+  const dragRef = useRef<string | null>(null),
+    pendingMove = useRef(false),
+    queuedRefresh = useRef(false),
+    refreshError = useRef(false),
+    cancelledDrag = useRef(false);
   const refreshID = useRef(0),
     mounted = useRef(true);
   const refresh = useCallback(async () => {
+    if (dragRef.current || pendingMove.current) {
+      queuedRefresh.current = true;
+      return;
+    }
+    queuedRefresh.current = false;
     const id = ++refreshID.current;
     try {
       const next = await api<Task[]>("/v1/tasks");
       if (mounted.current && id === refreshID.current) {
+        if (dragRef.current || pendingMove.current) {
+          queuedRefresh.current = true;
+          return;
+        }
         setTasks(next);
         setLoaded(true);
-        setError("");
+        if (refreshError.current) setError("");
+        refreshError.current = false;
       }
     } catch (e) {
       if (mounted.current && id === refreshID.current) {
+        refreshError.current = true;
         setError((e as Error).message);
         setConnection("Disconnected");
       }
@@ -135,6 +175,24 @@ export function App() {
       window.clearInterval(reconcile);
       window.removeEventListener("focus", focus);
     };
+  }, [refresh]);
+  const clearDrag = (reconcile = true) => {
+    dragRef.current = null;
+    setDrag(null);
+    setInsertion(null);
+    if (reconcile && queuedRefresh.current) void refresh();
+  };
+  useEffect(() => {
+    const escape = (e: KeyboardEvent) => {
+      if (e.key !== "Escape" || !dragRef.current) return;
+      cancelledDrag.current = true;
+      dragRef.current = null;
+      setDrag(null);
+      setInsertion(null);
+      if (queuedRefresh.current) void refresh();
+    };
+    window.addEventListener("keydown", escape);
+    return () => window.removeEventListener("keydown", escape);
   }, [refresh]);
   const selected = tasks.find((t) => t.id === selectedID);
   const select = (task: Task) => {
@@ -176,8 +234,9 @@ export function App() {
       setBusy(false);
     }
   };
-  const move = async (task: Task, column: Column) => {
-    if (column === "polling") {
+  const move = async (task: Task, column: Column, beforeID = "") => {
+    if (pendingMove.current || busy) return;
+    if (column === "polling" && task.column !== column) {
       const problem = pollingProblem(task.polling);
       if (problem) {
         setSelectedID(task.id);
@@ -185,17 +244,43 @@ export function App() {
         setTab("polling");
         setActivationRequested(true);
         setInfo(problem);
+        if (queuedRefresh.current) void refresh();
         return;
       }
     }
+    const previous = tasks;
+    pendingMove.current = true;
+    ++refreshID.current; // Retire snapshots started before the optimistic move.
+    setSavingID(task.id);
+    setBusy(true);
+    setError("");
+    refreshError.current = false;
+    setTasks(placeTask(tasks, task, column, beforeID));
     try {
-      await mutate(`/v1/tasks/${task.id}/move`, "POST", {
+      const saved = await api<Task>(`/v1/tasks/${task.id}/move`, "POST", {
         expected_version: task.version,
         column,
-        position: Date.now(),
+        before_task_id: beforeID,
       });
+      if (!mounted.current) return;
+      setTasks((current) =>
+        current.map((t) => {
+          if (t.id !== saved.id) return t;
+          // Server insertion may include cards created during this gesture.
+          // Keep all visible ordering coordinates together until a complete
+          // snapshot replaces them; merge the returned version/settings now.
+          return saved.column === t.column
+            ? { ...saved, position: t.position }
+            : saved;
+        }),
+      );
       setInfo("");
     } catch (e) {
+      if (!mounted.current) return;
+      setTasks(previous);
+      setError(e instanceof APIError && e.status === 409
+        ? "This card or its position changed. The board is refreshing; retry your move."
+        : `Position was not saved: ${(e as Error).message}`);
       if (column === "polling" && e instanceof APIError && e.status === 400) {
         setSelectedID(task.id);
         setPanel("details");
@@ -203,14 +288,36 @@ export function App() {
         setActivationRequested(true);
         setInfo(e.message);
       }
+    } finally {
+      pendingMove.current = false;
+      ++refreshID.current;
+      if (mounted.current) {
+        setSavingID("");
+        setBusy(false);
+        // Save settles from its response; reconciliation runs independently.
+        void refresh();
+      }
     }
   };
-  const drop = (e: React.DragEvent, column: Column) => {
+  const insertionAt = (element: HTMLElement, y: number, column: Column) => {
+    const candidates = Array.from(element.querySelectorAll<HTMLElement>("[data-task-id]"))
+      .filter((card) => card.dataset.taskId !== dragRef.current);
+    const before = candidates.find((card) => {
+      const rect = card.getBoundingClientRect();
+      return y < rect.top + rect.height / 2;
+    });
+    return { column, beforeID: before?.dataset.taskId || "" };
+  };
+  const drop = (e: React.DragEvent<HTMLElement>, column: Column) => {
     e.preventDefault();
-    const task = tasks.find(
-      (t) => t.id === e.dataTransfer.getData("text/task-id"),
-    );
-    if (task) void move(task, column);
+    if (cancelledDrag.current || pendingMove.current) return;
+    const task = tasks.find((t) => t.id === (dragRef.current || e.dataTransfer.getData("text/task-id")));
+    // The visible placeholder is the release target. With no prior dragover,
+    // derive it from the release point (also supports dropping into empty columns).
+    const target = insertion?.column === column ? insertion : insertionAt(e.currentTarget, e.clientY, column);
+    clearDrag(false);
+    if (task) void move(task, column, target.beforeID);
+    else if (queuedRefresh.current) void refresh();
   };
   const created = (task: Task) => {
     const url = new URL(window.location.href);
@@ -373,17 +480,30 @@ export function App() {
           {visibleColumns.map((column) => {
             const list = cards
               .filter((t) => t.column === column)
-              .sort(
-                (a, b) => a.position - b.position || a.id.localeCompare(b.id),
-              );
+              .sort(compareTasks);
+            const placeholder = drag && insertion?.column === column ? (
+              <div
+                className="drop-placeholder"
+                role="status"
+                aria-label="Drop task here"
+                style={{ minHeight: drag.height || 100 }}
+              >
+                Drop here
+              </div>
+            ) : null;
             return (
               <section
                 key={column}
                 className={`column ${column}`}
                 aria-label={`${labels[column]} column`}
                 onDragOver={(e) => {
+                  if (!dragRef.current || pendingMove.current) return;
                   e.preventDefault();
                   e.dataTransfer.dropEffect = "move";
+                  setInsertion(insertionAt(e.currentTarget, e.clientY, column));
+                }}
+                onDragLeave={(e) => {
+                  if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setInsertion(null);
                 }}
                 onDrop={(e) => drop(e, column)}
               >
@@ -405,14 +525,35 @@ export function App() {
                 </div>
                 <div className="column-cards">
                   {list.map((task) => (
-                    <TaskCard
-                      key={task.id}
-                      task={task}
-                      selected={selectedID === task.id && panel === "details"}
-                      onSelect={() => select(task)}
-                    />
+                    <div className="card-slot" key={task.id}>
+                      {insertion?.beforeID === task.id && placeholder}
+                      <TaskCard
+                        task={task}
+                        selected={selectedID === task.id && panel === "details"}
+                        grabbed={drag?.id === task.id}
+                        saving={savingID === task.id}
+                        disabled={busy}
+                        onSelect={() => select(task)}
+                        onDragStart={(e) => {
+                          if (busy) {
+                            e.preventDefault();
+                            return;
+                          }
+                          cancelledDrag.current = false;
+                          dragRef.current = task.id;
+                          queuedRefresh.current = true;
+                          ++refreshID.current;
+                          setDrag({
+                            id: task.id,
+                            height: e.currentTarget.getBoundingClientRect().height,
+                          });
+                        }}
+                        onDragEnd={() => clearDrag()}
+                      />
+                    </div>
                   ))}
-                  {!list.length && (
+                  {insertion?.beforeID === "" && placeholder}
+                  {!list.length && !placeholder && (
                     <div className="empty-column">
                       <span>
                         {column === "inbox"
