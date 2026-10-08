@@ -57,6 +57,9 @@ export function SourceEditor({
     !!initial.action.child_definition?.polling,
   );
   const [message, setMessage] = useState("");
+  const [trustedAuthors, setTrustedAuthors] = useState(
+    (initial.action.initial_launch?.authors || []).join(", "),
+  );
   const config = definition.config;
   const submit = async (e: FormEvent) => {
     e.preventDefault();
@@ -65,6 +68,16 @@ export function SourceEditor({
       mode: "repeat",
       action: {
         type: "create_task",
+        initial_launch:
+          polling.action.initial_launch?.mode === "trusted_authors"
+            ? {
+                mode: "trusted_authors",
+                authors: trustedAuthors
+                  .split(",")
+                  .map((author) => author.trim())
+                  .filter(Boolean),
+              }
+            : polling.action.initial_launch || { mode: "manual" },
         child_definition: {
           ...definition,
           ...(repeat ? { polling: waiting } : { polling: undefined }),
@@ -91,7 +104,7 @@ export function SourceEditor({
             required
             value={name}
             onChange={(e) => setName(e.target.value)}
-            placeholder="My assigned PRs"
+            placeholder="PR review"
           />
         </Field>
       )}
@@ -134,9 +147,49 @@ export function SourceEditor({
           </label>
         )}
         <p className="note">
-          Sources create tasks in Inbox. Launch approval happens in Telegram.
+          Sources create tasks in Inbox. Initial launch follows this source’s
+          policy; continuations require Telegram Start.
         </p>
         <PollingFields value={polling} onChange={setPolling} sourceOnly />
+        <Field
+          label="Initial launch"
+          hint="A Telegram request card appears before automatic start. This applies only to new tasks; continuations require Start."
+        >
+          <select
+            value={polling.action.initial_launch?.mode || "manual"}
+            onChange={(e) =>
+              setPolling({
+                ...polling,
+                action: {
+                  ...polling.action,
+                  initial_launch: {
+                    mode: e.target.value as "manual" | "trusted_authors" | "auto",
+                    authors: polling.action.initial_launch?.authors || [],
+                  },
+                },
+              })
+            }
+          >
+            <option value="manual">Manual · Telegram Start</option>
+            {polling.type !== "cron" && (
+              <option value="trusted_authors">
+                Automatic · trusted PR authors
+              </option>
+            )}
+            <option value="auto">Automatic · every new task</option>
+          </select>
+        </Field>
+        {polling.action.initial_launch?.mode === "trusted_authors" && (
+          <Field
+            label="Trusted PR authors"
+            hint="Comma-separated Arcanum logins. Other authors require Telegram Start."
+          >
+            <input
+              value={trustedAuthors}
+              onChange={(e) => setTrustedAuthors(e.target.value)}
+            />
+          </Field>
+        )}
         {task && <PollingDiagnostics task={task} />}
         {!task && !enabled && (
           <p className="note">Starts paused. Enable it when ready.</p>
@@ -149,7 +202,7 @@ export function SourceEditor({
         </p>
         <Field
           label="Task title"
-          hint="PR: {{pr_title}}, {{pr_id}}, {{pr_url}}, {{author}}, {{login}}. Schedule: {{date}}, {{scheduled_at}}."
+          hint="Source name is always prefixed. Schedules also include the scheduled date and time. PR: {{pr_title}}, {{pr_id}}, {{pr_url}}, {{author}}, {{login}}. Schedule: {{date}}, {{scheduled_at}}."
         >
           <input
             required

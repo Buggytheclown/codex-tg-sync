@@ -29,12 +29,20 @@ export type PollConfig = {
   timezone?: string;
   max_lateness?: string;
 };
+export type LaunchPolicy = {
+  mode: "manual" | "trusted_authors" | "auto";
+  authors?: string[];
+};
 export type Polling = {
   task_id?: string;
   type: string;
   mode: string;
   config: PollConfig;
-  action: { type: string; child_definition?: Definition };
+  action: {
+    type: string;
+    child_definition?: Definition;
+    initial_launch?: LaunchPolicy;
+  };
   cursor?: unknown;
   generation?: number;
   next_check_at?: string;
@@ -166,6 +174,11 @@ export function pollingProblem(p?: Polling, child = false): string {
   )
     return "Child waiting settings must wait on one PR once.";
   if (p.action.type === "create_task") {
+    const policy = p.action.initial_launch;
+    if (policy && !["manual", "trusted_authors", "auto"].includes(policy.mode))
+      return "Choose an initial launch policy.";
+    if (policy?.mode === "trusted_authors" && p.type === "cron")
+      return "Trusted authors require a PR source.";
     const d = p.action.child_definition;
     if (!d?.title.trim()) return "Enter the title for created tasks.";
     if (!d.config.initial_prompt.trim())

@@ -104,7 +104,7 @@ func TestSourceSwitchRejectsUnresolvedCronWaitWithoutChangingChildren(t *testing
 		t.Fatal(err)
 	}
 	out.Generation = source.Polling.Generation
-	out.Events = []model.PollingEvent{{Key: "cron:day", SourceKey: "cron:day", Variables: map[string]string{"date": "2026-10-06"}, Payload: []byte(`{}`)}}
+	out.Events = []model.PollingEvent{{Key: "cron:day", SourceKey: "cron:day", Variables: map[string]string{"date": "2026-10-06", "scheduled_at": "2026-10-06T09:00:00Z"}, Payload: []byte(`{"scheduled_at":"2026-10-06T09:00:00Z"}`)}}
 	if ok, err := store.AcceptTaskPollingOutcome(ctx, out, 123); err != nil || !ok {
 		t.Fatalf("explicit cron PR wait event %v %v", ok, err)
 	}

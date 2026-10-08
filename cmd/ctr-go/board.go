@@ -32,18 +32,22 @@ func bootstrapTaskBoard(ctx context.Context, cfg config.Config, sink boardBootst
 	if err != nil {
 		return err
 	}
-	settings := model.TaskExecutionSettings{CWD: cfg.ExternalRequestDefaultCWD, ApprovalPolicy: "on-request", ApprovalsReviewer: "auto_review", SandboxMode: "workspace-write"}
+	settings := model.TaskExecutionSettings{CWD: cfg.ExternalRequestDefaultCWD, ApprovalPolicy: cfg.ExternalApprovalPolicy, ApprovalsReviewer: cfg.ExternalApprovalsReviewer, SandboxMode: cfg.ExternalSandboxMode}
 	if cfg.ArcanumReviewEnabled {
 		settings.CWD = cfg.ArcanumReviewCWD
 		for _, source := range []string{arcanumreview.Source, arcanumreview.ChangesSource} {
-			kind, title, prompt := polling.TypeReview, "Assigned PRs", "$arc-pr-review-stefania {{pr_url}}"
+			kind, title, prompt := polling.TypeReview, "PR review", "$arc-pr-review-stefania {{pr_url}}"
 			conditions := []string{polling.ConditionCommit, polling.ConditionAnswered}
 			if source == arcanumreview.ChangesSource {
 				kind, title, prompt = polling.TypeChanges, "PR feedback", "{{pr_url}} прочитай замечания и исправь код по ним"
 				conditions = []string{polling.ConditionResolved, polling.ConditionChanges}
 			}
 			wait := model.TaskPolling{Type: polling.TypePRWait, Mode: model.PollingOnce, Action: model.TaskPollingAction{Type: model.PollingResumeTask}, Config: boardJSON(polling.Config{PRID: "{{pr_id}}", Login: cfg.ArcanumReviewLogin, Author: "{{author}}", Conditions: conditions, IntervalSeconds: max(10, int(cfg.ArcanumReviewPollInterval.Seconds()))})}
-			in := model.TaskSourceImport{Key: source, Title: title, Polling: model.TaskPolling{Type: kind, Mode: model.PollingRepeat, Config: boardJSON(polling.Config{Login: cfg.ArcanumReviewLogin, IntervalSeconds: max(10, int(cfg.ArcanumReviewPollInterval.Seconds()))})}, Definition: model.TaskDefinition{Title: "{{pr_title}}", Config: model.TaskConfig{InitialPrompt: prompt, ContinuationPrompt: "Продолжи работу с {{pr_url}}: прочитай текущее состояние PR и замечаний, выполни следующий проход проверки или исправлений.", Execution: settings}, Polling: &wait}}
+			policy := &model.TaskLaunchPolicy{Mode: "manual"}
+			if source == arcanumreview.Source && len(cfg.ArcanumAutoStartAuthors) > 0 {
+				policy = &model.TaskLaunchPolicy{Mode: "trusted_authors", Authors: append([]string(nil), cfg.ArcanumAutoStartAuthors...)}
+			}
+			in := model.TaskSourceImport{Key: source, Title: title, Polling: model.TaskPolling{Type: kind, Mode: model.PollingRepeat, Action: model.TaskPollingAction{InitialLaunch: policy}, Config: boardJSON(polling.Config{Login: cfg.ArcanumReviewLogin, IntervalSeconds: max(10, int(cfg.ArcanumReviewPollInterval.Seconds()))})}, Definition: model.TaskDefinition{Title: "{{pr_title}}", Config: model.TaskConfig{InitialPrompt: prompt, ContinuationPrompt: "Продолжи работу с {{pr_url}}: прочитай текущее состояние PR и замечаний, выполни следующий проход проверки или исправлений.", Execution: settings}, Polling: &wait}}
 			groups := map[string]*model.LegacyTaskImport{}
 			for _, request := range legacy {
 				if request.Source != source || request.TaskID != "" {
@@ -98,8 +102,12 @@ func bootstrapTaskBoard(ctx context.Context, cfg config.Config, sink boardBootst
 		if !task.Enabled {
 			column = model.TaskTODO
 		}
-		execution := model.TaskExecutionSettings{CWD: task.CWD, Model: task.Model, ReasoningEffort: task.ReasoningEffort, ApprovalPolicy: "on-request", ApprovalsReviewer: "auto_review", SandboxMode: "workspace-write"}
-		in := model.TaskSourceImport{Key: "cron:" + task.ID, Title: "Schedule: " + task.ID, Column: column, Polling: model.TaskPolling{Type: polling.TypeCron, Mode: model.PollingRepeat, Config: boardJSON(polling.Config{Cron: task.Cron, Timezone: file.Timezone, MaxLateness: task.MaxLateness, LegacyID: task.ID, IntervalSeconds: 30})}, Definition: model.TaskDefinition{Title: "Scheduled task: " + task.ID, Config: model.TaskConfig{InitialPrompt: task.Prompt, ContinuationPrompt: task.Prompt, Execution: execution}}}
+		execution := model.TaskExecutionSettings{CWD: task.CWD, Model: task.Model, ReasoningEffort: task.ReasoningEffort, ApprovalPolicy: cfg.ExternalApprovalPolicy, ApprovalsReviewer: cfg.ExternalApprovalsReviewer, SandboxMode: cfg.ExternalSandboxMode}
+		policy := &model.TaskLaunchPolicy{Mode: "manual"}
+		if task.LaunchPolicy == "auto" {
+			policy.Mode = "auto"
+		}
+		in := model.TaskSourceImport{Key: "cron:" + task.ID, Title: "Schedule: " + task.ID, Column: column, Polling: model.TaskPolling{Type: polling.TypeCron, Mode: model.PollingRepeat, Action: model.TaskPollingAction{InitialLaunch: policy}, Config: boardJSON(polling.Config{Cron: task.Cron, Timezone: file.Timezone, MaxLateness: task.MaxLateness, LegacyID: task.ID, IntervalSeconds: 30})}, Definition: model.TaskDefinition{Title: "{{scheduled_at}}", Config: model.TaskConfig{InitialPrompt: task.Prompt, ContinuationPrompt: task.Prompt, Execution: execution}}}
 		for _, request := range legacy {
 			if request.Source != cronpoller.Source || request.TaskID != "" || !strings.HasPrefix(request.ExternalID, task.ID+":") {
 				continue

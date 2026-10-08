@@ -99,14 +99,14 @@ func TestTaskAcceptanceFreezesOwnedDefinitionAndRequest(t *testing.T) {
 			child = item
 		}
 	}
-	if child.Title != "Review 1" || child.Config.InitialPrompt != "Review 1" || child.Polling == nil || child.Column != model.TaskInbox || len(child.Requests) != 1 {
+	if child.Title != "source: Review 1" || child.Config.InitialPrompt != "Review 1" || child.Polling == nil || child.Column != model.TaskInbox || len(child.Requests) != 1 {
 		t.Fatalf("snapshot: %#v", child)
 	}
 	request, err := s.GetExternalLaunchRequest(ctx, child.Requests[0].ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if request.AutoStart || !strings.HasPrefix(request.Prompt, "Review 1\n\nPolling event facts") || request.TaskID != child.ID || request.ApprovalPolicy == nil || *request.ApprovalPolicy != "on-request" {
+	if request.AutoStart || request.Prompt != "Review 1" || request.TaskID != child.ID || request.ApprovalPolicy == nil || *request.ApprovalPolicy != "on-request" {
 		t.Fatalf("request: %#v", request)
 	}
 	if child.SourceTaskID != source.ID || child.Config.Execution.CWD != "/workspace" || child.Config.ContinuationPrompt != "Continue 1" || string(child.Polling.Config) != `{}` {
@@ -128,7 +128,7 @@ func TestTaskAcceptanceFreezesOwnedDefinitionAndRequest(t *testing.T) {
 			future = &all[i]
 		}
 	}
-	if future == nil || future.Title != "changed" || future.Config.InitialPrompt != "changed" || future.Config.ContinuationPrompt != "future continuation" || future.Config.Execution.CWD != "/future-workspace" || future.Column != model.TaskInbox || future.Polling == nil || string(future.Polling.Config) != `{"future_wait":true}` {
+	if future == nil || future.Title != "source: changed" || future.Config.InitialPrompt != "changed" || future.Config.ContinuationPrompt != "future continuation" || future.Config.Execution.CWD != "/future-workspace" || future.Column != model.TaskInbox || future.Polling == nil || string(future.Polling.Config) != `{"future_wait":true}` {
 		t.Fatalf("future task did not copy source definition with inactive waiting: %#v", future)
 	}
 	frozen, err := s.GetExternalLaunchRequest(ctx, request.ID)
@@ -231,7 +231,7 @@ func TestTaskCancellationAfterClaimAndImmutablePendingSnapshot(t *testing.T) {
 		t.Fatal(err)
 	}
 	request, _ := s.GetExternalLaunchRequest(ctx, requestID)
-	if !strings.HasPrefix(request.Prompt, "Review 1\n\nPolling event facts") || request.Model != "fixed-model" {
+	if request.Prompt != "Review 1" || request.Model != "fixed-model" {
 		t.Fatalf("mutable request: %#v", request)
 	}
 	claimed, err := s.ClaimExternalLaunchRequest(ctx, requestID)
@@ -304,7 +304,7 @@ func TestTaskBindingAndProjectionDoNotChangeColumn(t *testing.T) {
 			resume = r
 		}
 	}
-	if resume.TargetThreadID != "task-thread" || !strings.HasPrefix(resume.Prompt, "Continue 1\n\nPolling event facts") {
+	if resume.TargetThreadID != "task-thread" || resume.Prompt != "Continue 1" {
 		t.Fatalf("resume snapshot %#v", resume)
 	}
 	if ok, err := s.ClaimExternalLaunchRequest(ctx, resume.ID); err != nil || !ok {
@@ -454,7 +454,7 @@ func TestTaskMovePreservesUnknownAndResolveBindsAtomically(t *testing.T) {
 	}
 }
 
-func TestTaskRequestAppendsSourceFactsAndRejectsAutoApproval(t *testing.T) {
+func TestTaskRequestKeepsConfiguredPromptAndPersistsFacts(t *testing.T) {
 	s := openTestStore(t)
 	ctx := context.Background()
 	source, out := makeTaskBoardSource(t, s, "")
@@ -464,22 +464,27 @@ func TestTaskRequestAppendsSourceFactsAndRejectsAutoApproval(t *testing.T) {
 		t.Fatal(err)
 	}
 	items, _ := s.ListTasks(ctx)
-	var id string
 	for _, item := range items {
-		if item.ID != source.ID {
-			id = item.Requests[0].ID
+		if item.ID == source.ID {
+			continue
+		}
+		request, _ := s.GetExternalLaunchRequest(ctx, item.Requests[0].ID)
+		if request.Prompt != item.Config.InitialPrompt {
+			t.Fatalf("prompt modified %q", request.Prompt)
+		}
+		if request.Source != source.Title {
+			t.Fatalf("source=%q", request.Source)
 		}
 	}
-	request, _ := s.GetExternalLaunchRequest(ctx, id)
-	if !strings.Contains(request.Prompt, "https://example.test/pr/1") || !strings.Contains(request.Prompt, `"request_changes"`) {
-		t.Fatalf("missing source context %q", request.Prompt)
+	events, _ := s.ListTaskEvents(ctx, source.ID)
+	found := false
+	for _, event := range events {
+		if event.Kind == "polling_event" {
+			found = strings.Contains(string(event.Payload), `"request_changes"`)
+		}
 	}
-	request.ID = "another"
-	request.ExternalID = "another"
-	request.TriggerEventID = "another-event"
-	request.AutoStart = true
-	if _, err := s.EnqueueExternalLaunchRequests(ctx, request.Source, []model.ExternalLaunchRequest{*request}); err == nil {
-		t.Fatal("auto board request accepted")
+	if !found {
+		t.Fatal("event facts missing")
 	}
 }
 
@@ -508,7 +513,7 @@ func TestTaskDefinitionCopiesDataWithoutRecursiveVariableExpansion(t *testing.T)
 		if item.ID == source.ID {
 			continue
 		}
-		if item.Title != `Review literal "{{other}}"` || item.Config.InitialPrompt != `Review literal "{{other}}" and expanded` {
+		if item.Title != `source: Review literal "{{other}}"` || item.Config.InitialPrompt != `Review literal "{{other}}" and expanded` {
 			t.Fatalf("recursive substitution: %#v", item)
 		}
 		var cfg map[string]string

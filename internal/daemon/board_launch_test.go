@@ -623,3 +623,51 @@ func TestBoardDiscoveryKnownTerminalObservationFenceFallbacks(t *testing.T) {
 		})
 	}
 }
+
+func TestTrustedBoardInitialRequestRendersThenAutomaticallyDispatches(t *testing.T) {
+	s := activeSyncService(t)
+	ctx := context.Background()
+	s.cfg.ExternalRequestsTopicID = 77
+	sender := &recordingSender{}
+	s.SetSender(sender)
+	s.SetSyncForum(&fakeSyncForum{nextTopicID: 20})
+	writer := &stubSession{threadStartResult: map[string]any{"thread": map[string]any{"id": "board-auto-thread", "cwd": "/project"}}}
+	s.liveFactory = func() Session { return writer }
+	def := model.TaskDefinition{Title: "Custom PR", Config: model.TaskConfig{InitialPrompt: "review exact {{pr_id}}", Execution: model.TaskExecutionSettings{CWD: "/project"}}}
+	source, err := s.CreateTask(ctx, model.CreateTaskInput{Title: "PR review", Column: model.TaskPollingColumn, Polling: &model.TaskPolling{Type: polling.TypeReview, Mode: model.PollingRepeat, Config: []byte(`{"login":"reviewer"}`), Action: model.TaskPollingAction{Type: model.PollingCreateTask, ChildDefinition: &def, InitialLaunch: &model.TaskLaunchPolicy{Mode: "trusted_authors", Authors: []string{"alice"}}}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := model.TaskPollingOutcome{TaskID: source.ID, Generation: source.Polling.Generation, Events: []model.PollingEvent{{Key: "pr:42", SourceKey: "pr:42", Variables: map[string]string{"pr_id": "42", "author": "alice"}, Payload: []byte(`{"pr_id":"42","author":"alice"}`)}}}
+	if _, err := s.AcceptTaskPollingOutcome(ctx, out, 77); err != nil {
+		t.Fatal(err)
+	}
+	requests, _ := s.store.ListExternalLaunchRequestsByStatus(ctx, nil, 100)
+	if len(requests) != 1 {
+		t.Fatalf("requests=%#v", requests)
+	}
+	id := requests[0].ID
+	s.processExternalLaunchRequests(ctx)
+	req, _ := s.store.GetExternalLaunchRequest(ctx, id)
+	if req.Status != model.ExternalLaunchPendingApproval || req.TelegramMessageID == 0 || len(writer.threadStartCalls) != 0 {
+		t.Fatalf("not visible before launch: %#v", req)
+	}
+	if len(sender.messages) != 1 || !strings.Contains(sender.messages[0].text, "Source: PR review") || !strings.Contains(sender.messages[0].text, "From: alice") {
+		t.Fatalf("wrong metadata: %#v", sender.messages)
+	}
+	s.processExternalLaunchRequests(ctx)
+	req, _ = s.store.GetExternalLaunchRequest(ctx, id)
+	if req.Status != model.ExternalLaunchStarting {
+		t.Fatalf("not automatically claimed: %#v", req)
+	}
+	s.dispatchExternalLaunchRequest(ctx, id)
+	req, _ = s.store.GetExternalLaunchRequest(ctx, id)
+	child, _ := s.GetTask(ctx, req.TaskID)
+	if req.Status != model.ExternalLaunchSessionStarted || child.ThreadID != "board-auto-thread" || len(writer.turnStartCalls) != 1 || writer.turnStartCalls[0].message != "review exact 42" {
+		t.Fatalf("request=%#v child=%#v starts=%#v", req, child, writer.turnStartCalls)
+	}
+	s.dispatchExternalLaunchRequest(ctx, id)
+	if len(writer.turnStartCalls) != 1 {
+		t.Fatal("automatic dispatch replayed")
+	}
+}

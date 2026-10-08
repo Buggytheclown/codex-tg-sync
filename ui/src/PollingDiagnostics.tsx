@@ -14,7 +14,7 @@ export function PollingDiagnostics({ task }: { task: Task }) {
         <>
           <p>
             {p.type === "pr_review_source"
-              ? "Assigned PRs"
+              ? "PR review"
               : p.type === "pr_changes_source"
                 ? "My PRs requesting changes"
                 : p.type === "cron"

@@ -34,7 +34,12 @@ func (s *Store) BootstrapTaskSource(ctx context.Context, in model.TaskSourceImpo
 	var sourceID string
 	err = tx.QueryRowContext(ctx, `SELECT value FROM daemon_state WHERE key=?`, marker).Scan(&sourceID)
 	if err == nil {
-		tx.Rollback()
+		if err := upgradeImportedSourceLaunchTx(ctx, tx, sourceID, in); err != nil {
+			return nil, err
+		}
+		if err := tx.Commit(); err != nil {
+			return nil, err
+		}
 		return s.GetTask(ctx, sourceID)
 	}
 	if !errors.Is(err, sql.ErrNoRows) {
@@ -60,7 +65,7 @@ func (s *Store) BootstrapTaskSource(ctx context.Context, in model.TaskSourceImpo
 		}
 		p := in.Polling
 		p.TaskID = sourceID
-		p.Action = model.TaskPollingAction{Type: model.PollingCreateTask, ChildDefinition: &d}
+		p.Action = model.TaskPollingAction{Type: model.PollingCreateTask, ChildDefinition: &d, InitialLaunch: in.Polling.Action.InitialLaunch}
 		p.Generation = 1
 		if len(p.Cursor) == 0 {
 			p.Cursor = json.RawMessage(`{}`)
@@ -189,6 +194,9 @@ func (s *Store) BootstrapTaskSource(ctx context.Context, in model.TaskSourceImpo
 				return nil, err
 			}
 		}
+	}
+	if err := upgradeImportedSourceLaunchTx(ctx, tx, sourceID, in); err != nil {
+		return nil, err
 	}
 	if err := addTaskEventTx(ctx, tx, sourceID, "source_imported", map[string]string{"key": in.Key}); err != nil {
 		return nil, err

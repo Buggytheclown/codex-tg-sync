@@ -27,9 +27,14 @@ type TaskConfig struct {
 	ContinuationPrompt string                `json:"continuation_prompt"`
 	Execution          TaskExecutionSettings `json:"execution"`
 }
+type TaskLaunchPolicy struct {
+	Mode    string   `json:"mode"`
+	Authors []string `json:"authors,omitempty"`
+}
 type TaskPollingAction struct {
-	Type            string          `json:"type"`
-	ChildDefinition *TaskDefinition `json:"child_definition,omitempty"`
+	InitialLaunch   *TaskLaunchPolicy `json:"initial_launch,omitempty"`
+	Type            string            `json:"type"`
+	ChildDefinition *TaskDefinition   `json:"child_definition,omitempty"`
 }
 type TaskPolling struct {
 	TaskID        string            `json:"task_id"`
@@ -53,6 +58,7 @@ type Task struct {
 	ThreadID     string               `json:"thread_id"`
 	SourceURL    string               `json:"source_url"`
 	SourceKey    string               `json:"source_key"`
+	SourceAuthor string               `json:"source_author,omitempty"`
 	SourceTaskID string               `json:"source_task_id"`
 	Config       TaskConfig           `json:"config"`
 	Version      int64                `json:"version"`

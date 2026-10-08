@@ -89,7 +89,15 @@ export function PollingFields({
     onChange({
       ...p,
       config: { ...p.config, login: value.config.login || "" },
-      action: { ...p.action, child_definition: value.action.child_definition },
+      action: {
+        ...p.action,
+        child_definition: value.action.child_definition,
+        initial_launch:
+          type === "cron" &&
+          value.action.initial_launch?.mode === "trusted_authors"
+            ? { mode: "manual" }
+            : value.action.initial_launch,
+      },
     });
   };
   const source =
@@ -102,7 +110,7 @@ export function PollingFields({
         <select value={value.type} onChange={(e) => changeType(e.target.value)}>
           {sourceOnly && (
             <>
-              <option value="pr_review_source">Assigned PRs</option>
+              <option value="pr_review_source">PR review</option>
               <option value="pr_changes_source">
                 My PRs requesting changes
               </option>

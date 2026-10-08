@@ -155,11 +155,11 @@ All sources enter the same durable request lifecycle. The Requests topic shows a
 
 PR and cron sources live in the local task board's SQLite database. Existing cron schedules from `~/.codex-tg/cron.json` are imported once; edit them on the board afterward.
 
-Arcanum polling uses the authenticated `ya tool gena-arcanum-cli`. Assigned PRs authored by the configured reviewer are skipped. Sources create one board task per PR cycle, with a copied source-owned task definition and Telegram launch request. New board requests require `Start`; legacy requests retain their previous policy. Moving a task to Polling enables its prepared wait. A matching event returns it to Inbox and can request continuation of the same chat.
+Arcanum polling uses the authenticated `ya tool gena-arcanum-cli`. Assigned PRs authored by the configured reviewer are skipped. Sources create one board task per PR cycle, with a copied source-owned task definition and Telegram launch request. Source initial launch defaults to manual `Start`; the Source editor also supports trusted PR authors or automatic launch. Automatic requests appear in Telegram before starting. Continuations require `Start`, and existing requests retain their frozen policy. Imported review sources restore the configured trusted-author allowlist once; feedback and existing cron sources stay manual. Fresh cron imports retain their configured launch policy. Moving a task to Polling enables its prepared wait. A matching event returns it to Inbox and can request continuation of the same chat.
 
 ## Local task board
 
-The board has a collapsible source list on the left, Inbox / TODO / Polling / Done in the center, and card details on the right. Running/completed describes the chat pass, independently of the column. Launch approval stays in Telegram; discussion and result review stay in Codex.
+The board has a collapsible source list on the left, Inbox / TODO / Polling / Done in the center, and card details on the right. Running/completed describes the chat pass, independently of the column. Sources configure initial launch policy; Telegram shows requests and approves manual initial starts and continuations. Discussion and result review stay in Codex. New child titles start with the source name; cron adds the scheduled local date/time and timezone. The default review source is `PR review`; custom source names and historical task/request titles are preserved.
 
 Build and install the frontend from `ui/`:
 

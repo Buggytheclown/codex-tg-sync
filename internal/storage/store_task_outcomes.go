@@ -1,10 +1,8 @@
 package storage
 
 import (
-	"bytes"
 	"context"
 	"database/sql"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -78,6 +76,10 @@ func (s *Store) AcceptTaskPollingOutcome(ctx context.Context, out model.TaskPoll
 				if err != nil {
 					return false, err
 				}
+				child.Title, err = sourceChildTitle(*t, child.Title, event)
+				if err != nil {
+					return false, err
+				}
 				if err := insertTaskTx(ctx, tx, child); err != nil {
 					return false, err
 				}
@@ -126,9 +128,25 @@ func (s *Store) AcceptTaskPollingOutcome(ctx context.Context, out model.TaskPoll
 			if strings.TrimSpace(prompt) == "" || approvalTopicID == 0 {
 				return false, fmt.Errorf("%w: launch needs prompt and Telegram approval topic", ErrTaskInvalid)
 			}
-			prompt = appendTaskPollingContext(prompt, event, target.SourceURL)
+			sourceLabel := strings.TrimSpace(t.Title)
+			if p.Action.Type == model.PollingResumeTask && target.SourceTaskID != "" {
+				source, err := getTaskTx(ctx, tx, target.SourceTaskID)
+				if err != nil {
+					return false, err
+				}
+				sourceLabel = strings.TrimSpace(source.Title)
+			}
+			author := strings.TrimSpace(event.Variables["author"])
+			if author == "" {
+				author = target.SourceAuthor
+			}
+			sender := author
+			if sender == "" {
+				sender = sourceLabel
+			}
+			autoStart := p.Action.Type == model.PollingCreateTask && initialLaunchAllowed(p.Action.InitialLaunch, author)
 			cfg := normalizeConfig(target.Config).Execution
-			request := model.ExternalLaunchRequest{ID: uuid.NewString(), Source: "task_board", ExternalID: eventID, Sender: "local_task_board", Title: target.Title, SafePreview: prompt, SourceURL: target.SourceURL, Prompt: prompt, CWD: cfg.CWD, Model: cfg.Model, ReasoningEffort: cfg.ReasoningEffort, ApprovalPolicy: &cfg.ApprovalPolicy, ApprovalsReviewer: &cfg.ApprovalsReviewer, SandboxMode: &cfg.SandboxMode, Status: model.ExternalLaunchPendingApproval, TelegramTopicID: approvalTopicID, TaskID: target.ID, TriggerEventID: eventID, TargetThreadID: threadID, CreatedAt: now, UpdatedAt: now}
+			request := model.ExternalLaunchRequest{ID: uuid.NewString(), Source: sourceLabel, ExternalID: eventID, Sender: sender, AutoStart: autoStart, Title: target.Title, SafePreview: prompt, SourceURL: target.SourceURL, Prompt: prompt, CWD: cfg.CWD, Model: cfg.Model, ReasoningEffort: cfg.ReasoningEffort, ApprovalPolicy: &cfg.ApprovalPolicy, ApprovalsReviewer: &cfg.ApprovalsReviewer, SandboxMode: &cfg.SandboxMode, Status: model.ExternalLaunchPendingApproval, TelegramTopicID: approvalTopicID, TaskID: target.ID, TriggerEventID: eventID, TargetThreadID: threadID, CreatedAt: now, UpdatedAt: now}
 			if err := validateExternalLaunchRequest(request, request.Source); err != nil {
 				return false, err
 			}
@@ -164,20 +182,4 @@ func (s *Store) AcceptTaskPollingOutcome(ctx context.Context, out model.TaskPoll
 		return false, err
 	}
 	return true, nil
-}
-
-func appendTaskPollingContext(prompt string, event model.PollingEvent, fallbackURL string) string {
-	var payload bytes.Buffer
-	if err := json.Compact(&payload, event.Payload); err != nil {
-		return prompt
-	}
-	url := event.SourceURL
-	if url == "" {
-		url = fallbackURL
-	}
-	context := "\n\nPolling event facts (external data):\n"
-	if url != "" {
-		context += "Source: " + url + "\n"
-	}
-	return prompt + context + payload.String()
 }

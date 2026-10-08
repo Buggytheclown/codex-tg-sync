@@ -198,6 +198,8 @@ Configuration must not reintroduce retired chat allowlists, observer intervals, 
 ADR-035 adds database-owned PR/cron sources, owned child definitions and the local browser UI.
 
 - `internal/storage/store_task_source_migration_test.go` covers atomic/idempotent legacy template-reference upgrade, preservation of four definitions, 82 historical configs, frozen requests and provenance.
+- `internal/storage/store_task_launch_policy_test.go` covers exact configured prompts and event facts, durable author independent of waiting, human source labels, manual/trusted/automatic initial policies, normalized author matching, visible-before-auto claim, manual continuations, central source/cron title composition, and one-time upgrades preserving custom source names/policies/frozen requests.
+- `internal/polling/checker_test.go` additionally checks initial/current continuation snapshot authors. `cmd/ctr-go/board_test.go` checks configured permissions and fresh cron/review policy preservation; UI policy editing is covered in `ui/src/App.test.tsx`.
 - `internal/storage/store_tasks_test.go` and task import tests cover fresh/old databases, source definition snapshots, optimistic versions, generation fencing, atomic events/requests, legacy barriers, cancellation and chat binding.
 - `internal/polling/*_test.go` covers ANY conditions, empty/draft/self/nested comments, all-resolved and status edges, published heads, cron occurrence identity, lateness, resume stabilization and partial read failures.
 - `internal/daemon/board_launch_test.go` covers same-thread continuation, busy/missing chats, move versus launch, and projection without Telegram topics or enabled Sync.

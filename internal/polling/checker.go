@@ -50,7 +50,7 @@ func (c *Checker) Check(ctx context.Context, p model.TaskPolling, now time.Time)
 			id = p.TaskID
 		}
 		key := "cron:" + id + ":" + slot.Format("2006-01-02")
-		out.Events = []model.PollingEvent{{Key: key, SourceKey: key, Title: "Scheduled task", Payload: jsonBytes(map[string]string{"scheduled_at": slot.Format(time.RFC3339)}), Variables: map[string]string{"date": slot.Format("2006-01-02"), "scheduled_at": slot.Format(time.RFC3339)}}}
+		out.Events = []model.PollingEvent{{Key: key, SourceKey: key, Title: "Scheduled task", Payload: jsonBytes(map[string]string{"scheduled_at": slot.Format(time.RFC3339), "timezone": cfg.Timezone}), Variables: map[string]string{"date": slot.Format("2006-01-02"), "scheduled_at": slot.Format(time.RFC3339)}}}
 	case TypeReview, TypeChanges:
 		if c == nil || c.pr == nil {
 			return out, fmt.Errorf("Arcanum client unavailable")
@@ -94,6 +94,10 @@ func (c *Checker) Check(ctx context.Context, p model.TaskPolling, now time.Time)
 				readErrors = append(readErrors, err)
 				continue
 			}
+			author := strings.TrimSpace(snapshot.Author.Name)
+			if author == "" {
+				author = pr.Author
+			}
 			id := strconv.FormatInt(pr.ID, 10)
 			key := prefix + id
 			url := "https://a.yandex-team.ru/review/" + id
@@ -109,7 +113,7 @@ func (c *Checker) Check(ctx context.Context, p model.TaskPolling, now time.Time)
 					baseline.Tracked = append(baseline.Tracked, comment.ID)
 				}
 			}
-			out.Events = append(out.Events, model.PollingEvent{Key: key, SourceKey: key, Title: pr.Summary, SourceURL: url, Cursor: jsonBytes(baseline), Payload: jsonBytes(map[string]string{"pr_id": id, "head_commit": snapshot.HeadCommit, "common_status": snapshot.CommonStatus}), Variables: map[string]string{"pr_id": id, "pr_title": pr.Summary, "pr_url": url, "author": pr.Author, "login": cfg.Login}})
+			out.Events = append(out.Events, model.PollingEvent{Key: key, SourceKey: key, Title: pr.Summary, SourceURL: url, Cursor: jsonBytes(baseline), Payload: jsonBytes(map[string]string{"pr_id": id, "author": author, "head_commit": snapshot.HeadCommit, "common_status": snapshot.CommonStatus}), Variables: map[string]string{"pr_id": id, "pr_title": pr.Summary, "pr_url": url, "author": author, "login": cfg.Login}})
 			cursor.Seen = append(cursor.Seen, pr.ID)
 		}
 		out.Cursor = jsonBytes(cursor)
@@ -139,10 +143,10 @@ func (c *Checker) Check(ctx context.Context, p model.TaskPolling, now time.Time)
 		if len(reasons) == 0 {
 			return out, nil
 		}
-		payload := jsonBytes(map[string]any{"pr_id": cfg.PRID, "reasons": reasons, "head_commit": current.HeadCommit, "common_status": current.CommonStatus})
+		payload := jsonBytes(map[string]any{"pr_id": cfg.PRID, "author": current.Author.Name, "reasons": reasons, "head_commit": current.HeadCommit, "common_status": current.CommonStatus})
 		hash := sha256.Sum256(append(append([]byte{}, payload...), out.Cursor...))
 		key := fmt.Sprintf("wait:%d:%s", p.Generation, hex.EncodeToString(hash[:12]))
-		out.Events = []model.PollingEvent{{Key: key, SourceURL: "https://a.yandex-team.ru/review/" + cfg.PRID, Payload: payload, Variables: map[string]string{"pr_id": cfg.PRID, "pr_url": "https://a.yandex-team.ru/review/" + cfg.PRID, "reasons": strings.Join(reasons, ", ")}}}
+		out.Events = []model.PollingEvent{{Key: key, SourceURL: "https://a.yandex-team.ru/review/" + cfg.PRID, Payload: payload, Variables: map[string]string{"pr_id": cfg.PRID, "pr_url": "https://a.yandex-team.ru/review/" + cfg.PRID, "reasons": strings.Join(reasons, ", "), "author": current.Author.Name}}}
 	}
 	return out, nil
 }

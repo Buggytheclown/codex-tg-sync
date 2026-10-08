@@ -456,3 +456,26 @@ it("starts a new cron waiting definition with blank PR ID and author", async () 
     "",
   );
 });
+
+it("edits initial launch policy independently of execution approvals", async () => {
+  const { SourceEditor } = await import("./SourceEditor");
+  const save = vi.fn(async (_p: unknown) => 4);
+  render(<SourceEditor task={sourceTask()} busy={false} onSave={save} />);
+  expect(
+    (screen.getByLabelText("Initial launch") as HTMLSelectElement).value,
+  ).toBe("manual");
+  fireEvent.change(screen.getByLabelText("Initial launch"), {
+    target: { value: "trusted_authors" },
+  });
+  fireEvent.change(screen.getByLabelText("Trusted PR authors"), {
+    target: { value: "alice, bob" },
+  });
+  fireEvent.click(screen.getByRole("button", { name: "Save source" }));
+  await waitFor(() => expect(save).toHaveBeenCalledTimes(1));
+  expect(save.mock.calls[0][0]).toMatchObject({
+    action: {
+      initial_launch: { mode: "trusted_authors", authors: ["alice", "bob"] },
+    },
+  });
+  expect(screen.getByText(/continuations require Start/)).toBeTruthy();
+});

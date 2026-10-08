@@ -20,8 +20,8 @@ func externalSourceCursorKey(source string) string {
 
 func validateExternalLaunchRequest(request model.ExternalLaunchRequest, source string) error {
 	if request.TaskID != "" || request.Source == "task_board" {
-		if request.TaskID == "" || request.TriggerEventID == "" || request.AutoStart || request.ApprovalPolicy == nil || request.ApprovalsReviewer == nil || request.SandboxMode == nil || *request.ApprovalPolicy == "" || *request.ApprovalsReviewer == "" || *request.SandboxMode == "" {
-			return errors.New("board launch requires task/event linkage, manual approval and explicit frozen permissions")
+		if request.TaskID == "" || request.TriggerEventID == "" || (request.AutoStart && request.TargetThreadID != "") || request.ApprovalPolicy == nil || request.ApprovalsReviewer == nil || request.SandboxMode == nil || *request.ApprovalPolicy == "" || *request.ApprovalsReviewer == "" || *request.SandboxMode == "" {
+			return errors.New("board launch requires task/event linkage, manual continuations and explicit frozen permissions")
 		}
 	}
 

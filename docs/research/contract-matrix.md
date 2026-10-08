@@ -115,9 +115,11 @@ Cron, Yandex Messenger, and Arcanum review pollers insert requests through the s
 - A launch `createForumTopic` `429` is returned after one attempt and rendered as a retryable failed card; it is not hidden by an internal retry loop.
 - Ambiguous thread creation is never replayed automatically.
 - Terminal Codex state closes the request and queues a short terminal reply when the source supports replies.
-- New database-owned board PR/cron sources always require Telegram approval. Legacy launch requests preserve their prior auto/manual policy; the former Arcanum author allowlist no longer grants approval to new board work.
+- Database-owned sources have an explicit initial launch policy: manual by default, trusted PR authors, or automatic. Cards precede automatic claim; continuations remain manual. The once-only imported review upgrade preserves the configured legacy author allowlist when no explicit board policy exists. Feedback/existing cron sources stay manual; new cron imports retain configured policy. Frozen requests preserve their prior policy.
 - Arcanum assigned reviews skip PRs authored by the configured reviewer. Own PRs in `Waiting for changes` create one fix task per cycle from their template.
 - One task can have multiple sequential requests. Continuation uses its exact target chat, never steers a busy turn or creates a replacement. Busy requests stay pending for another explicit Start.
+- New child titles begin with the current source name. Cron adds scheduled local date/time and timezone before any child title; the exact default Assigned PRs source is upgraded once to PR review. Custom source names and historical task/request titles are preserved.
+- Launch cards show actual PR author in From and source name in Source. Author provenance persists independently of optional waiting. Prompts equal configured/rendered instructions, with facts retained in event history.
 - TODO/Done cancels definitely unstarted board requests under the launch gate; active and ambiguous operations are not interrupted or replayed.
 - Poller status is durable enough to show enabled state, current work, last attempt/success, and consecutive failures.
 

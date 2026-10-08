@@ -168,7 +168,7 @@ func New(cfg config.Config) (*Service, error) {
 	if strings.TrimSpace(defaultsCWD) == "" {
 		defaultsCWD = cfg.DefaultCWD
 	}
-	service.taskBoard.SetExecutionDefaults(model.TaskExecutionSettings{CWD: defaultsCWD, ApprovalPolicy: "on-request", ApprovalsReviewer: "auto_review", SandboxMode: "workspace-write"})
+	service.taskBoard.SetExecutionDefaults(model.TaskExecutionSettings{CWD: defaultsCWD, ApprovalPolicy: cfg.ExternalApprovalPolicy, ApprovalsReviewer: cfg.ExternalApprovalsReviewer, SandboxMode: cfg.ExternalSandboxMode})
 	transport := appserver.TransportConfig{
 		Mode:       appserver.TransportMode(cfg.AppServerMode),
 		ListenURL:  cfg.AppServerListen,

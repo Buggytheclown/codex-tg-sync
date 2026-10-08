@@ -43,6 +43,9 @@ func (s *Store) initializeTasks(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	if err := s.ensureColumn(ctx, "tasks", "source_author", `ALTER TABLE tasks ADD COLUMN source_author TEXT`); err != nil {
+		return err
+	}
 	return s.migrateOwnedSourceDefinitions(ctx)
 }
 
@@ -69,6 +72,9 @@ func validatePolling(p model.TaskPolling) error {
 	if strings.TrimSpace(p.Type) == "" || (p.Mode != model.PollingOnce && p.Mode != model.PollingRepeat) || !jsonObject(p.Config) {
 		return fmt.Errorf("%w: polling type, mode and object config required", ErrTaskInvalid)
 	}
+	if err := validateInitialLaunch(p); err != nil {
+		return err
+	}
 	switch p.Action.Type {
 	case model.PollingReturnTask, model.PollingResumeTask:
 		if p.Action.ChildDefinition != nil {
@@ -93,12 +99,12 @@ func validatePolling(p model.TaskPolling) error {
 	return nil
 }
 
-const taskColumns = `id,title,description,column,position,coalesce(thread_id,''),coalesce(source_url,''),coalesce(source_key,''),coalesce(source_task_id,''),task_config_json,version,created_at,updated_at`
+const taskColumns = `id,title,description,column,position,coalesce(thread_id,''),coalesce(source_url,''),coalesce(source_key,''),coalesce(source_task_id,''),coalesce(source_author,''),task_config_json,version,created_at,updated_at`
 
 func scanTask(row rowScanner) (*model.Task, error) {
 	var t model.Task
 	var raw string
-	err := row.Scan(&t.ID, &t.Title, &t.Description, &t.Column, &t.Position, &t.ThreadID, &t.SourceURL, &t.SourceKey, &t.SourceTaskID, &raw, &t.Version, &t.CreatedAt, &t.UpdatedAt)
+	err := row.Scan(&t.ID, &t.Title, &t.Description, &t.Column, &t.Position, &t.ThreadID, &t.SourceURL, &t.SourceKey, &t.SourceTaskID, &t.SourceAuthor, &raw, &t.Version, &t.CreatedAt, &t.UpdatedAt)
 	if err != nil {
 		return nil, err
 	}
@@ -225,7 +231,7 @@ func insertTaskTx(ctx context.Context, tx *sql.Tx, t model.Task) error {
 	if err != nil {
 		return err
 	}
-	_, err = tx.ExecContext(ctx, `INSERT INTO tasks(id,title,description,column,position,thread_id,source_url,source_key,source_task_id,task_config_json,version,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)`, t.ID, t.Title, t.Description, t.Column, t.Position, nullable(t.ThreadID), nullable(t.SourceURL), nullable(t.SourceKey), nullable(t.SourceTaskID), string(raw), t.Version, t.CreatedAt, t.UpdatedAt)
+	_, err = tx.ExecContext(ctx, `INSERT INTO tasks(id,title,description,column,position,thread_id,source_url,source_key,source_task_id,source_author,task_config_json,version,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, t.ID, t.Title, t.Description, t.Column, t.Position, nullable(t.ThreadID), nullable(t.SourceURL), nullable(t.SourceKey), nullable(t.SourceTaskID), nullable(t.SourceAuthor), string(raw), t.Version, t.CreatedAt, t.UpdatedAt)
 	return err
 }
 func setPollingTx(ctx context.Context, tx *sql.Tx, p model.TaskPolling) error {
