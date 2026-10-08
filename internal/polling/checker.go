@@ -21,7 +21,10 @@ type PRClient interface {
 	arcanumreview.WaitingChangesClient
 	ReadPRSnapshot(context.Context, int64) (arcanumreview.PRSnapshot, error)
 }
-type Checker struct{ pr PRClient }
+type Checker struct {
+	pr    PRClient
+	Login *string
+}
 
 func NewChecker(pr PRClient) *Checker { return &Checker{pr: pr} }
 func timestamp(t time.Time) model.TimeString {
@@ -31,6 +34,13 @@ func jsonBytes(value any) json.RawMessage { b, _ := json.Marshal(value); return 
 
 func (c *Checker) Check(ctx context.Context, p model.TaskPolling, now time.Time) (model.TaskPollingOutcome, error) {
 	out := model.TaskPollingOutcome{TaskID: p.TaskID, Generation: p.Generation, Cursor: p.Cursor, CheckedAt: timestamp(now), NextCheckAt: timestamp(now.Add(time.Minute))}
+	if c != nil && c.Login != nil {
+		var err error
+		p, err = WithLogin(p, *c.Login)
+		if err != nil {
+			return out, err
+		}
+	}
 	if err := Validate(p); err != nil {
 		return out, err
 	}

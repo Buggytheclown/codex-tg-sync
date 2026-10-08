@@ -200,7 +200,7 @@ func TestTaskEventFailureRollsBackEveryWrite(t *testing.T) {
 	tasks, _ = s.ListTasks(ctx)
 	for _, task := range tasks {
 		if task.ID != source.ID {
-			if string(task.Polling.Cursor) != `{"revision":"baseline"}` || string(task.Polling.Config) != `{"pr_id":"1"}` {
+			if string(task.Polling.Cursor) != `{"revision":"baseline"}` || string(task.Polling.Config) != `{"complete_on_merge":false,"pr_id":"1"}` {
 				t.Fatalf("child baseline/substitution: %#v", task.Polling)
 			}
 		}
@@ -516,7 +516,7 @@ func TestTaskDefinitionCopiesDataWithoutRecursiveVariableExpansion(t *testing.T)
 		if item.Title != `source: Review literal "{{other}}"` || item.Config.InitialPrompt != `Review literal "{{other}}" and expanded` {
 			t.Fatalf("recursive substitution: %#v", item)
 		}
-		var cfg map[string]string
+		var cfg map[string]any
 		if err := json.Unmarshal(item.Polling.Config, &cfg); err != nil {
 			t.Fatal(err)
 		}

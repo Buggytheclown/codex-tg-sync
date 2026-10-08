@@ -88,7 +88,7 @@ export function PollingFields({
     const p = defaultPolling(type);
     onChange({
       ...p,
-      config: { ...p.config, login: value.config.login || "" },
+      config: p.config,
       action: {
         ...p.action,
         child_definition: value.action.child_definition,
@@ -154,21 +154,6 @@ export function PollingFields({
         </>
       ) : (
         <>
-          <Field
-            label="Your Arcanum login"
-            hint={
-              source ? undefined : "Needed to track your answered comments."
-            }
-          >
-            <input
-              required={
-                source || value.config.conditions?.includes("all_answered")
-              }
-              value={value.config.login || ""}
-              onChange={(e) => cfg("login", e.target.value)}
-              placeholder="reviewer"
-            />
-          </Field>
           {value.type === "pr_wait" && (
             <>
               <Field label="PR ID">
@@ -189,6 +174,15 @@ export function PollingFields({
                   placeholder={child && variables ? "{{author}}" : "author"}
                 />
               </Field>
+              <label className="check-line">
+                <input
+                  type="checkbox"
+                  checked={value.config.complete_on_merge === true}
+                  onChange={(e) => cfg("complete_on_merge", e.target.checked)}
+                />
+                Move to Done when PR is merged
+              </label>
+              <p className="note">A merged PR completes this task without requesting a continuation.</p>
               <fieldset className="conditions">
                 <legend>Wake when any condition becomes true</legend>
                 {Object.entries(conditionLabels).map(([key, label]) => (

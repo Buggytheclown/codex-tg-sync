@@ -24,6 +24,7 @@ export type PollConfig = {
   pr_id?: string;
   author?: string;
   conditions?: string[];
+  complete_on_merge?: boolean;
   interval_seconds?: number;
   cron?: string;
   timezone?: string;
@@ -146,9 +147,9 @@ export const defaultPolling = (type = "pr_wait"): Polling => ({
           max_lateness: "5m",
         }
       : {
-          login: "",
           ...(type === "pr_wait"
             ? {
+                complete_on_merge: false,
                 pr_id: "",
                 author: "",
                 conditions: ["new_commit", "all_answered"],
@@ -215,11 +216,11 @@ export function pollingProblem(p?: Polling, child = false): string {
         if (!/^[1-9]\d*$/.test(d.polling.config.pr_id || ""))
           return "Scheduled repeat work needs an explicit positive PR ID. Enter one or turn Repeat work off.";
         if (
-          [d.polling.config.login, d.polling.config.author].some((value) =>
+          [d.polling.config.author].some((value) =>
             /\{\{|\}\}/.test(value || ""),
           )
         )
-          return "Scheduled repeat work cannot use PR placeholders for the reviewer or author. Enter real values (author may be blank), or turn Repeat work off.";
+          return "Scheduled repeat work cannot use PR placeholders for the author. Enter a real author (or leave it blank), or turn Repeat work off.";
       }
       const problem = pollingProblem(d.polling, true);
       if (problem) return problem;
@@ -236,11 +237,6 @@ export function pollingProblem(p?: Polling, child = false): string {
     if (p.mode !== "repeat" || p.action.type !== "create_task")
       return "Cron sources use Repeat and Create task.";
   } else {
-    if (
-      (p.type !== "pr_wait" || p.config.conditions?.includes("all_answered")) &&
-      !p.config.login?.trim()
-    )
-      return "Enter your Arcanum login.";
     if (
       !p.config.interval_seconds ||
       p.config.interval_seconds < 10 ||

@@ -51,16 +51,11 @@ func (s *Store) AcceptTaskPollingOutcome(ctx context.Context, out model.TaskPoll
 	}
 
 	if out.PRStatus == "merged" && p.Type == "pr_wait" && p.Action.Type != model.PollingCreateTask {
-		review := strings.HasPrefix(t.SourceKey, "arcanum_review:")
-		if !review && t.SourceTaskID != "" {
-			var parentType string
-			err := tx.QueryRowContext(ctx, `SELECT type FROM task_polling WHERE task_id=?`, t.SourceTaskID).Scan(&parentType)
-			if err != nil && !errors.Is(err, sql.ErrNoRows) {
-				return false, err
-			}
-			review = parentType == "pr_review_source"
+		complete, err := taskCompleteOnMerge(ctx, tx, t)
+		if err != nil {
+			return false, err
 		}
-		if review {
+		if complete {
 			if _, err := tx.ExecContext(ctx, `UPDATE tasks SET column='done',version=version+1,updated_at=? WHERE id=?`, now, t.ID); err != nil {
 				return false, err
 			}
@@ -111,6 +106,9 @@ func (s *Store) AcceptTaskPollingOutcome(ctx context.Context, out model.TaskPoll
 					return false, err
 				}
 				if child.Polling != nil {
+					if err := freezeMergeChoice(child.Polling, child.SourceKey, p.Type); err != nil {
+						return false, err
+					}
 					if err := s.validateResolvedTaskPolling(*child.Polling); err != nil {
 						return false, err
 					}

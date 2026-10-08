@@ -164,6 +164,9 @@ func (s *Store) GetTask(ctx context.Context, id string) (*model.Task, error) {
 		return nil, err
 	}
 	t.Polling = p
+	if err := projectMergeSettings(ctx, s.db, t); err != nil {
+		return nil, err
+	}
 	if t.ThreadID != "" {
 		t.Execution, err = s.GetSnapshot(ctx, t.ThreadID)
 		if err != nil {

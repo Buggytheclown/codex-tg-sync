@@ -26,6 +26,7 @@ const (
 )
 
 type Config struct {
+	CompleteOnMerge *bool    `json:"complete_on_merge,omitempty"`
 	Login           string   `json:"login,omitempty"`
 	PRID            string   `json:"pr_id,omitempty"`
 	Author          string   `json:"author,omitempty"`
@@ -41,6 +42,9 @@ var loginPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
 
 func DecodeConfig(p model.TaskPolling) (Config, error) {
 	var c Config
+	if raw := bytes.TrimSpace(p.Config); len(raw) == 0 || raw[0] != '{' {
+		return c, errors.New("polling config requires JSON object")
+	}
 	decoder := json.NewDecoder(bytes.NewReader(p.Config))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&c); err != nil {
@@ -147,4 +151,39 @@ func validateSourceChildWait(source model.TaskPolling, sourceConfig Config) erro
 		return fmt.Errorf("child waiting: %w", err)
 	}
 	return nil
+}
+
+// WithLogin copies polling settings and supplies the configured account at runtime.
+// Stored source and child settings cannot select another account.
+func WithLogin(p model.TaskPolling, login string) (model.TaskPolling, error) {
+	if p.Type == TypeReview || p.Type == TypeChanges || p.Type == TypePRWait {
+		cfg, err := DecodeConfig(p)
+		if err != nil {
+			return p, err
+		}
+		required := p.Type == TypeReview || p.Type == TypeChanges
+		for _, condition := range cfg.Conditions {
+			required = required || condition == ConditionAnswered
+		}
+		if required && !loginPattern.MatchString(login) {
+			return p, errors.New("configure CTR_GO_ARCANUM_REVIEW_LOGIN with a valid account")
+		}
+		cfg.Login = login
+		p.Config, err = json.Marshal(cfg)
+		if err != nil {
+			return p, err
+		}
+	}
+	if p.Action.ChildDefinition != nil {
+		child := *p.Action.ChildDefinition
+		p.Action.ChildDefinition = &child
+		if child.Polling != nil {
+			wait, err := WithLogin(*child.Polling, login)
+			if err != nil {
+				return p, fmt.Errorf("child waiting: %w", err)
+			}
+			child.Polling = &wait
+		}
+	}
+	return p, nil
 }

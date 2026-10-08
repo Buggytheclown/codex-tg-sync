@@ -150,6 +150,9 @@ func (s *Store) BootstrapTaskSource(ctx context.Context, in model.TaskSourceImpo
 				p = &copy
 			}
 			if p != nil {
+				if err := freezeMergeChoice(p, legacy.SourceKey, source.Polling.Type); err != nil {
+					return nil, err
+				}
 				p.TaskID = taskID
 				p.Generation = 1
 				p.Cursor = json.RawMessage(`{}`)

@@ -5,11 +5,11 @@ import { defaultPolling, emptyConfig, pollingProblem } from "./model";
 import { ExecutionFields, Field, PollingFields } from "./forms";
 import { PollingDiagnostics } from "./PollingDiagnostics";
 
-function childWaiting(type: string, login: string): Polling {
+function childWaiting(type: string): Polling {
   return {
     ...defaultPolling(),
     config: {
-      login,
+      complete_on_merge: type !== "cron",
       pr_id: type === "cron" ? "" : "{{pr_id}}",
       author: type === "cron" ? "" : "{{author}}",
       conditions: ["new_commit", "all_answered"],
@@ -51,7 +51,7 @@ export function SourceEditor({
   );
   const [waiting, setWaiting] = useState(
     initial.action.child_definition?.polling ||
-      childWaiting(initial.type, initial.config.login || ""),
+      childWaiting(initial.type),
   );
   const [waitingConfigured, setWaitingConfigured] = useState(
     !!initial.action.child_definition?.polling,
@@ -252,17 +252,10 @@ export function SourceEditor({
               setRepeat(e.target.checked);
               if (e.target.checked && !waitingConfigured) {
                 setWaiting(
-                  childWaiting(polling.type, polling.config.login || ""),
+                  childWaiting(polling.type),
                 );
                 setWaitingConfigured(true);
-              } else if (e.target.checked && !waiting.config.login)
-                setWaiting({
-                  ...waiting,
-                  config: {
-                    ...waiting.config,
-                    login: polling.config.login || "",
-                  },
-                });
+              }
             }}
           />
           Repeat work

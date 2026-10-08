@@ -265,4 +265,10 @@ For live Telegram QA, verify:
 
 - `internal/arcanumreview/snapshot_test.go`: authoritative merged metadata with exact PR identity succeeds without comment or author reads.
 - `internal/polling/checker_test.go` and `runner_test.go`: merged waits produce no continuation events; failed reads cannot publish a terminal status; merged source entries are remembered so bounded reads still discover later open PRs.
-- `internal/storage/store_task_merged_test.go`: generated review tasks complete atomically, record history and stop polling. Column/generation/error fences reject stale outcomes; manual, feedback, cron and source tasks remain unchanged. Only definitely unstarted launch requests are cancelled; started and uncertain requests remain intact.
+- `internal/storage/store_task_merged_test.go`: review/feedback defaults and explicit merge options complete atomically, record history and stop polling. Column/generation/error fences reject stale outcomes; disabled options, closed PRs, default manual/cron waits and source tasks remain unchanged. Only definitely unstarted launch requests are cancelled; started and uncertain requests remain intact.
+
+## Configured PR identity and merge options
+
+- Polling helper/checker tests cover configured account overriding saved identity, recursive source-child validation, missing required identity, malformed configs and unchanged PR conditions.
+- Storage tests cover effective read projections without writes, explicit true/false precedence, durable legacy review/feedback provenance, frozen defaults for copied children and independence from subsequent source changes.
+- `ui/src/App.test.tsx` and `model.test.ts` cover login-free source/task saves, merge toggles in task and source child waiting settings, PR versus cron defaults, keyboard saves and conflict draft retention.

@@ -221,9 +221,7 @@ describe("board operator flows", () => {
     fireEvent.change(screen.getByLabelText("Source name"), {
       target: { value: "My reviews" },
     });
-    fireEvent.change(screen.getByLabelText("Your Arcanum login"), {
-      target: { value: "reviewer" },
-    });
+    expect(screen.queryByLabelText("Your Arcanum login")).toBeNull();
     fireEvent.change(screen.getByLabelText("Task title"), {
       target: { value: "Review {{pr_id}}" },
     });
@@ -455,7 +453,7 @@ it("preserves a PR waiting draft when switching to cron and requires explicit PR
     target: { value: "123" },
   });
   fireEvent.click(screen.getByRole("button", { name: "Save source" }));
-  expect(await screen.findByText(/reviewer or author/)).toBeTruthy();
+  expect(await screen.findByText(/for the author/)).toBeTruthy();
   expect(save).not.toHaveBeenCalled();
   fireEvent.change(screen.getByLabelText("PR author"), {
     target: { value: "" },
@@ -737,9 +735,15 @@ it("Cmd+Enter saves the focused polling section and respects native validation",
   expect(calls.filter(c => c.method === "PUT")).toHaveLength(0);
   await waitFor(() => expect((screen.getByRole("button", { name: "Save polling" }) as HTMLButtonElement).disabled).toBe(false));
   fireEvent.change(screen.getByLabelText("PR ID"), { target: { value: "43" } });
-  fireEvent.change(screen.getByLabelText("Your Arcanum login"), { target: { value: "reviewer" } });
+  expect(screen.queryByLabelText("Your Arcanum login")).toBeNull();
+  fireEvent.click(screen.getByLabelText("Move to Done when PR is merged"));
   fireEvent.keyDown(screen.getByLabelText("PR ID"), { key: "Enter", metaKey: true });
   await waitFor(() => expect(rows[0].polling?.config.pr_id).toBe("43"));
+  expect(rows[0].polling?.config.complete_on_merge).toBe(true);
+  await waitFor(() => expect((screen.getByRole("button", { name: "Save polling" }) as HTMLButtonElement).disabled).toBe(false));
+  fireEvent.click(screen.getByLabelText("Move to Done when PR is merged"));
+  fireEvent.keyDown(screen.getByLabelText("PR ID"), { key: "Enter", metaKey: true });
+  await waitFor(() => expect(rows[0].polling?.config.complete_on_merge).toBe(false));
 });
 it("preserves new overview typing during an ordinary save and saves sources with Cmd+Enter", async () => {
   window.history.replaceState(null, "", "/?task=task-1");
@@ -988,4 +992,48 @@ it("does not advance unseen full settings from a newer compact ticket reply", as
   await waitFor(() => expect(rows[0].title).toBe("Keep title draft"));
   expect(rows[0].config.initial_prompt).toBe("External prompt");
   expect(rows[0].ticket_url).toBe("https://tracker.example/TASK-123");
+});
+
+it("saves merge completion independently of ANY conditions and preserves a conflicting draft", async () => {
+  const initial = defaultPolling();
+  initial.config.pr_id = "123";
+  const save = vi.fn(async (polling: Polling) => ({ version: 2, polling }));
+  const view = render(<PollingForm initial={initial} expectedVersion={1} onSave={save} />);
+  expect(screen.queryByLabelText("Your Arcanum login")).toBeNull();
+  const merged = screen.getByLabelText("Move to Done when PR is merged") as HTMLInputElement;
+  expect(merged.checked).toBe(false);
+  fireEvent.click(merged);
+  fireEvent.click(screen.getByRole("button", { name: "Save polling" }));
+  await waitFor(() => expect(save).toHaveBeenCalledTimes(1));
+  expect(save.mock.calls[0][0].config).toMatchObject({ complete_on_merge: true, conditions: ["new_commit", "all_answered"] });
+  fireEvent.click(merged);
+  view.rerender(<PollingForm initial={{ ...initial, config: { ...initial.config, pr_id: "456", complete_on_merge: true } }} expectedVersion={3} onSave={save} />);
+  fireEvent.click(screen.getByRole("button", { name: "Save polling" }));
+  expect(await screen.findByRole("alert")).toBeTruthy();
+  expect(merged.checked).toBe(false);
+  expect(save).toHaveBeenCalledTimes(1);
+});
+
+it.each(["pr_review_source", "pr_changes_source", "cron"])("saves child merge completion both ways for %s", async type => {
+  const { SourceEditor } = await import("./SourceEditor");
+  const task = sourceTask();
+  task.polling = defaultPolling(type);
+  task.polling.action.child_definition = { title: "Child", description: "", config: { ...emptyConfig(), initial_prompt: "Work", continuation_prompt: "Follow up" } };
+  const save = vi.fn(async (_polling: Polling) => 4);
+  render(<SourceEditor task={task} busy={false} onSave={save} />);
+  expect(screen.queryByLabelText("Your Arcanum login")).toBeNull();
+  expect(screen.queryByLabelText("Move to Done when PR is merged")).toBeNull();
+  fireEvent.click(screen.getByLabelText("Repeat work"));
+  const merged = screen.getByLabelText("Move to Done when PR is merged") as HTMLInputElement;
+  const expected = type !== "cron";
+  expect(merged.checked).toBe(expected);
+  if (type === "cron") fireEvent.change(screen.getByLabelText("PR ID"), { target: { value: "123" } });
+  fireEvent.click(screen.getByRole("button", { name: "Save source" }));
+  await waitFor(() => expect(save).toHaveBeenCalledTimes(1));
+  expect(save.mock.calls[0][0].action.child_definition!.polling!.config.complete_on_merge).toBe(expected);
+  fireEvent.click(merged);
+  fireEvent.click(screen.getByRole("button", { name: "Save source" }));
+  await waitFor(() => expect(save).toHaveBeenCalledTimes(2));
+  expect(save.mock.calls[1][0].action.child_definition!.polling!.config.complete_on_merge).toBe(!expected);
+  expect(save.mock.calls[1][0].config).not.toHaveProperty("complete_on_merge");
 });

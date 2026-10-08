@@ -11,13 +11,15 @@ import (
 )
 
 type fakePR struct {
+	login  string
 	status string
 	calls  int
 	fail   bool
 	author string
 }
 
-func (f *fakePR) ListAssigned(context.Context, string) ([]arcanumreview.PullRequest, error) {
+func (f *fakePR) ListAssigned(_ context.Context, login string) ([]arcanumreview.PullRequest, error) {
+	f.login = login
 	return []arcanumreview.PullRequest{{ID: 42, Author: "alice", Summary: "Change"}}, nil
 }
 func (f *fakePR) ListAuthoredWaitingForChanges(ctx context.Context, s string) ([]arcanumreview.PullRequest, error) {
@@ -145,5 +147,61 @@ func TestMergedAssignedCandidatesDoNotStarveLaterOpenPR(t *testing.T) {
 	out, err = checker.Check(context.Background(), source, time.Now())
 	if err != nil || len(out.Events) != 0 || len(client.reads) != 6 {
 		t.Fatalf("repeat: %#v reads=%v err=%v", out, client.reads, err)
+	}
+}
+
+func TestConfiguredLoginOverridesStoredSourceAndChild(t *testing.T) {
+	client := &fakePR{}
+	checker := NewChecker(client)
+	login := "configured-reviewer"
+	checker.Login = &login
+	wait := model.TaskPolling{Type: TypePRWait, Mode: model.PollingOnce, Config: jsonBytes(Config{PRID: "{{pr_id}}", Login: "stale-reviewer", Conditions: []string{ConditionAnswered}}), Action: model.TaskPollingAction{Type: model.PollingReturnTask}}
+	source := model.TaskPolling{Type: TypeReview, Mode: model.PollingRepeat, Config: jsonBytes(Config{Login: "stale-reviewer"}), Action: model.TaskPollingAction{Type: model.PollingCreateTask, ChildDefinition: &model.TaskDefinition{Title: "child", Config: model.TaskConfig{InitialPrompt: "work"}, Polling: &wait}}}
+	effective, err := WithLogin(source, login)
+	if err != nil {
+		t.Fatal(err)
+	}
+	childCfg, _ := DecodeConfig(*effective.Action.ChildDefinition.Polling)
+	if childCfg.Login != login {
+		t.Fatalf("child login %q", childCfg.Login)
+	}
+	original, _ := DecodeConfig(*source.Action.ChildDefinition.Polling)
+	if original.Login != "stale-reviewer" {
+		t.Fatal("normalization mutated original")
+	}
+	if _, err := checker.Check(context.Background(), source, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if client.login != login {
+		t.Fatalf("queried account %q", client.login)
+	}
+	source.Config = []byte(`{"login":123}`)
+	if _, err := checker.Check(context.Background(), source, time.Now()); err == nil {
+		t.Fatal("malformed typed config accepted")
+	}
+	source.Config = jsonBytes(Config{Login: "stale-reviewer"})
+	source.Action.ChildDefinition.Polling.Config = []byte(`{"pr_id":"42","complete_on_merge":"false"}`)
+	if _, err := WithLogin(source, login); err == nil {
+		t.Fatal("malformed child config accepted")
+	}
+}
+
+func TestConfiguredLoginRejectsNonObjectConfig(t *testing.T) {
+	for _, raw := range []string{"null", "[]", "123", "{} {}"} {
+		p := model.TaskPolling{Type: TypeReview, Config: []byte(raw)}
+		if _, err := WithLogin(p, "reviewer"); err == nil {
+			t.Fatalf("accepted %s", raw)
+		}
+	}
+}
+
+func TestConfiguredLoginRequiredOnlyForAccountConditions(t *testing.T) {
+	wait := model.TaskPolling{Type: TypePRWait, Config: jsonBytes(Config{PRID: "42", Conditions: []string{ConditionCommit}})}
+	if _, err := WithLogin(wait, ""); err != nil {
+		t.Fatal(err)
+	}
+	wait.Config = jsonBytes(Config{PRID: "42", Conditions: []string{ConditionAnswered}})
+	if _, err := WithLogin(wait, ""); err == nil {
+		t.Fatal("missing configured account accepted")
 	}
 }

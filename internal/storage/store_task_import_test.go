@@ -77,7 +77,7 @@ func TestTaskLegacyImportIsAtomicIdempotentAndPreservesPolicy(t *testing.T) {
 		t.Fatalf("legacy policy changed: %#v", request)
 	}
 	child, _ := s.GetTask(ctx, request.TaskID)
-	if child.SourceKey != "review:1" || child.Polling == nil || string(child.Polling.Config) != `{"pr_id":"1"}` || string(child.Polling.Cursor) != `{"revision":"old"}` {
+	if child.SourceKey != "review:1" || child.Polling == nil || string(child.Polling.Config) != `{"complete_on_merge":false,"pr_id":"1"}` || string(child.Polling.Cursor) != `{"revision":"old"}` {
 		t.Fatalf("legacy child: %#v", child)
 	}
 	if _, err := s.AcceptTaskPollingOutcome(ctx, model.TaskPollingOutcome{TaskID: source.ID, Generation: source.Polling.Generation, Cursor: []byte(`{}`), Events: []model.PollingEvent{{Key: "assigned:1", SourceKey: "review:1", Payload: []byte(`{}`)}}}, 123); err != nil {

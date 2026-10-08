@@ -23,6 +23,7 @@ import (
 	"github.com/mideco-tech/codex-tg/internal/controlapi"
 	"github.com/mideco-tech/codex-tg/internal/cronpoller"
 	"github.com/mideco-tech/codex-tg/internal/daemon"
+	"github.com/mideco-tech/codex-tg/internal/model"
 	"github.com/mideco-tech/codex-tg/internal/polling"
 	"github.com/mideco-tech/codex-tg/internal/telegram"
 	"github.com/mideco-tech/codex-tg/internal/version"
@@ -112,7 +113,13 @@ func runDaemon(cfg config.Config) error {
 	}
 	defer service.Close()
 	service.SetLogger(diagnosticLogger(cfg, logger))
-	service.SetTaskPollingValidator(polling.Validate)
+	service.SetTaskPollingValidator(func(p model.TaskPolling) error {
+		effective, err := polling.WithLogin(p, cfg.ArcanumReviewLogin)
+		if err != nil {
+			return err
+		}
+		return polling.Validate(effective)
+	})
 	if err := bootstrapTaskBoard(ctx, cfg, service); err != nil {
 		return fmt.Errorf("bootstrap local task board: %w", err)
 	}
@@ -151,6 +158,7 @@ func runDaemon(cfg config.Config) error {
 	}
 	startYMessengerPoller(ctx, cfg, service, logger)
 	checker := polling.NewChecker(arcanumreview.NewCLIClient(cfg.ArcanumYABin, nil))
+	checker.Login = &cfg.ArcanumReviewLogin
 	runner := polling.NewRunner(service, checker, cfg.ExternalRequestsTopicID)
 	go runner.Run(ctx, func(err error) {
 		if err != nil {

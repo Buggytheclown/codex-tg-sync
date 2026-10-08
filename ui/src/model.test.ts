@@ -155,10 +155,10 @@ it("requires explicit PR coordinates when a source uses a schedule", () => {
   expect(pollingProblem(p)).toContain("explicit positive PR ID");
   const wait = p.action.child_definition.polling!;
   wait.config.pr_id = "123";
-  expect(pollingProblem(p)).toContain("reviewer or author");
+  expect(pollingProblem(p)).toContain("for the author");
   wait.config.author = "";
   wait.config.login = "{{login}}";
-  expect(pollingProblem(p)).toContain("reviewer or author");
+  expect(pollingProblem(p)).toBe("");
   wait.config.login = "reviewer";
   expect(pollingProblem(p)).toBe("");
 });
@@ -172,4 +172,15 @@ it("projects full mutation tasks to cards without retaining snapshots or prompts
   expect(card.polling).not.toHaveProperty("config");
   expect(card.polling?.action).toEqual({ type: "create_task" });
   expect(card.requests).toEqual([{ id: "r", status: "starting" }]);
+});
+
+it("uses daemon identity without requiring an editable login", () => {
+  const wait = defaultPolling();
+  wait.config.pr_id = "123";
+  expect(wait.config.login).toBeUndefined();
+  expect(pollingProblem(wait)).toBe("");
+  const source = defaultPolling("pr_review_source");
+  source.action.child_definition!.title = "Review";
+  source.action.child_definition!.config.initial_prompt = "Review PR";
+  expect(pollingProblem(source)).toBe("");
 });

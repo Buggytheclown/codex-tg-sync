@@ -32,12 +32,12 @@ func TestMergedReviewTaskMovesDoneWithoutLaunch(t *testing.T) {
 }
 
 func TestMergedReviewScopeFencesAndRequestCancellation(t *testing.T) {
-	for _, kind := range []string{"review", "parent", "manual", "feedback", "cron", "closed", "stale", "disabled", "error"} {
+	for _, kind := range []string{"review", "parent", "manual", "manual_enabled", "feedback", "review_disabled", "cron", "closed", "stale", "disabled", "error"} {
 		t.Run(kind, func(t *testing.T) {
 			s := openTestStore(t)
 			ctx := context.Background()
 			sourceKey := ""
-			if kind == "review" || kind == "closed" || kind == "stale" || kind == "disabled" || kind == "error" {
+			if kind == "review" || kind == "review_disabled" || kind == "closed" || kind == "stale" || kind == "disabled" || kind == "error" {
 				sourceKey = "arcanum_review:42"
 			}
 			if kind == "feedback" {
@@ -51,12 +51,19 @@ func TestMergedReviewScopeFencesAndRequestCancellation(t *testing.T) {
 			if kind == "cron" {
 				pollType = "cron"
 			}
-			task, err := s.CreateTask(ctx, model.CreateTaskInput{Title: "task", SourceKey: sourceKey, Column: column, Polling: &model.TaskPolling{Type: pollType, Mode: model.PollingOnce, Config: []byte(`{}`), Action: model.TaskPollingAction{Type: model.PollingReturnTask}}})
+			raw := []byte(`{}`)
+			if kind == "review_disabled" {
+				raw = []byte(`{"complete_on_merge":false}`)
+			}
+			if kind == "manual_enabled" {
+				raw = []byte(`{"complete_on_merge":true}`)
+			}
+			task, err := s.CreateTask(ctx, model.CreateTaskInput{Title: "task", SourceKey: sourceKey, Column: column, Polling: &model.TaskPolling{Type: pollType, Mode: model.PollingOnce, Config: raw, Action: model.TaskPollingAction{Type: model.PollingReturnTask}}})
 			if err != nil {
 				t.Fatal(err)
 			}
 			if kind == "parent" {
-				parent, err := s.CreateTask(ctx, model.CreateTaskInput{Title: "source", Polling: &model.TaskPolling{Type: "pr_review_source", Mode: model.PollingRepeat, Config: []byte(`{}`), Action: model.TaskPollingAction{Type: model.PollingCreateTask, ChildDefinition: &model.TaskDefinition{Title: "child", Config: model.TaskConfig{InitialPrompt: "work"}}}}})
+				parent, err := s.CreateTask(ctx, model.CreateTaskInput{Title: "source", SourceKey: "source:arcanum_review", Polling: &model.TaskPolling{Type: "pr_review_source", Mode: model.PollingRepeat, Config: []byte(`{}`), Action: model.TaskPollingAction{Type: model.PollingCreateTask, ChildDefinition: &model.TaskDefinition{Title: "child", Config: model.TaskConfig{InitialPrompt: "work"}}}}})
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -95,7 +102,7 @@ func TestMergedReviewScopeFencesAndRequestCancellation(t *testing.T) {
 				t.Fatal(err)
 			}
 			got, _ := s.GetTask(ctx, task.ID)
-			done := kind == "review" || kind == "parent"
+			done := kind == "review" || kind == "parent" || kind == "feedback" || kind == "manual_enabled"
 			if (got.Column == model.TaskDone) != done {
 				t.Fatalf("scope task: %#v", got)
 			}
