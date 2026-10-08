@@ -247,3 +247,9 @@ For live Telegram QA, verify:
 
 - `internal/daemon/board_launch_test.go`: shared-transport board reads never resume chats with Sync off, no topic, expired topic, or dirty events; known old terminal observations block metadata-only discovery while genuine active and completed Desktop work remains discoverable.
 - `internal/storage/store_external_requests_test.go`: returning a busy or Sync-off request to pending dirties its Telegram rendering marker so Start remains actionable.
+
+## Inline board controls
+
+- `internal/storage/store_task_priority_command_test.go`: priority-only versioned updates preserve order, configuration, polling runtime and requests; invalid/stale/missing commands do not mutate.
+- `internal/controlapi/board_priority_chat_test.go` and `internal/daemon/board_lock_test.go`: compact priority responses, command guards and no Sync/launch-gate dependency.
+- `ui/src/App.test.tsx` and `ui/src/drag.test.tsx`: direct card priority editing, safe full-detail version advancement, priority/draft conflicts, inline chat attachment/cancellation/errors and separate Codex controls without drag/selection regressions. Native visual/drag QA still requires an enabled browser surface.

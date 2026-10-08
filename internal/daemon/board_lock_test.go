@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -176,5 +177,37 @@ func TestLaunchCallbackDoesNotWaitForSyncAndDispatchRechecksOff(t *testing.T) {
 	got, err := s.store.GetExternalLaunchRequest(ctx, request.ID)
 	if err != nil || got.Status != model.ExternalLaunchPendingApproval || len(writer.threadStartCalls) != 0 || len(forum.creates) != 0 {
 		t.Fatalf("Sync-off dispatch escaped fence: %#v, %v", got, err)
+	}
+}
+
+func TestBoardPriorityDoesNotWaitForSyncOrLaunch(t *testing.T) {
+	s := newTestService(t)
+	ctx := context.Background()
+	task, err := s.CreateTask(ctx, model.CreateTaskInput{Title: "task"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.syncMu.Lock()
+	s.taskLaunchMu.Lock()
+	done := make(chan error, 1)
+	go func() {
+		card, err := s.SetTaskPriority(ctx, task.ID, model.SetTaskPriorityInput{ExpectedVersion: task.Version, Priority: "high"})
+		if err == nil && (card.Priority != "high" || card.Version != task.Version+1) {
+			err = fmt.Errorf("bad priority card: %#v", card)
+		}
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		s.taskLaunchMu.Unlock()
+		s.syncMu.Unlock()
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		s.taskLaunchMu.Unlock()
+		s.syncMu.Unlock()
+		<-done
+		t.Fatal("priority waited for gate")
 	}
 }

@@ -1425,3 +1425,11 @@ form > button {
 .priority-icon { margin-left: auto; font-size: 14px; }
 .priority-icon.high { color: #e38860; }
 .priority-icon.low { color: #7aa6ba; }
+
+.card-controls { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 5px 0; }
+.card-controls .card-codex-link { padding: 4px 6px; font-size: 11px; }
+.card-priority { width: auto; padding: 4px 6px; font-size: 11px; border-color: transparent; background: transparent; }
+.card-priority.high { color: #a34c25; }
+.card-priority.low { color: #476b7c; }
+.card-chat-form { padding: 8px; border: 1px solid var(--line); border-radius: 8px; background: #fff; }
+.card-chat-form .field { margin-bottom: 8px; }

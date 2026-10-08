@@ -192,3 +192,8 @@ type LinkTaskChatInput struct {
 	ExpectedVersion int64  `json:"expected_version"`
 	ThreadID        string `json:"thread_id"`
 }
+
+type SetTaskPriorityInput struct {
+	ExpectedVersion int64  `json:"expected_version"`
+	Priority        string `json:"priority"`
+}

@@ -27,6 +27,9 @@ export function TaskCard({
   task,
   selected,
   onSelect,
+  onPriority,
+  onLink,
+  controlsDisabled = false,
   grabbed = false,
   saving = false,
   disabled = false,
@@ -36,6 +39,9 @@ export function TaskCard({
   task: Card;
   selected: boolean;
   onSelect: () => void;
+  onPriority?: (priority: Priority) => Promise<void>;
+  onLink?: (threadID: string, version: number) => Promise<Task>;
+  controlsDisabled?: boolean;
   grabbed?: boolean;
   saving?: boolean;
   disabled?: boolean;
@@ -43,6 +49,8 @@ export function TaskCard({
   onDragEnd?: () => void;
 }) {
   const execution = executionLabel(task);
+  const [linking, setLinking] = useState(false);
+  const [controlError, setControlError] = useState("");
   return (
     <div className="card-with-link">
     <button
@@ -99,7 +107,24 @@ export function TaskCard({
         ["pending_approval", "starting"].includes(r.status),
       ) && <span className="request-hint">Launch request · Telegram</span>}
     </button>
-    {task.thread_id && <a className="card-codex-link" href={codexURL(task.thread_id)} draggable={false}>Open in Codex ↗</a>}
+    <div className="card-controls">
+      <select className={`card-priority ${task.priority || "normal"}`} aria-label={`Priority for ${task.title}`}
+        title={`${task.priority || "normal"} priority`} value={task.priority || "normal"} disabled={controlsDisabled || !onPriority}
+        onChange={(e) => {
+          setControlError("");
+          void onPriority?.(e.target.value as Priority).catch(err => setControlError(err.message));
+        }}>
+        <option value="low">↓ Low</option><option value="normal">— Normal</option><option value="high">↑ High</option>
+      </select>
+      {task.thread_id
+        ? <a className="card-codex-link" href={codexURL(task.thread_id)} draggable={false}>Open in Codex ↗</a>
+        : <button className="card-codex-link" type="button" aria-expanded={linking} disabled={controlsDisabled || !onLink}
+          onClick={() => setLinking(!linking)}>Codex: not linked</button>}
+    </div>
+    {linking && !task.thread_id && onLink && <div className="card-chat-form">
+      <TaskChatForm task={task} busy={controlsDisabled} onLink={onLink} inline onCancel={() => setLinking(false)} />
+    </div>}
+    {controlError && <p role="alert" className="error-note">{controlError}</p>}
     </div>
   );
 }
@@ -277,6 +302,33 @@ export function App() {
     } finally {
       setBusy(false);
     }
+  };
+  const saveCardPriority = async (task: Card, priority: Priority) => {
+    if (busy || pendingMove.current || dragRef.current) return;
+    setBusy(true);
+    setError("");
+    try {
+      const saved = await api<Card>(`/v1/tasks/${task.id}/priority`, "POST", {
+        expected_version: task.version, priority,
+      });
+      if (!mounted.current) return;
+      // A compact reply may advance details only for the exact edit we own.
+      // It cannot certify settings we have never loaded at this version.
+      const knownSettings = latestDetail.current?.id === saved.id &&
+        latestDetail.current.version === task.version &&
+        saved.version === task.version + 1 && saved.priority === priority;
+      if (detailSelection.current === saved.id && knownSettings) detailVersion.current = saved.version;
+      setDetail(old => {
+        if (old?.id !== saved.id || old.version !== task.version ||
+          saved.version !== task.version + 1 || saved.priority !== priority) return old;
+        return { ...old, priority: saved.priority, version: saved.version, updated_at: saved.updated_at };
+      });
+      setTasks(current => current.map(card => card.id === saved.id && card.version <= saved.version ? saved : card));
+      await refresh();
+    } catch (err) {
+      if (err instanceof APIError && err.status === 409) void refresh();
+      throw err;
+    } finally { if (mounted.current) setBusy(false); }
   };
   const move = async (task: Card, column: Column, beforeID = "") => {
     if (pendingMove.current || busy) return;
@@ -594,6 +646,9 @@ export function App() {
                         saving={savingID === task.id}
                         disabled={busy}
                         onSelect={() => select(task)}
+                        controlsDisabled={busy || !!drag}
+                        onPriority={(priority) => saveCardPriority(task, priority)}
+                        onLink={(thread_id, expected_version) => mutate<Task>(`/v1/tasks/${task.id}/chat`, "POST", { expected_version, thread_id })}
                         onDragStart={(e) => {
                           if (busy) {
                             e.preventDefault();
@@ -956,7 +1011,7 @@ function Overview({ task, busy, onSave, onLink }: { task: Task; busy: boolean; o
     </div>
   );
 }
-function TaskChatForm({ task, busy, onLink }: { task: Task; busy: boolean; onLink: (threadID: string, version: number) => Promise<Task> }) {
+function TaskChatForm({ task, busy, onLink, inline = false, onCancel }: { task: Task | Card; busy: boolean; onLink: (threadID: string, version: number) => Promise<Task>; inline?: boolean; onCancel?: () => void }) {
   const [chat, setChat] = useState("");
   const [error, setError] = useState("");
   const submit = async (e: FormEvent) => {
@@ -967,11 +1022,12 @@ function TaskChatForm({ task, busy, onLink }: { task: Task; busy: boolean; onLin
     try { await onLink(threadID, task.version); } catch (err) { setError((err as Error).message); }
   };
   return <form onSubmit={(e) => void submit(e)}>
-    <Field label="Codex chat" hint="Paste an existing chat ID or codex://threads/ link.">
-      <input required value={chat} onChange={(e) => setChat(e.target.value)} />
+    <Field label={inline ? `Codex chat for ${task.title}` : "Codex chat"} hint="Paste an existing chat ID or codex://threads/ link.">
+      <input required autoFocus={inline} value={chat} onChange={(e) => setChat(e.target.value)} />
     </Field>
     {error && <p role="alert" className="error-note">{error}</p>}
     <button disabled={busy}>Link chat</button>
+    {inline && onCancel && <button type="button" disabled={busy} onClick={onCancel}>Cancel</button>}
   </form>;
 }
 function PriorityField({ value, onChange }: { value: Priority; onChange: (priority: Priority) => void }) {
@@ -1018,11 +1074,16 @@ function TaskFieldsForm({ task, busy, onSave, overview = false }: {
   const [config, setConfig] = useState(task.config);
   const [message, setMessage] = useState("");
   useEffect(() => {
+    const priorityUnedited = priority === (baseline.priority || "normal");
     const unchanged = overview
-      ? task.title === baseline.title && task.description === baseline.description && (task.priority || "normal") === (baseline.priority || "normal")
+      ? task.title === baseline.title && task.description === baseline.description &&
+        ((task.priority || "normal") === (baseline.priority || "normal") || priorityUnedited)
       : task.source_url === baseline.source_url && JSON.stringify(task.config) === JSON.stringify(baseline.config);
-    if (unchanged && task.version > baseline.version) setBaseline(task);
-  }, [task, baseline, overview]);
+    if (unchanged && task.version > baseline.version) {
+      if (overview && priorityUnedited) setPriority(task.priority || "normal");
+      setBaseline(task);
+    }
+  }, [task, baseline, overview, priority]);
   const stale = baseline.version !== task.version;
   const reload = () => {
     setBaseline(task); setTitle(task.title); setDescription(task.description); setPriority(task.priority || "normal");

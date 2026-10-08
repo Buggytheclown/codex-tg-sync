@@ -15,3 +15,10 @@ func (s *Service) ReorderTask(ctx context.Context, id string, in model.MoveTaskI
 	}
 	return s.store.GetTaskCard(ctx, id)
 }
+
+func (s *Service) SetTaskPriority(ctx context.Context, id string, in model.SetTaskPriorityInput) (*model.TaskCardDTO, error) {
+	if err := s.store.SetTaskPriority(ctx, id, in); err != nil {
+		return nil, err
+	}
+	return s.store.GetTaskCard(ctx, id)
+}

@@ -84,6 +84,12 @@ beforeEach(() => {
         payload = { ...task, polling: body.polling, version: task.version + 1 };
         rows = rows.map((t) => (t.id === id ? (payload as Task) : t));
       }
+      if (method === "POST" && path.endsWith("/priority")) {
+        const task = rows.find(t => path === `/v1/tasks/${t.id}/priority`)!;
+        const saved = { ...task, priority: body.priority, version: task.version + 1 };
+        rows = rows.map(t => t.id === task.id ? saved : t);
+        payload = compactTask(saved);
+      }
       if (method === "POST" && path.endsWith("/chat")) {
         const task = rows.find(t => path === `/v1/tasks/${t.id}/chat`)!;
         payload = { ...task, thread_id: body.thread_id, version: task.version + 1 };
@@ -751,4 +757,83 @@ it("preserves new overview typing during an ordinary save and saves sources with
   fireEvent.change(prompt, { target: { value: "Keyboard source prompt" } });
   fireEvent.keyDown(prompt, { key: "Enter", metaKey: true });
   await waitFor(() => expect(rows[0].polling?.action.child_definition?.config.initial_prompt).toBe("Keyboard source prompt"));
+});
+it("edits card priority without details or ordering and attaches a chat inline", async () => {
+  rows = [makeTask({ thread_id: "" })];
+  render(<App />);
+  const priority = await screen.findByLabelText("Priority for Review the next revision");
+  fireEvent.change(priority, { target: { value: "high" } });
+  await waitFor(() => expect(rows[0].priority).toBe("high"));
+  expect(calls.find(c => c.path.endsWith("/priority") && c.method === "POST")?.body).toEqual({ expected_version: 1, priority: "high" });
+  expect(calls.some(c => c.path === "/v1/tasks/task-1")).toBe(false);
+  expect(rows[0].position).toBe(1);
+  expect(screen.queryByLabelText("Title")).toBeNull();
+  const codex = screen.getByRole("button", { name: "Codex: not linked" });
+  expect(codex.closest(".task-card")).toBeNull();
+  await waitFor(() => expect((codex as HTMLButtonElement).disabled).toBe(false));
+  fireEvent.click(codex);
+  const cancelledChat = screen.getByLabelText("Codex chat for Review the next revision");
+  fireEvent.change(cancelledChat, { target: { value: "Discard this draft" } });
+  const beforeCancel = calls.filter(call => call.method !== "GET").length;
+  fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+  expect(screen.queryByLabelText("Codex chat for Review the next revision")).toBeNull();
+  expect(calls.filter(call => call.method !== "GET")).toHaveLength(beforeCancel);
+  fireEvent.click(codex);
+  const chat = screen.getByLabelText("Codex chat for Review the next revision");
+  expect((chat as HTMLInputElement).value).toBe("");
+  fireEvent.change(chat, { target: { value: "codex://threads/inline-chat" } });
+  fireEvent.click(screen.getByRole("button", { name: "Link chat" }));
+  await waitFor(() => expect(rows[0].thread_id).toBe("inline-chat"));
+  expect(screen.getByRole("link", { name: /Open in Codex/ }).getAttribute("href")).toBe("codex://threads/inline-chat");
+  expect(screen.queryByLabelText("Title")).toBeNull();
+});
+it("keeps an Overview text draft after a safe compact card priority change", async () => {
+  window.history.replaceState(null, "", "/?task=task-1");
+  render(<App />);
+  fireEvent.change(await screen.findByLabelText("Title"), { target: { value: "Unsaved text" } });
+  fireEvent.change(screen.getByLabelText("Priority for Review the next revision"), { target: { value: "low" } });
+  await waitFor(() => expect(rows[0].priority).toBe("low"));
+  await waitFor(() => expect((screen.getByRole("button", { name: "Save overview" }) as HTMLButtonElement).disabled).toBe(false));
+  await waitFor(() => expect(screen.queryByRole("button", { name: "Reload latest overview" })).toBeNull());
+  expect((screen.getByLabelText("Title") as HTMLInputElement).value).toBe("Unsaved text");
+  fireEvent.click(screen.getByRole("button", { name: "Save overview" }));
+  await waitFor(() => expect(rows[0].title).toBe("Unsaved text"));
+  expect(rows[0].priority).toBe("low");
+});
+it("retains drafts on inline priority conflict and does not certify unseen settings from a newer compact reply", async () => {
+  window.history.replaceState(null, "", "/?task=task-1");
+  const original = vi.mocked(fetch).getMockImplementation()!;
+  let rejectPriority = true;
+  let holdDetails = false;
+  let resolve!: (value: Response) => void;
+  const held = new Promise<Response>(done => { resolve = done; });
+  vi.mocked(fetch).mockImplementation(async (path, options) => {
+    if (options?.method === "POST" && String(path).endsWith("/priority")) {
+      if (rejectPriority) return { ok: false, status: 409, json: async () => ({ error: "Priority changed elsewhere" }) } as Response;
+      rows = [makeTask({ priority: "high", version: 3, config: { ...emptyConfig(), initial_prompt: "Unseen newer prompt" } })];
+      holdDetails = true;
+      return { ok: true, status: 200, json: async () => compactTask(rows[0]) } as Response;
+    }
+    if (holdDetails && path === "/v1/tasks/task-1" && options?.method === "PATCH") {
+      calls.push({ path, method: "PATCH", body: JSON.parse(options.body as string) });
+      return { ok: false, status: 409, json: async () => ({ error: "Stale detail version" }) } as Response;
+    }
+    if (holdDetails && path === "/v1/tasks/task-1" && (!options?.method || options.method === "GET")) return held;
+    return original(path, options);
+  });
+  render(<App />);
+  fireEvent.change(await screen.findByLabelText("Title"), { target: { value: "Keep draft" } });
+  fireEvent.change(screen.getByLabelText("Priority for Review the next revision"), { target: { value: "high" } });
+  await screen.findByText("Priority changed elsewhere");
+  expect((screen.getByLabelText("Title") as HTMLInputElement).value).toBe("Keep draft");
+  await waitFor(() => expect((screen.getByRole("button", { name: "Save overview" }) as HTMLButtonElement).disabled).toBe(false));
+  rejectPriority = false;
+  fireEvent.change(screen.getByLabelText("Priority for Review the next revision"), { target: { value: "high" } });
+  await waitFor(() => expect((screen.getByRole("button", { name: "Save overview" }) as HTMLButtonElement).disabled).toBe(false));
+  fireEvent.click(screen.getByRole("button", { name: "Save overview" }));
+  await waitFor(() => expect(calls.some(call => call.method === "PATCH")).toBe(true));
+  expect(calls.find(call => call.method === "PATCH")?.body).toMatchObject({ expected_version: 1 });
+  // The compact reply must not grant stale full settings its newer version.
+  rows = [makeTask({ priority: "high", version: 3, config: { ...emptyConfig(), initial_prompt: "Unseen newer prompt" } })];
+  resolve({ ok: true, status: 200, json: async () => rows[0] } as Response);
 });

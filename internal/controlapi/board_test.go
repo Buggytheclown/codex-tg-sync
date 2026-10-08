@@ -282,3 +282,8 @@ func TestBoardCompactInvalidationIncludesRuntimeAndSettings(t *testing.T) {
 func (b *fakeBoard) LinkTaskChat(context.Context, string, model.LinkTaskChatInput) (*model.Task, error) {
 	return b.change()
 }
+
+func (b *fakeBoard) SetTaskPriority(context.Context, string, model.SetTaskPriorityInput) (*model.TaskCardDTO, error) {
+	task, err := b.change()
+	return &model.TaskCardDTO{ID: task.ID, Version: task.Version}, err
+}
