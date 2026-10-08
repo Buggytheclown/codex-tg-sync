@@ -10,7 +10,7 @@ Use tasks, task_polling and task_events. Legacy template tables may remain inert
 
 Manual chat additions start in TODO and are idempotent by thread ID. TODO/Done cancel definitely unstarted requests under the same launch gate as claim/dispatch; active or ambiguous work is not replayed or interrupted. Busy continuation stays pending for another explicit Start after completion. Continuation must authoritative-read and start only the same target thread, never steer or replace it. Preserve Sync restart behavior.
 
-PR baseline is the last accepted event/instruction, not a claim that an LLM reviewed a revision. Preserve changes between a pass and rearming. Verify actual Arcanum command/JSON contracts before implementing comments/revisions. Merge/close does not silently hide a task in Done.
+PR baseline is the last accepted event/instruction, not a claim that an LLM reviewed a revision. Preserve changes between a pass and rearming. Verify actual Arcanum command/JSON contracts before implementing comments/revisions. A generated PR review task in Polling automatically moves to Done after an authoritative merged PR observation. Closed-but-unmerged, feedback/manual tasks and source pollers retain their existing behavior.
 
 Extend the shared snapshot producer to topics union tracked task threads, including Sync off/topic expiry. React/TypeScript/Vite lives in ui; Go serves explicit static directory and existing controlapi routes. HTTP commands and SSE invalidation/refetch; reconnect/focus/periodic reconciliation closes notification gaps. Write routes ship with exact loopback Host, same-origin and JSON guards; no wildcard CORS.
 
@@ -29,3 +29,5 @@ Cmd+Enter saves the focused detail form. Overview can attach an existing Codex c
 Ordinary board cards also edit priority directly and always show a Codex control: linked chats open through the deep link; unbound cards visibly offer an inline chat-ID/deep-link attachment form. These controls are siblings of the draggable card-selection button. Priority changes use a compact metadata-only command and preserve task order, settings, polling runtime and launch requests. Inline actions preserve detail drafts and never promote a stale full editor to a newer external version.
 
 Each ordinary task may store one external ticket URL, independently of its PR/source URL and Codex chat. Cards and Overview open the saved HTTP(S) link or let the operator add, edit or clear it. This is passive metadata: no tracker API, ticket creation, status synchronization, notifications or polling behavior. A compact versioned metadata command preserves all other task fields and runtime; legacy saves omitting ticket_url preserve the link.
+
+Ticket controls display the last nonempty URL path segment, with the full destination as href/tooltip. Operators can enter a tracker key such as TASK-123; storage normalizes it to the full HTTPS tracker URL. Full URLs remain supported and source provenance is unaffected.

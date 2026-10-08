@@ -259,3 +259,10 @@ For live Telegram QA, verify:
 - `internal/storage/store_task_ticket_test.go`: fresh/old database upgrade and reopen, compact projection, legacy omitted-field preservation, URL validation and metadata-only updates preserving polling and requests.
 - `internal/controlapi/board_priority_chat_test.go` and `internal/daemon/board_lock_test.go`: compact ticket commands, loopback command guards and gate independence.
 - `ui/src/App.test.tsx`: card/Overview add, edit, clear and cancel; failed/conflicting saves retain ticket and unrelated drafts; compact replies cannot certify unseen settings; source URL, Codex and manual ordering remain independent.
+- `ui/src/ticket.test.ts`: short-key normalization, invalid keys, decoded final-path labels and full-link preservation. Storage and control API tests cover canonical keys through create, PATCH and the compact ticket command; UI integration covers keyboard saving.
+
+## Merged PR review completion
+
+- `internal/arcanumreview/snapshot_test.go`: authoritative merged metadata with exact PR identity succeeds without comment or author reads.
+- `internal/polling/checker_test.go` and `runner_test.go`: merged waits produce no continuation events; failed reads cannot publish a terminal status; merged source entries are remembered so bounded reads still discover later open PRs.
+- `internal/storage/store_task_merged_test.go`: generated review tasks complete atomically, record history and stop polling. Column/generation/error fences reject stale outcomes; manual, feedback, cron and source tasks remain unchanged. Only definitely unstarted launch requests are cancelled; started and uncertain requests remain intact.

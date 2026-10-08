@@ -11,6 +11,7 @@ import (
 )
 
 type fakePR struct {
+	status string
 	calls  int
 	fail   bool
 	author string
@@ -27,7 +28,7 @@ func (f *fakePR) ReadPRSnapshot(context.Context, int64) (arcanumreview.PRSnapsho
 	if f.fail {
 		return arcanumreview.PRSnapshot{}, errors.New("unavailable")
 	}
-	return arcanumreview.PRSnapshot{Author: arcanumreview.PRIdentity{Name: f.author}, HeadCommit: "abc", CommonStatus: "waiting_for_review", Comments: []arcanumreview.PRComment{}}, nil
+	return arcanumreview.PRSnapshot{Status: f.status, Author: arcanumreview.PRIdentity{Name: f.author}, HeadCommit: "abc", CommonStatus: "waiting_for_review", Comments: []arcanumreview.PRComment{}}, nil
 }
 func TestSourceEmitsBaselineAndStableCycleKey(t *testing.T) {
 	client := &fakePR{author: "actual-author"}
@@ -90,5 +91,59 @@ func TestWaitEventCarriesCurrentSnapshotAuthor(t *testing.T) {
 	}
 	if facts["author"] != "actual-author" || out.Events[0].Variables["author"] != "actual-author" {
 		t.Fatalf("author=%#v", out.Events[0])
+	}
+}
+
+func TestMergedWaitEmitsNoContinuationAndSourceSkipsMerged(t *testing.T) {
+	client := &fakePR{status: "merged"}
+	checker := NewChecker(client)
+	wait := model.TaskPolling{TaskID: "wait", Type: TypePRWait, Mode: model.PollingOnce, Config: jsonBytes(Config{PRID: "42", Conditions: []string{ConditionCommit}}), Action: model.TaskPollingAction{Type: model.PollingResumeTask}, Cursor: jsonBytes(PRCursor{HeadCommit: "old"})}
+	out, err := checker.Check(context.Background(), wait, time.Now())
+	if err != nil || out.PRStatus != "merged" || len(out.Events) != 0 || string(out.Cursor) != string(wait.Cursor) {
+		t.Fatalf("wait: %#v %v", out, err)
+	}
+	source := model.TaskPolling{TaskID: "source", Type: TypeReview, Mode: model.PollingRepeat, Config: jsonBytes(Config{Login: "reviewer"}), Action: model.TaskPollingAction{Type: model.PollingCreateTask, ChildDefinition: &model.TaskDefinition{Title: "child", Config: model.TaskConfig{InitialPrompt: "work"}}}}
+	out, err = checker.Check(context.Background(), source, time.Now())
+	if err != nil || len(out.Events) != 0 {
+		t.Fatalf("source: %#v %v", out, err)
+	}
+}
+
+type staleMergedSourcePR struct {
+	fakePR
+	reads []int64
+}
+
+func (f *staleMergedSourcePR) ListAssigned(context.Context, string) ([]arcanumreview.PullRequest, error) {
+	out := []arcanumreview.PullRequest{}
+	for id := int64(1); id <= 6; id++ {
+		out = append(out, arcanumreview.PullRequest{ID: id, Author: "alice", Summary: "Change"})
+	}
+	return out, nil
+}
+func (f *staleMergedSourcePR) ReadPRSnapshot(_ context.Context, id int64) (arcanumreview.PRSnapshot, error) {
+	f.reads = append(f.reads, id)
+	if id <= 5 {
+		return arcanumreview.PRSnapshot{ID: id, Status: "merged"}, nil
+	}
+	return arcanumreview.PRSnapshot{ID: id, Status: "open", Author: arcanumreview.PRIdentity{Name: "alice"}, HeadCommit: "abc", CommonStatus: "waiting_for_review"}, nil
+}
+func TestMergedAssignedCandidatesDoNotStarveLaterOpenPR(t *testing.T) {
+	client := &staleMergedSourcePR{}
+	checker := NewChecker(client)
+	source := model.TaskPolling{TaskID: "source", Type: TypeReview, Mode: model.PollingRepeat, Config: jsonBytes(Config{Login: "reviewer"}), Action: model.TaskPollingAction{Type: model.PollingCreateTask, ChildDefinition: &model.TaskDefinition{Title: "child", Config: model.TaskConfig{InitialPrompt: "work"}}}}
+	out, err := checker.Check(context.Background(), source, time.Now())
+	if err != nil || len(out.Events) != 0 || len(client.reads) != 5 {
+		t.Fatalf("first: %#v reads=%v err=%v", out, client.reads, err)
+	}
+	source.Cursor = out.Cursor
+	out, err = checker.Check(context.Background(), source, time.Now())
+	if err != nil || len(out.Events) != 1 || out.Events[0].SourceKey != "arcanum_review:6" || len(client.reads) != 6 {
+		t.Fatalf("second: %#v reads=%v err=%v", out, client.reads, err)
+	}
+	source.Cursor = out.Cursor
+	out, err = checker.Check(context.Background(), source, time.Now())
+	if err != nil || len(out.Events) != 0 || len(client.reads) != 6 {
+		t.Fatalf("repeat: %#v reads=%v err=%v", out, client.reads, err)
 	}
 }

@@ -49,6 +49,33 @@ func (s *Store) AcceptTaskPollingOutcome(ctx context.Context, out model.TaskPoll
 		}
 		return true, tx.Commit()
 	}
+
+	if out.PRStatus == "merged" && p.Type == "pr_wait" && p.Action.Type != model.PollingCreateTask {
+		review := strings.HasPrefix(t.SourceKey, "arcanum_review:")
+		if !review && t.SourceTaskID != "" {
+			var parentType string
+			err := tx.QueryRowContext(ctx, `SELECT type FROM task_polling WHERE task_id=?`, t.SourceTaskID).Scan(&parentType)
+			if err != nil && !errors.Is(err, sql.ErrNoRows) {
+				return false, err
+			}
+			review = parentType == "pr_review_source"
+		}
+		if review {
+			if _, err := tx.ExecContext(ctx, `UPDATE tasks SET column='done',version=version+1,updated_at=? WHERE id=?`, now, t.ID); err != nil {
+				return false, err
+			}
+			if _, err := tx.ExecContext(ctx, `UPDATE task_polling SET generation=generation+1,last_attempt_at=?,last_success_at=?,last_error='',next_check_at='' WHERE task_id=?`, now, now, t.ID); err != nil {
+				return false, err
+			}
+			if err := cancelUnstartedTaskRequestsTx(ctx, tx, t.ID, now); err != nil {
+				return false, err
+			}
+			if err := addTaskEventTx(ctx, tx, t.ID, "pr_merged", map[string]string{"status": "merged"}); err != nil {
+				return false, err
+			}
+			return true, tx.Commit()
+		}
+	}
 	acceptedEvent := false
 	for _, event := range out.Events {
 		var existing string

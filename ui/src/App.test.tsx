@@ -859,8 +859,9 @@ it("adds, opens, edits and removes a ticket without navigating or changing task 
   const input = screen.getByLabelText("Ticket URL");
   fireEvent.change(input, { target: { value: "https://tracker.example/TASK-123" } });
   fireEvent.click(screen.getByRole("button", { name: "Save ticket" }));
-  const ticket = await screen.findByRole("link", { name: "Open ticket" });
+  const ticket = await screen.findByRole("link", { name: "TASK-123" });
   expect(ticket.getAttribute("href")).toBe("https://tracker.example/TASK-123");
+  expect(ticket.getAttribute("title")).toBe("https://tracker.example/TASK-123");
   expect(ticket.getAttribute("target")).toBe("_blank");
   expect(ticket.getAttribute("rel")).toContain("noreferrer");
   expect(ticket.getAttribute("draggable")).toBe("false");
@@ -883,15 +884,15 @@ it("saves an Overview ticket with Cmd+Enter while keeping its title draft", asyn
   const detail = within(screen.getByRole("complementary", { name: "Task details and settings" }));
   fireEvent.click(detail.getByRole("button", { name: "Add ticket" }));
   const input = detail.getByLabelText("Ticket URL");
-  fireEvent.change(input, { target: { value: "https://tracker.example/TASK-123" } });
+  fireEvent.change(input, { target: { value: " task-123 " } });
   fireEvent.keyDown(input, { key: "Enter", metaKey: true });
-  await waitFor(() => expect(rows[0].ticket_url).toBe("https://tracker.example/TASK-123"));
+  await waitFor(() => expect(rows[0].ticket_url).toBe("https://st.yandex-team.ru/TASK-123"));
   expect((detail.getByLabelText("Title") as HTMLInputElement).value).toBe("Draft title");
   await waitFor(() => expect((detail.getByRole("button", { name: "Save overview" }) as HTMLButtonElement).disabled).toBe(false));
   await waitFor(() => expect(detail.queryByRole("button", { name: "Reload latest overview" })).toBeNull());
   fireEvent.click(detail.getByRole("button", { name: "Save overview" }));
   await waitFor(() => expect(rows[0].title).toBe("Draft title"));
-  expect(rows[0].ticket_url).toBe("https://tracker.example/TASK-123");
+  expect(rows[0].ticket_url).toBe("https://st.yandex-team.ru/TASK-123");
 });
 it("preserves ticket drafts across unrelated versions and fences external ticket edits", async () => {
   const original = makeTask({ ticket_url: "https://tracker.example/TASK-123" });
@@ -973,7 +974,7 @@ it("does not advance unseen full settings from a newer compact ticket reply", as
   fireEvent.click(detail.getByRole("button", { name: "Add ticket" }));
   fireEvent.change(detail.getByLabelText("Ticket URL"), { target: { value: "https://tracker.example/TASK-123" } });
   fireEvent.click(detail.getByRole("button", { name: "Save ticket" }));
-  await screen.findByRole("link", { name: "Open ticket" });
+  await screen.findByRole("link", { name: "TASK-123" });
   await waitFor(() => expect((detail.getByRole("button", { name: "Save overview" }) as HTMLButtonElement).disabled).toBe(false));
   fireEvent.click(detail.getByRole("button", { name: "Save overview" }));
   await detail.findByText("Stale detail version");

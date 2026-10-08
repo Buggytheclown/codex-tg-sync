@@ -6,15 +6,19 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"regexp"
+	"strings"
 
 	"github.com/mideco-tech/codex-tg/internal/model"
 )
 
 // SetTaskTicket changes metadata only; launch and polling ownership stay intact.
 func (s *Store) SetTaskTicket(ctx context.Context, id string, in model.SetTaskTicketInput) error {
-	if in.ExpectedVersion <= 0 || validateTaskTicketURL(in.TicketURL) != nil {
-		return fmt.Errorf("%w: positive expected_version and an absolute HTTP(S) ticket URL without credentials required", ErrTaskInvalid)
+	normalized, err := normalizeTaskTicketURL(in.TicketURL)
+	if in.ExpectedVersion <= 0 || err != nil {
+		return fmt.Errorf("%w: positive expected_version and a ticket key or HTTP(S) URL without credentials required", ErrTaskInvalid)
 	}
+	in.TicketURL = normalized
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -48,4 +52,18 @@ func validateTaskTicketURL(value string) error {
 		return fmt.Errorf("%w: ticket_url must be an absolute HTTP(S) URL without credentials", ErrTaskInvalid)
 	}
 	return nil
+}
+
+var taskTicketKeyPattern = regexp.MustCompile(`^[A-Z][A-Z0-9_]*-[1-9][0-9]*$`)
+
+func normalizeTaskTicketURL(value string) (string, error) {
+	value = strings.TrimSpace(value)
+	key := strings.ToUpper(value)
+	if taskTicketKeyPattern.MatchString(key) {
+		return "https://st.yandex-team.ru/" + key, nil
+	}
+	if err := validateTaskTicketURL(value); err != nil {
+		return "", err
+	}
+	return value, nil
 }

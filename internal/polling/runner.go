@@ -91,6 +91,7 @@ func (r *Runner) PollOnce(ctx context.Context) error {
 		if checkErr != nil {
 			// A partial network pass cannot consume events or advance a source cursor.
 			out.Events, out.Cursor, out.Error = nil, p.Cursor, checkErr.Error()
+			out.PRStatus = ""
 		}
 		_, acceptErr := r.store.AcceptTaskPollingOutcome(ctx, out, r.topicID)
 		resultErr := errors.Join(checkErr, acceptErr)

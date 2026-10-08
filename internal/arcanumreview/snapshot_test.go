@@ -58,3 +58,15 @@ func TestReadPRSnapshotDoesNotTurnReadErrorIntoEmptyIssues(t *testing.T) {
 		t.Fatal("read error ignored")
 	}
 }
+
+func TestMergedSnapshotNeedsOnlyAuthoritativeMetadata(t *testing.T) {
+	r := &snapshotRunner{outputs: [][]byte{[]byte(`{"id":42,"status":"merged"}`)}}
+	snapshot, err := NewCLIClient("ya", r).ReadPRSnapshot(context.Background(), 42)
+	if err != nil || snapshot.Status != "merged" || len(r.calls) != 1 {
+		t.Fatalf("snapshot: %#v calls=%v err=%v", snapshot, r.calls, err)
+	}
+	wrong := &snapshotRunner{outputs: [][]byte{[]byte(`{"id":43,"status":"merged"}`)}}
+	if _, err := NewCLIClient("ya", wrong).ReadPRSnapshot(context.Background(), 42); err == nil {
+		t.Fatal("wrong PR identity accepted")
+	}
+}

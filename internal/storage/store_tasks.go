@@ -266,9 +266,11 @@ func addTaskEventTx(ctx context.Context, tx *sql.Tx, taskID, kind string, payloa
 	return err
 }
 func (s *Store) CreateTask(ctx context.Context, in model.CreateTaskInput) (*model.Task, error) {
-	if err := validateTaskTicketURL(in.TicketURL); err != nil {
+	ticketURL, err := normalizeTaskTicketURL(in.TicketURL)
+	if err != nil {
 		return nil, err
 	}
+	in.TicketURL = ticketURL
 	if in.Priority == "" {
 		in.Priority = "normal"
 	}
@@ -364,9 +366,11 @@ func checkTaskVersion(t *model.Task, version int64) error {
 }
 func (s *Store) UpdateTask(ctx context.Context, id string, in model.UpdateTaskInput) (*model.Task, error) {
 	if in.TicketURL != nil {
-		if err := validateTaskTicketURL(*in.TicketURL); err != nil {
+		ticketURL, err := normalizeTaskTicketURL(*in.TicketURL)
+		if err != nil {
 			return nil, err
 		}
+		in.TicketURL = &ticketURL
 	}
 	if in.Priority != nil && !validTaskPriority(*in.Priority) {
 		return nil, fmt.Errorf("%w: priority must be low, normal or high", ErrTaskInvalid)

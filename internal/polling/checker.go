@@ -94,6 +94,10 @@ func (c *Checker) Check(ctx context.Context, p model.TaskPolling, now time.Time)
 				readErrors = append(readErrors, err)
 				continue
 			}
+			if snapshot.Status == "merged" {
+				cursor.Seen = append(cursor.Seen, pr.ID)
+				continue
+			}
 			author := strings.TrimSpace(snapshot.Author.Name)
 			if author == "" {
 				author = pr.Author
@@ -128,6 +132,10 @@ func (c *Checker) Check(ctx context.Context, p model.TaskPolling, now time.Time)
 		current, err := c.pr.ReadPRSnapshot(ctx, id)
 		if err != nil {
 			return out, err
+		}
+		if current.Status == "merged" {
+			out.PRStatus = "merged"
+			return out, nil
 		}
 		var old PRCursor
 		if len(p.Cursor) > 0 {

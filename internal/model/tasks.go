@@ -141,6 +141,7 @@ type PollingEvent struct {
 	Variables   map[string]string `json:"variables"`
 }
 type TaskPollingOutcome struct {
+	PRStatus    string
 	TaskID      string
 	Generation  int64
 	Cursor      json.RawMessage

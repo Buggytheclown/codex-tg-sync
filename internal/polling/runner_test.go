@@ -33,7 +33,7 @@ type runnerChecker struct {
 
 func (c *runnerChecker) Check(_ context.Context, p model.TaskPolling, _ time.Time) (model.TaskPollingOutcome, error) {
 	c.calls++
-	return model.TaskPollingOutcome{Cursor: json.RawMessage(`{"advanced":true}`), Events: []model.PollingEvent{{Key: "partial"}}}, c.err
+	return model.TaskPollingOutcome{PRStatus: "merged", Cursor: json.RawMessage(`{"advanced":true}`), Events: []model.PollingEvent{{Key: "partial"}}}, c.err
 }
 func TestRunnerErrorPreservesCursorAndRejectsPartialEvents(t *testing.T) {
 	store := &runnerStore{due: []model.TaskPolling{{TaskID: "source", Generation: 4, Type: TypeReview, Cursor: json.RawMessage(`{"seen":[1]}`)}}}
@@ -47,7 +47,7 @@ func TestRunnerErrorPreservesCursorAndRejectsPartialEvents(t *testing.T) {
 		t.Fatalf("store=%#v", store)
 	}
 	out := store.outcomes[0]
-	if len(out.Events) != 0 || string(out.Cursor) != `{"seen":[1]}` || out.Generation != 4 || out.Error == "" || out.NextCheckAt == "" {
+	if out.PRStatus != "" || len(out.Events) != 0 || string(out.Cursor) != `{"seen":[1]}` || out.Generation != 4 || out.Error == "" || out.NextCheckAt == "" {
 		t.Fatalf("out=%#v", out)
 	}
 }

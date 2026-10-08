@@ -3,16 +3,10 @@ import type { FormEvent } from "react";
 import type { TaskCard } from "./model";
 import { safeExternalURL } from "./model";
 import { Field } from "./forms";
+import { normalizeTicketInput, ticketLabel } from "./ticket";
 
 type TicketTask = Pick<TaskCard, "id" | "title" | "version" | "ticket_url">;
 type SaveTicket = (url: string, version: number) => Promise<TaskCard>;
-function validTicketURL(value: string): boolean {
-  if (!/^https?:\/\//i.test(value)) return false;
-  try {
-    const url = new URL(value);
-    return !!url.hostname && !url.username && !url.password;
-  } catch { return false; }
-}
 
 export function TicketControl({ task, busy, onSave }: {
   task: TicketTask;
@@ -25,7 +19,7 @@ export function TicketControl({ task, busy, onSave }: {
   return <div className="ticket-control">
     <div className="ticket-actions">
       {href ? <>
-        <a className="card-footer-link" href={href} target="_blank" rel="noreferrer" draggable={false}>Open ticket <span aria-hidden="true">↗</span></a>
+        <a className="card-footer-link" href={href} target="_blank" rel="noreferrer" draggable={false} title={url}>{ticketLabel(url)} <span aria-hidden="true">↗</span></a>
         <button className="card-footer-link ticket-edit" type="button" aria-label="Edit ticket" title="Edit ticket" disabled={busy} onClick={() => setEditing(true)}>✎</button>
       </> : <button className="card-footer-link" type="button" disabled={busy} onClick={() => setEditing(true)}>{url ? "Edit ticket" : "Add ticket"}</button>}
     </div>
@@ -51,8 +45,8 @@ function TicketForm({ task, busy, onSave, onClose }: {
     e.preventDefault();
     if (busy) return;
     if (stale) { setError("The ticket changed. Reload latest ticket before saving; your draft is preserved."); return; }
-    const submitted = value.trim();
-    if (submitted && !validTicketURL(submitted)) { setError("Enter an absolute HTTP or HTTPS ticket URL without credentials."); return; }
+    const submitted = normalizeTicketInput(value);
+    if (submitted === undefined) { setError("Enter an issue key or an absolute HTTP or HTTPS ticket URL without credentials."); return; }
     setError("");
     try {
       const saved = await onSave(submitted, baseline.version);
@@ -67,8 +61,8 @@ function TicketForm({ task, busy, onSave, onClose }: {
     } catch (err) { setError((err as Error).message); }
   };
   return <form className="ticket-form" onSubmit={(e) => void submit(e)}>
-    <Field label="Ticket URL" hint="HTTP or HTTPS link. Clear the field to remove the ticket.">
-      <input type="url" autoFocus value={value} onChange={(e) => { draft.current = e.target.value; setValue(e.target.value); }} />
+    <Field label="Ticket URL" hint="Full HTTP(S) URL or issue key, e.g. TASK-123. Clear to remove the ticket.">
+      <input type="text" autoFocus value={value} onChange={(e) => { draft.current = e.target.value; setValue(e.target.value); }} />
     </Field>
     {stale && <button type="button" disabled={busy} onClick={() => {
       setBaseline(task); setValue(task.ticket_url || ""); draft.current = task.ticket_url || ""; setError("");

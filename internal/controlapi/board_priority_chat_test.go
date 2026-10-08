@@ -179,3 +179,28 @@ func TestBoardTicketCommandReturnsCompactCardAndGuards(t *testing.T) {
 		t.Fatalf("invalid: %d", w.Code)
 	}
 }
+
+func TestBoardTicketShortKeyCommand(t *testing.T) {
+	store, err := storage.Open(filepath.Join(t.TempDir(), "board.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	service := tasks.New(store)
+	task, err := service.CreateTask(context.Background(), model.CreateTaskInput{Title: "task"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := NewHandler("test", &fakeBackend{}, Options{Board: service, ListenAddress: "127.0.0.1:8099"})
+	w := boardRequest(h, "POST", "/v1/tasks/"+task.ID+"/ticket", fmt.Sprintf(`{"expected_version":%d,"ticket_url":" task-123 "}`, task.Version), "127.0.0.1:8099", "", "application/json")
+	if w.Code != 200 {
+		t.Fatalf("ticket: %d %s", w.Code, w.Body.String())
+	}
+	var card model.TaskCardDTO
+	if err := json.Unmarshal(w.Body.Bytes(), &card); err != nil {
+		t.Fatal(err)
+	}
+	if card.TicketURL != "https://st.yandex-team.ru/TASK-123" {
+		t.Fatal(card.TicketURL)
+	}
+}

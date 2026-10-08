@@ -68,6 +68,9 @@ func (c *CLIClient) ReadPRSnapshot(ctx context.Context, id int64) (PRSnapshot, e
 	if err := c.readJSON(ctx, &snapshot, "pr", "get", key, "--fields", "id,status,author(uid,name)"); err != nil {
 		return snapshot, err
 	}
+	if snapshot.ID == id && snapshot.Status == "merged" {
+		return snapshot, nil
+	}
 	if snapshot.ID != id || snapshot.Status == "" || !loginPattern.MatchString(snapshot.Author.Name) {
 		return snapshot, errors.New("incomplete PR metadata")
 	}

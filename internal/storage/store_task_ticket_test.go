@@ -149,3 +149,28 @@ func TestTaskTicketCreateAndOptionalUpdateValidation(t *testing.T) {
 		t.Fatalf("clear update: %#v %v", got, err)
 	}
 }
+
+func TestTaskTicketShortKeyNormalization(t *testing.T) {
+	s := openTestStore(t)
+	ctx := context.Background()
+	task, err := s.CreateTask(ctx, model.CreateTaskInput{Title: "task", TicketURL: " task-123 "})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "https://st.yandex-team.ru/TASK-123"
+	if task.TicketURL != want {
+		t.Fatal(task.TicketURL)
+	}
+	key := "task-456"
+	task, err = s.UpdateTask(ctx, task.ID, model.UpdateTaskInput{ExpectedVersion: task.Version, Title: task.Title, TicketURL: &key})
+	if err != nil || task.TicketURL != "https://st.yandex-team.ru/TASK-456" {
+		t.Fatalf("patch: %#v %v", task, err)
+	}
+	if err := s.SetTaskTicket(ctx, task.ID, model.SetTaskTicketInput{ExpectedVersion: task.Version, TicketURL: " Task-123 "}); err != nil {
+		t.Fatal(err)
+	}
+	card, _ := s.GetTaskCard(ctx, task.ID)
+	if card.TicketURL != want {
+		t.Fatal(card)
+	}
+}
