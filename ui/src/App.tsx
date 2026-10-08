@@ -119,15 +119,15 @@ export function TaskCard({
         }}>
         <option value="low">↓ Low</option><option value="normal">— Normal</option><option value="high">↑ High</option>
       </select>
+    {onTicket && <TicketControl task={task} busy={controlsDisabled} onSave={onTicket} />}
       {task.thread_id
-        ? <a className="card-codex-link" href={codexURL(task.thread_id)} draggable={false}>Open in Codex ↗</a>
-        : <button className="card-codex-link" type="button" aria-expanded={linking} disabled={controlsDisabled || !onLink}
+        ? <a className="card-codex-link card-footer-link" href={codexURL(task.thread_id)} draggable={false}>Open in Codex ↗</a>
+        : <button className="card-codex-link card-footer-link" type="button" aria-expanded={linking} disabled={controlsDisabled || !onLink}
           onClick={() => setLinking(!linking)}>Codex: not linked</button>}
     </div>
     {linking && !task.thread_id && onLink && <div className="card-chat-form">
       <TaskChatForm task={task} busy={controlsDisabled} onLink={onLink} inline onCancel={() => setLinking(false)} />
     </div>}
-    {onTicket && <TicketControl task={task} busy={controlsDisabled} onSave={onTicket} />}
     {controlError && <p role="alert" className="error-note">{controlError}</p>}
     </div>
   );

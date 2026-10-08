@@ -25,9 +25,9 @@ export function TicketControl({ task, busy, onSave }: {
   return <div className="ticket-control">
     <div className="ticket-actions">
       {href ? <>
-        <a href={href} target="_blank" rel="noreferrer" draggable={false}>Open ticket</a>
-        <button type="button" disabled={busy} onClick={() => setEditing(true)}>Edit ticket</button>
-      </> : <button type="button" disabled={busy} onClick={() => setEditing(true)}>{url ? "Edit ticket" : "Add ticket"}</button>}
+        <a className="card-footer-link" href={href} target="_blank" rel="noreferrer" draggable={false}>Open ticket <span aria-hidden="true">↗</span></a>
+        <button className="card-footer-link ticket-edit" type="button" aria-label="Edit ticket" title="Edit ticket" disabled={busy} onClick={() => setEditing(true)}>✎</button>
+      </> : <button className="card-footer-link" type="button" disabled={busy} onClick={() => setEditing(true)}>{url ? "Edit ticket" : "Add ticket"}</button>}
     </div>
     {editing && <TicketForm task={task} busy={busy} onSave={onSave} onClose={() => setEditing(false)} />}
   </div>;
