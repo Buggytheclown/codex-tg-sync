@@ -211,3 +211,35 @@ func TestBoardPriorityDoesNotWaitForSyncOrLaunch(t *testing.T) {
 		t.Fatal("priority waited for gate")
 	}
 }
+
+func TestBoardTicketDoesNotWaitForSyncOrLaunch(t *testing.T) {
+	s := newTestService(t)
+	ctx := context.Background()
+	task, err := s.CreateTask(ctx, model.CreateTaskInput{Title: "task"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.syncMu.Lock()
+	s.taskLaunchMu.Lock()
+	done := make(chan error, 1)
+	go func() {
+		card, err := s.SetTaskTicket(ctx, task.ID, model.SetTaskTicketInput{ExpectedVersion: task.Version, TicketURL: "https://tracker.example/TASK-123"})
+		if err == nil && (card.TicketURL != "https://tracker.example/TASK-123" || card.Version != task.Version+1) {
+			err = fmt.Errorf("bad priority card: %#v", card)
+		}
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		s.taskLaunchMu.Unlock()
+		s.syncMu.Unlock()
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		s.taskLaunchMu.Unlock()
+		s.syncMu.Unlock()
+		<-done
+		t.Fatal("priority waited for gate")
+	}
+}

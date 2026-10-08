@@ -29,6 +29,7 @@ type BoardBackend interface {
 	ListTaskCards(context.Context) ([]model.TaskCardDTO, error)
 	ReorderTask(context.Context, string, model.MoveTaskInput) (*model.TaskCardDTO, error)
 	SetTaskPriority(context.Context, string, model.SetTaskPriorityInput) (*model.TaskCardDTO, error)
+	SetTaskTicket(context.Context, string, model.SetTaskTicketInput) (*model.TaskCardDTO, error)
 	GetTask(context.Context, string) (*model.Task, error)
 	CreateTask(context.Context, model.CreateTaskInput) (*model.Task, error)
 	UpdateTask(context.Context, string, model.UpdateTaskInput) (*model.Task, error)
@@ -131,6 +132,24 @@ func registerBoard(mux *http.ServeMux, b BoardBackend, opts Options) {
 				return
 			}
 			switch parts[1] {
+			case "ticket":
+				if r.Method != http.MethodPost {
+					writeError(w, 405, "method not allowed")
+					return
+				}
+				var input struct {
+					ExpectedVersion int64   `json:"expected_version"`
+					TicketURL       *string `json:"ticket_url"`
+				}
+				if !decodeCommand(w, r, &input) {
+					return
+				}
+				if input.TicketURL == nil {
+					writeError(w, 400, "ticket_url is required; use an empty string to clear it")
+					return
+				}
+				value, err := b.SetTaskTicket(r.Context(), id, model.SetTaskTicketInput{ExpectedVersion: input.ExpectedVersion, TicketURL: *input.TicketURL})
+				boardResult(w, 200, value, err)
 			case "priority":
 				if r.Method != http.MethodPost {
 					writeError(w, 405, "method not allowed")

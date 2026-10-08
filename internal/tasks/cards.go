@@ -22,3 +22,10 @@ func (s *Service) SetTaskPriority(ctx context.Context, id string, in model.SetTa
 	}
 	return s.store.GetTaskCard(ctx, id)
 }
+
+func (s *Service) SetTaskTicket(ctx context.Context, id string, in model.SetTaskTicketInput) (*model.TaskCardDTO, error) {
+	if err := s.store.SetTaskTicket(ctx, id, in); err != nil {
+		return nil, err
+	}
+	return s.store.GetTaskCard(ctx, id)
+}

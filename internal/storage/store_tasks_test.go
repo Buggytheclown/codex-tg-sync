@@ -64,7 +64,7 @@ func TestTaskAcceptanceFreezesOwnedDefinitionAndRequest(t *testing.T) {
 	ctx := context.Background()
 	def := model.TaskDefinition{Title: "Review {{pr}}", Config: model.TaskConfig{InitialPrompt: "Review {{pr}}", ContinuationPrompt: "Continue {{pr}}", Execution: model.TaskExecutionSettings{CWD: "/workspace", Model: "test", ApprovalPolicy: "on-request", ApprovalsReviewer: "auto_review", SandboxMode: "workspace-write"}}, Polling: &model.TaskPolling{Type: "pr", Mode: model.PollingOnce, Config: []byte(`{}`), Action: model.TaskPollingAction{Type: model.PollingResumeTask}}}
 
-	source, err := s.CreateTask(ctx, model.CreateTaskInput{Title: "source", Priority: "high", Column: model.TaskPollingColumn, Polling: &model.TaskPolling{Type: "pr", Mode: model.PollingRepeat, Config: []byte(`{}`), Action: model.TaskPollingAction{Type: model.PollingCreateTask, ChildDefinition: &def}}})
+	source, err := s.CreateTask(ctx, model.CreateTaskInput{Title: "source", TicketURL: "https://tracker.example/TASK-123", Priority: "high", Column: model.TaskPollingColumn, Polling: &model.TaskPolling{Type: "pr", Mode: model.PollingRepeat, Config: []byte(`{}`), Action: model.TaskPollingAction{Type: model.PollingCreateTask, ChildDefinition: &def}}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -99,7 +99,7 @@ func TestTaskAcceptanceFreezesOwnedDefinitionAndRequest(t *testing.T) {
 			child = item
 		}
 	}
-	if child.Priority != "normal" || child.Title != "source: Review 1" || child.Config.InitialPrompt != "Review 1" || child.Polling == nil || child.Column != model.TaskInbox || len(child.Requests) != 1 {
+	if child.TicketURL != "" || child.Priority != "normal" || child.Title != "source: Review 1" || child.Config.InitialPrompt != "Review 1" || child.Polling == nil || child.Column != model.TaskInbox || len(child.Requests) != 1 {
 		t.Fatalf("snapshot: %#v", child)
 	}
 	request, err := s.GetExternalLaunchRequest(ctx, child.Requests[0].ID)

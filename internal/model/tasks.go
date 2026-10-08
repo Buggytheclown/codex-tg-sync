@@ -50,6 +50,7 @@ type TaskPolling struct {
 	LastError     string            `json:"last_error"`
 }
 type Task struct {
+	TicketURL    string               `json:"ticket_url"`
 	Priority     string               `json:"priority"`
 	ID           string               `json:"id"`
 	Title        string               `json:"title"`
@@ -97,6 +98,7 @@ type TaskEvent struct {
 	CreatedAt    TimeString      `json:"created_at"`
 }
 type CreateTaskInput struct {
+	TicketURL   string       `json:"ticket_url"`
 	Priority    string       `json:"priority"`
 	Title       string       `json:"title"`
 	Description string       `json:"description"`
@@ -109,6 +111,7 @@ type CreateTaskInput struct {
 	Polling     *TaskPolling `json:"polling,omitempty"`
 }
 type UpdateTaskInput struct {
+	TicketURL       *string    `json:"ticket_url,omitempty"`
 	Priority        *string    `json:"priority,omitempty"`
 	ExpectedVersion int64      `json:"expected_version"`
 	Title           string     `json:"title"`
@@ -196,4 +199,9 @@ type LinkTaskChatInput struct {
 type SetTaskPriorityInput struct {
 	ExpectedVersion int64  `json:"expected_version"`
 	Priority        string `json:"priority"`
+}
+
+type SetTaskTicketInput struct {
+	ExpectedVersion int64  `json:"expected_version"`
+	TicketURL       string `json:"ticket_url"`
 }

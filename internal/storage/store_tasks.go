@@ -49,6 +49,9 @@ func (s *Store) initializeTasks(ctx context.Context) error {
 	if err := s.ensureColumn(ctx, "tasks", "priority", `ALTER TABLE tasks ADD COLUMN priority TEXT NOT NULL DEFAULT 'normal'`); err != nil {
 		return err
 	}
+	if err := s.ensureColumn(ctx, "tasks", "ticket_url", `ALTER TABLE tasks ADD COLUMN ticket_url TEXT NOT NULL DEFAULT ''`); err != nil {
+		return err
+	}
 	return s.migrateOwnedSourceDefinitions(ctx)
 }
 
@@ -102,12 +105,12 @@ func validatePolling(p model.TaskPolling) error {
 	return nil
 }
 
-const taskColumns = `priority,id,title,description,column,position,coalesce(thread_id,''),coalesce(source_url,''),coalesce(source_key,''),coalesce(source_task_id,''),coalesce(source_author,''),task_config_json,version,created_at,updated_at`
+const taskColumns = `ticket_url,priority,id,title,description,column,position,coalesce(thread_id,''),coalesce(source_url,''),coalesce(source_key,''),coalesce(source_task_id,''),coalesce(source_author,''),task_config_json,version,created_at,updated_at`
 
 func scanTask(row rowScanner) (*model.Task, error) {
 	var t model.Task
 	var raw string
-	err := row.Scan(&t.Priority, &t.ID, &t.Title, &t.Description, &t.Column, &t.Position, &t.ThreadID, &t.SourceURL, &t.SourceKey, &t.SourceTaskID, &t.SourceAuthor, &raw, &t.Version, &t.CreatedAt, &t.UpdatedAt)
+	err := row.Scan(&t.TicketURL, &t.Priority, &t.ID, &t.Title, &t.Description, &t.Column, &t.Position, &t.ThreadID, &t.SourceURL, &t.SourceKey, &t.SourceTaskID, &t.SourceAuthor, &raw, &t.Version, &t.CreatedAt, &t.UpdatedAt)
 	if err != nil {
 		return nil, err
 	}
@@ -240,7 +243,7 @@ func insertTaskTx(ctx context.Context, tx *sql.Tx, t model.Task) error {
 	if err != nil {
 		return err
 	}
-	_, err = tx.ExecContext(ctx, `INSERT INTO tasks(priority,id,title,description,column,position,thread_id,source_url,source_key,source_task_id,source_author,task_config_json,version,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, t.Priority, t.ID, t.Title, t.Description, t.Column, t.Position, nullable(t.ThreadID), nullable(t.SourceURL), nullable(t.SourceKey), nullable(t.SourceTaskID), nullable(t.SourceAuthor), string(raw), t.Version, t.CreatedAt, t.UpdatedAt)
+	_, err = tx.ExecContext(ctx, `INSERT INTO tasks(ticket_url,priority,id,title,description,column,position,thread_id,source_url,source_key,source_task_id,source_author,task_config_json,version,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, t.TicketURL, t.Priority, t.ID, t.Title, t.Description, t.Column, t.Position, nullable(t.ThreadID), nullable(t.SourceURL), nullable(t.SourceKey), nullable(t.SourceTaskID), nullable(t.SourceAuthor), string(raw), t.Version, t.CreatedAt, t.UpdatedAt)
 	return err
 }
 func setPollingTx(ctx context.Context, tx *sql.Tx, p model.TaskPolling) error {
@@ -263,6 +266,9 @@ func addTaskEventTx(ctx context.Context, tx *sql.Tx, taskID, kind string, payloa
 	return err
 }
 func (s *Store) CreateTask(ctx context.Context, in model.CreateTaskInput) (*model.Task, error) {
+	if err := validateTaskTicketURL(in.TicketURL); err != nil {
+		return nil, err
+	}
 	if in.Priority == "" {
 		in.Priority = "normal"
 	}
@@ -312,7 +318,7 @@ func (s *Store) CreateTask(ctx context.Context, in model.CreateTaskInput) (*mode
 		}
 	}
 	now := model.NowString()
-	t := model.Task{Priority: in.Priority, ID: uuid.NewString(), Title: in.Title, Description: in.Description, Column: in.Column, Position: in.Position, ThreadID: in.ThreadID, SourceURL: in.SourceURL, SourceKey: in.SourceKey, Config: s.normalizeTaskConfig(in.Config), Version: 1, CreatedAt: now, UpdatedAt: now}
+	t := model.Task{TicketURL: in.TicketURL, Priority: in.Priority, ID: uuid.NewString(), Title: in.Title, Description: in.Description, Column: in.Column, Position: in.Position, ThreadID: in.ThreadID, SourceURL: in.SourceURL, SourceKey: in.SourceKey, Config: s.normalizeTaskConfig(in.Config), Version: 1, CreatedAt: now, UpdatedAt: now}
 	if t.Column == model.TaskPollingColumn {
 		if in.Polling == nil {
 			return nil, ErrTaskInvalid
@@ -357,6 +363,11 @@ func checkTaskVersion(t *model.Task, version int64) error {
 	return nil
 }
 func (s *Store) UpdateTask(ctx context.Context, id string, in model.UpdateTaskInput) (*model.Task, error) {
+	if in.TicketURL != nil {
+		if err := validateTaskTicketURL(*in.TicketURL); err != nil {
+			return nil, err
+		}
+	}
 	if in.Priority != nil && !validTaskPriority(*in.Priority) {
 		return nil, fmt.Errorf("%w: priority must be low, normal or high", ErrTaskInvalid)
 	}
@@ -375,6 +386,9 @@ func (s *Store) UpdateTask(ctx context.Context, id string, in model.UpdateTaskIn
 	if err := checkTaskVersion(t, in.ExpectedVersion); err != nil {
 		return nil, err
 	}
+	if in.TicketURL != nil {
+		t.TicketURL = *in.TicketURL
+	}
 	if in.Priority != nil {
 		t.Priority = *in.Priority
 	}
@@ -388,7 +402,7 @@ func (s *Store) UpdateTask(ctx context.Context, id string, in model.UpdateTaskIn
 	if err != nil {
 		return nil, err
 	}
-	_, err = tx.ExecContext(ctx, `UPDATE tasks SET priority=?,title=?,description=?,source_url=?,task_config_json=?,version=version+1,updated_at=? WHERE id=?`, t.Priority, in.Title, in.Description, nullable(in.SourceURL), string(raw), model.NowString(), id)
+	_, err = tx.ExecContext(ctx, `UPDATE tasks SET ticket_url=?,priority=?,title=?,description=?,source_url=?,task_config_json=?,version=version+1,updated_at=? WHERE id=?`, t.TicketURL, t.Priority, in.Title, in.Description, nullable(in.SourceURL), string(raw), model.NowString(), id)
 	if err != nil {
 		return nil, err
 	}

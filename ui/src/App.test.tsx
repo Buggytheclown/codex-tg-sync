@@ -2,6 +2,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   cleanup,
+  within,
   fireEvent,
   render,
   screen,
@@ -9,6 +10,7 @@ import {
 } from "@testing-library/react";
 import { App } from "./App";
 import { PollingForm } from "./forms";
+import { TicketControl } from "./TicketControl";
 import { compactTask, defaultPolling, emptyConfig, formatTime } from "./model";
 import type { Task, Polling } from "./model";
 const makeTask = (extra: Partial<Task> = {}): Task => ({
@@ -83,6 +85,12 @@ beforeEach(() => {
         const task = rows.find((t) => t.id === id)!;
         payload = { ...task, polling: body.polling, version: task.version + 1 };
         rows = rows.map((t) => (t.id === id ? (payload as Task) : t));
+      }
+      if (method === "POST" && path.endsWith("/ticket")) {
+        const task = rows.find(t => path === `/v1/tasks/${t.id}/ticket`)!;
+        const saved = { ...task, ticket_url: body.ticket_url, version: task.version + 1 };
+        rows = rows.map(t => t.id === task.id ? saved : t);
+        payload = compactTask(saved);
       }
       if (method === "POST" && path.endsWith("/priority")) {
         const task = rows.find(t => path === `/v1/tasks/${t.id}/priority`)!;
@@ -836,4 +844,147 @@ it("retains drafts on inline priority conflict and does not certify unseen setti
   // The compact reply must not grant stale full settings its newer version.
   rows = [makeTask({ priority: "high", version: 3, config: { ...emptyConfig(), initial_prompt: "Unseen newer prompt" } })];
   resolve({ ok: true, status: 200, json: async () => rows[0] } as Response);
+});
+
+it("adds, opens, edits and removes a ticket without navigating or changing task settings", async () => {
+  rows = [makeTask({ source_url: "https://example.com/pr", config: { ...emptyConfig(), initial_prompt: "Keep prompt" } })];
+  render(<App />);
+  const add = await screen.findByRole("button", { name: "Add ticket" });
+  expect(add.closest(".task-card")).toBeNull();
+  fireEvent.click(add);
+  fireEvent.change(screen.getByLabelText("Ticket URL"), { target: { value: "https://tracker.example/TASK-123" } });
+  fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+  expect(calls.some(c => c.path.endsWith("/ticket"))).toBe(false);
+  fireEvent.click(add);
+  const input = screen.getByLabelText("Ticket URL");
+  fireEvent.change(input, { target: { value: "https://tracker.example/TASK-123" } });
+  fireEvent.click(screen.getByRole("button", { name: "Save ticket" }));
+  const ticket = await screen.findByRole("link", { name: "Open ticket" });
+  expect(ticket.getAttribute("href")).toBe("https://tracker.example/TASK-123");
+  expect(ticket.getAttribute("target")).toBe("_blank");
+  expect(ticket.getAttribute("rel")).toContain("noreferrer");
+  expect(ticket.getAttribute("draggable")).toBe("false");
+  expect(calls.find(c => c.path.endsWith("/ticket"))?.body).toEqual({ expected_version: 1, ticket_url: "https://tracker.example/TASK-123" });
+  expect(rows[0].source_url).toBe("https://example.com/pr");
+  expect(rows[0].config.initial_prompt).toBe("Keep prompt");
+  expect(rows[0].position).toBe(1);
+  expect(screen.queryByLabelText("Title")).toBeNull();
+  await waitFor(() => expect((screen.getByRole("button", { name: "Edit ticket" }) as HTMLButtonElement).disabled).toBe(false));
+  fireEvent.click(screen.getByRole("button", { name: "Edit ticket" }));
+  fireEvent.change(screen.getByLabelText("Ticket URL"), { target: { value: "" } });
+  fireEvent.click(screen.getByRole("button", { name: "Save ticket" }));
+  await screen.findByRole("button", { name: "Add ticket" });
+  expect(rows[0].ticket_url).toBe("");
+});
+it("saves an Overview ticket with Cmd+Enter while keeping its title draft", async () => {
+  window.history.replaceState(null, "", "/?task=task-1");
+  render(<App />);
+  fireEvent.change(await screen.findByLabelText("Title"), { target: { value: "Draft title" } });
+  const detail = within(screen.getByRole("complementary", { name: "Task details and settings" }));
+  fireEvent.click(detail.getByRole("button", { name: "Add ticket" }));
+  const input = detail.getByLabelText("Ticket URL");
+  fireEvent.change(input, { target: { value: "https://tracker.example/TASK-123" } });
+  fireEvent.keyDown(input, { key: "Enter", metaKey: true });
+  await waitFor(() => expect(rows[0].ticket_url).toBe("https://tracker.example/TASK-123"));
+  expect((detail.getByLabelText("Title") as HTMLInputElement).value).toBe("Draft title");
+  await waitFor(() => expect((detail.getByRole("button", { name: "Save overview" }) as HTMLButtonElement).disabled).toBe(false));
+  await waitFor(() => expect(detail.queryByRole("button", { name: "Reload latest overview" })).toBeNull());
+  fireEvent.click(detail.getByRole("button", { name: "Save overview" }));
+  await waitFor(() => expect(rows[0].title).toBe("Draft title"));
+  expect(rows[0].ticket_url).toBe("https://tracker.example/TASK-123");
+});
+it("preserves ticket drafts across unrelated versions and fences external ticket edits", async () => {
+  const original = makeTask({ ticket_url: "https://tracker.example/TASK-123" });
+  const save = vi.fn(async (_url: string, version: number) => compactTask({ ...original, version: version + 1 }));
+  const view = render(<TicketControl task={original} busy={false} onSave={save} />);
+  fireEvent.click(screen.getByRole("button", { name: "Edit ticket" }));
+  fireEvent.change(screen.getByLabelText("Ticket URL"), { target: { value: "https://tracker.example/TASK-456" } });
+  view.rerender(<TicketControl task={{ ...original, version: 2, title: "Updated title" }} busy={false} onSave={save} />);
+  expect((screen.getByLabelText("Ticket URL") as HTMLInputElement).value).toBe("https://tracker.example/TASK-456");
+  view.rerender(<TicketControl task={{ ...original, version: 3, ticket_url: "https://tracker.example/TASK-789" }} busy={false} onSave={save} />);
+  fireEvent.click(screen.getByRole("button", { name: "Save ticket" }));
+  expect(save).not.toHaveBeenCalled();
+  expect((screen.getByLabelText("Ticket URL") as HTMLInputElement).value).toBe("https://tracker.example/TASK-456");
+  fireEvent.click(screen.getByRole("button", { name: "Reload latest ticket" }));
+  expect((screen.getByLabelText("Ticket URL") as HTMLInputElement).value).toBe("https://tracker.example/TASK-789");
+});
+it("does not grant a concurrent ticket save reply to the submitted draft", async () => {
+  const original = makeTask({ ticket_url: "https://tracker.example/TASK-123" });
+  const concurrent = compactTask({ ...original, ticket_url: "https://tracker.example/TASK-789", version: 3 });
+  const save = vi.fn(async () => concurrent);
+  const view = render(<TicketControl task={original} busy={false} onSave={save} />);
+  fireEvent.click(screen.getByRole("button", { name: "Edit ticket" }));
+  fireEvent.change(screen.getByLabelText("Ticket URL"), { target: { value: "https://tracker.example/TASK-456" } });
+  fireEvent.click(screen.getByRole("button", { name: "Save ticket" }));
+  await screen.findByText(/ticket changed after saving/);
+  view.rerender(<TicketControl task={concurrent} busy={false} onSave={save} />);
+  fireEvent.click(screen.getByRole("button", { name: "Save ticket" }));
+  expect(save).toHaveBeenCalledTimes(1);
+  expect((screen.getByLabelText("Ticket URL") as HTMLInputElement).value).toBe("https://tracker.example/TASK-456");
+});
+it("retains ticket typing during pending saves and rejects non HTTP URLs", async () => {
+  const original = makeTask();
+  let resolve!: (value: ReturnType<typeof compactTask>) => void;
+  const held = new Promise<ReturnType<typeof compactTask>>(done => { resolve = done; });
+  const save = vi.fn(async () => held);
+  const view = render(<TicketControl task={original} busy={false} onSave={save} />);
+  fireEvent.click(screen.getByRole("button", { name: "Add ticket" }));
+  fireEvent.change(screen.getByLabelText("Ticket URL"), { target: { value: "javascript:alert(1)" } });
+  fireEvent.click(screen.getByRole("button", { name: "Save ticket" }));
+  expect(save).not.toHaveBeenCalled();
+  for (const url of ["https://user:password@tracker.example/TASK-123", "https:tracker.example/TASK-123", "//tracker.example/TASK-123"]) {
+    fireEvent.change(screen.getByLabelText("Ticket URL"), { target: { value: url } });
+    fireEvent.click(screen.getByRole("button", { name: "Save ticket" }));
+    expect(save).not.toHaveBeenCalled();
+  }
+  fireEvent.change(screen.getByLabelText("Ticket URL"), { target: { value: "https://tracker.example/TASK-123" } });
+  fireEvent.click(screen.getByRole("button", { name: "Save ticket" }));
+  fireEvent.change(screen.getByLabelText("Ticket URL"), { target: { value: "https://tracker.example/TASK-456" } });
+  const saved = compactTask({ ...original, ticket_url: "https://tracker.example/TASK-123", version: 2 });
+  resolve(saved);
+  view.rerender(<TicketControl task={saved} busy={false} onSave={save} />);
+  await waitFor(() => expect(screen.queryByRole("button", { name: "Reload latest ticket" })).toBeNull());
+  expect((screen.getByLabelText("Ticket URL") as HTMLInputElement).value).toBe("https://tracker.example/TASK-456");
+});
+it("does not advance unseen full settings from a newer compact ticket reply", async () => {
+  window.history.replaceState(null, "", "/?task=task-1");
+  const original = vi.mocked(fetch).getMockImplementation()!;
+  let waiting = false;
+  let resolve!: (value: Response) => void;
+  const held = new Promise<Response>(done => { resolve = done; });
+  vi.mocked(fetch).mockImplementation(async (path, options) => {
+    if (String(path).endsWith("/ticket") && options?.method === "POST") {
+      rows = [makeTask({ version: 3, ticket_url: "https://tracker.example/TASK-123", updated_at: "2026-01-02T12:00:00Z", config: { ...emptyConfig(), initial_prompt: "External prompt" } })];
+      waiting = true;
+      return { ok: true, status: 200, json: async () => compactTask(rows[0]) } as Response;
+    }
+    if (waiting && path === "/v1/tasks/task-1") {
+      if (!options?.method || options.method === "GET") return held;
+      if (options.method === "PATCH") {
+        calls.push({ path, method: "PATCH", body: JSON.parse(options.body as string) });
+        return { ok: false, status: 409, json: async () => ({ error: "Stale detail version" }) } as Response;
+      }
+    }
+    return original(path, options);
+  });
+  render(<App />);
+  fireEvent.change(await screen.findByLabelText("Title"), { target: { value: "Keep title draft" } });
+  const detail = within(screen.getByRole("complementary", { name: "Task details and settings" }));
+  fireEvent.click(detail.getByRole("button", { name: "Add ticket" }));
+  fireEvent.change(detail.getByLabelText("Ticket URL"), { target: { value: "https://tracker.example/TASK-123" } });
+  fireEvent.click(detail.getByRole("button", { name: "Save ticket" }));
+  await screen.findByRole("link", { name: "Open ticket" });
+  await waitFor(() => expect((detail.getByRole("button", { name: "Save overview" }) as HTMLButtonElement).disabled).toBe(false));
+  fireEvent.click(detail.getByRole("button", { name: "Save overview" }));
+  await detail.findByText("Stale detail version");
+  expect(calls.find(c => c.method === "PATCH")?.body).toMatchObject({ expected_version: 1 });
+  waiting = false;
+  resolve({ ok: true, status: 200, json: async () => rows[0] } as Response);
+  await detail.findByText(formatTime("2026-01-02T12:00:00Z"));
+  await waitFor(() => expect((detail.getByRole("button", { name: "Save overview" }) as HTMLButtonElement).disabled).toBe(false));
+  await waitFor(() => expect(detail.queryByRole("button", { name: "Reload latest overview" })).toBeNull());
+  fireEvent.click(detail.getByRole("button", { name: "Save overview" }));
+  await waitFor(() => expect(rows[0].title).toBe("Keep title draft"));
+  expect(rows[0].config.initial_prompt).toBe("External prompt");
+  expect(rows[0].ticket_url).toBe("https://tracker.example/TASK-123");
 });

@@ -287,3 +287,8 @@ func (b *fakeBoard) SetTaskPriority(context.Context, string, model.SetTaskPriori
 	task, err := b.change()
 	return &model.TaskCardDTO{ID: task.ID, Version: task.Version}, err
 }
+
+func (b *fakeBoard) SetTaskTicket(context.Context, string, model.SetTaskTicketInput) (*model.TaskCardDTO, error) {
+	task, err := b.change()
+	return &model.TaskCardDTO{ID: task.ID, Version: task.Version}, err
+}

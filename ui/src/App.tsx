@@ -22,12 +22,14 @@ import { Field, PollingForm, PromptFields, conditionLabels } from "./forms";
 type Panel = "details" | "new-task" | "new-source" | "add-chat";
 import { SourceEditor } from "./SourceEditor";
 import { PollingDiagnostics } from "./PollingDiagnostics";
+import { TicketControl } from "./TicketControl";
 type Tab = "overview" | "polling" | "history";
 export function TaskCard({
   task,
   selected,
   onSelect,
   onPriority,
+  onTicket,
   onLink,
   controlsDisabled = false,
   grabbed = false,
@@ -40,6 +42,7 @@ export function TaskCard({
   selected: boolean;
   onSelect: () => void;
   onPriority?: (priority: Priority) => Promise<void>;
+  onTicket?: (url: string, version: number) => Promise<Card>;
   onLink?: (threadID: string, version: number) => Promise<Task>;
   controlsDisabled?: boolean;
   grabbed?: boolean;
@@ -124,6 +127,7 @@ export function TaskCard({
     {linking && !task.thread_id && onLink && <div className="card-chat-form">
       <TaskChatForm task={task} busy={controlsDisabled} onLink={onLink} inline onCancel={() => setLinking(false)} />
     </div>}
+    {onTicket && <TicketControl task={task} busy={controlsDisabled} onSave={onTicket} />}
     {controlError && <p role="alert" className="error-note">{controlError}</p>}
     </div>
   );
@@ -325,6 +329,32 @@ export function App() {
       });
       setTasks(current => current.map(card => card.id === saved.id && card.version <= saved.version ? saved : card));
       await refresh();
+    } catch (err) {
+      if (err instanceof APIError && err.status === 409) void refresh();
+      throw err;
+    } finally { if (mounted.current) setBusy(false); }
+  };
+  const saveTicket = async (task: Card | Task, ticketURL: string, expectedVersion: number): Promise<Card> => {
+    if (busy || pendingMove.current || dragRef.current) throw new Error("Another edit is being saved. Try again.");
+    setBusy(true);
+    setError("");
+    try {
+      const saved = await api<Card>(`/v1/tasks/${task.id}/ticket`, "POST", {
+        expected_version: expectedVersion, ticket_url: ticketURL,
+      });
+      if (!mounted.current) return saved;
+      const knownSettings = latestDetail.current?.id === saved.id &&
+        latestDetail.current.version === expectedVersion &&
+        saved.version === expectedVersion + 1 && (saved.ticket_url || "") === ticketURL;
+      if (detailSelection.current === saved.id && knownSettings) detailVersion.current = saved.version;
+      setDetail(old => {
+        if (old?.id !== saved.id || old.version !== expectedVersion ||
+          saved.version !== expectedVersion + 1 || (saved.ticket_url || "") !== ticketURL) return old;
+        return { ...old, ticket_url: saved.ticket_url, version: saved.version, updated_at: saved.updated_at };
+      });
+      setTasks(current => current.map(card => card.id === saved.id && card.version <= saved.version ? saved : card));
+      await refresh();
+      return saved;
     } catch (err) {
       if (err instanceof APIError && err.status === 409) void refresh();
       throw err;
@@ -648,6 +678,7 @@ export function App() {
                         onSelect={() => select(task)}
                         controlsDisabled={busy || !!drag}
                         onPriority={(priority) => saveCardPriority(task, priority)}
+                        onTicket={(url, version) => saveTicket(task, url, version)}
                         onLink={(thread_id, expected_version) => mutate<Task>(`/v1/tasks/${task.id}/chat`, "POST", { expected_version, thread_id })}
                         onDragStart={(e) => {
                           if (busy) {
@@ -845,7 +876,8 @@ export function App() {
               {tab === "overview" ? (
                 <Overview key={selected.id} task={selected} busy={busy}
                   onSave={(input) => mutate<Task>(`/v1/tasks/${selected.id}`, "PATCH", input)}
-                  onLink={(thread_id, expected_version) => mutate<Task>(`/v1/tasks/${selected.id}/chat`, "POST", { expected_version, thread_id })} />
+                  onLink={(thread_id, expected_version) => mutate<Task>(`/v1/tasks/${selected.id}/chat`, "POST", { expected_version, thread_id })}
+                  onTicket={(url, version) => saveTicket(selected, url, version)} />
               ) : tab === "polling" ? (
                 <>
                   <h3>Task execution & source</h3>
@@ -960,7 +992,7 @@ function ExternalLink({ url, label }: { url: string; label: string }) {
     </span>
   );
 }
-function Overview({ task, busy, onSave, onLink }: { task: Task; busy: boolean; onSave: (input: unknown) => Promise<Task>; onLink: (threadID: string, version: number) => Promise<Task> }) {
+function Overview({ task, busy, onSave, onLink, onTicket }: { task: Task; busy: boolean; onSave: (input: unknown) => Promise<Task>; onLink: (threadID: string, version: number) => Promise<Task>; onTicket: (url: string, version: number) => Promise<Card> }) {
   return (
     <div className="overview">
       <TaskFieldsForm task={task} busy={busy} onSave={onSave} overview />
@@ -969,6 +1001,7 @@ function Overview({ task, busy, onSave, onLink }: { task: Task; busy: boolean; o
           Open in Codex <span>↗</span>
         </a>
       ) : <TaskChatForm task={task} busy={busy} onLink={onLink} />}
+      <TicketControl task={task} busy={busy} onSave={onTicket} />
       {task.source_url && (
         <ExternalLink url={task.source_url} label="Open source" />
       )}

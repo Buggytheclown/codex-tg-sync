@@ -1433,3 +1433,9 @@ form > button {
 .card-priority.low { color: #476b7c; }
 .card-chat-form { padding: 8px; border: 1px solid var(--line); border-radius: 8px; background: #fff; }
 .card-chat-form .field { margin-bottom: 8px; }
+
+.ticket-actions { display: flex; align-items: center; gap: 8px; padding: 4px 6px; }
+.ticket-actions a, .ticket-actions button { font-size: 11px; }
+.ticket-form { padding: 8px; border: 1px solid var(--line); border-radius: 8px; background: #fff; }
+.ticket-form .field { margin-bottom: 8px; }
+.overview .ticket-actions { padding: 8px 0; }

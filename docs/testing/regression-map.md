@@ -253,3 +253,9 @@ For live Telegram QA, verify:
 - `internal/storage/store_task_priority_command_test.go`: priority-only versioned updates preserve order, configuration, polling runtime and requests; invalid/stale/missing commands do not mutate.
 - `internal/controlapi/board_priority_chat_test.go` and `internal/daemon/board_lock_test.go`: compact priority responses, command guards and no Sync/launch-gate dependency.
 - `ui/src/App.test.tsx` and `ui/src/drag.test.tsx`: direct card priority editing, safe full-detail version advancement, priority/draft conflicts, inline chat attachment/cancellation/errors and separate Codex controls without drag/selection regressions. Native visual/drag QA still requires an enabled browser surface.
+
+## External ticket links
+
+- `internal/storage/store_task_ticket_test.go`: fresh/old database upgrade and reopen, compact projection, legacy omitted-field preservation, URL validation and metadata-only updates preserving polling and requests.
+- `internal/controlapi/board_priority_chat_test.go` and `internal/daemon/board_lock_test.go`: compact ticket commands, loopback command guards and gate independence.
+- `ui/src/App.test.tsx`: card/Overview add, edit, clear and cancel; failed/conflicting saves retain ticket and unrelated drafts; compact replies cannot certify unseen settings; source URL, Codex and manual ordering remain independent.
