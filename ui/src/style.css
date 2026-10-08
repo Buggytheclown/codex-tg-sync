@@ -524,6 +524,7 @@ small {
   font-size: 11px;
   color: #8b9583;
   line-height: 1.6;
+  white-space: pre-wrap;
   display: -webkit-box;
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
