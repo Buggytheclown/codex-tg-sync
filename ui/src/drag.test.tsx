@@ -32,10 +32,12 @@ function order(column = "TODO") {
 }
 async function startDrag() {
   await screen.findByText("Task c");
-  ["a", "b", "c"].forEach((id, i) => vi.spyOn(card(id), "getBoundingClientRect").mockReturnValue({
-    top: 100 + i * 100, height: 80, bottom: 180 + i * 100,
-    width: 200, left: 0, right: 200, x: 0, y: 100 + i * 100, toJSON() {},
-  }));
+  ["a", "b", "c"].forEach((id, i) => {
+    const rect = { top: 100 + i * 100, height: 80, bottom: 180 + i * 100,
+      width: 200, left: 0, right: 200, x: 0, y: 100 + i * 100, toJSON() {} };
+    vi.spyOn(card(id), "getBoundingClientRect").mockReturnValue(rect);
+    vi.spyOn(card(id).closest(".card-with-link")!, "getBoundingClientRect").mockReturnValue(rect);
+  });
   const dataTransfer = transfer();
   dragEvent(card("c"), "dragstart", 320, dataTransfer);
   return dataTransfer;
@@ -248,3 +250,19 @@ it.each(["held", "rejected"])(
     expect(order()).toEqual(["0", "c", "a", "b"]);
   },
 );
+
+it("uses the full linked card height for placeholders and midpoint insertion", async () => {
+  rows = rows.map(row => ({ ...row, thread_id: `chat-${row.id}` }));
+  render(<App />);
+  await startDrag();
+  fireEvent.dragEnd(card("c"));
+  ["a", "c"].forEach((id, i) => vi.mocked(card(id).closest(".card-with-link")!.getBoundingClientRect).mockReturnValue({
+    top: 100 + i * 200, height: 110, bottom: 210 + i * 200,
+    width: 200, left: 0, right: 200, x: 0, y: 100 + i * 200, toJSON() {},
+  }));
+  const dataTransfer = transfer();
+  dragEvent(card("c"), "dragstart", 320, dataTransfer);
+  dragEvent(screen.getByRole("region", { name: "TODO column" }), "dragover", 145, dataTransfer);
+  expect(order()).toEqual(["placeholder", "a", "b", "c"]);
+  expect(screen.getByLabelText("Drop task here").style.minHeight).toBe("110px");
+});

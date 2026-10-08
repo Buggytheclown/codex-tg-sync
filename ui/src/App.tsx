@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { FormEvent } from "react";
 import { api, APIError } from "./api";
 import { compareTasks, placeTask } from "./taskOrder";
-import type { Column, Polling, Task, TaskCard as Card, TaskEvent } from "./model";
+import type { Column, Polling, Priority, Task, TaskCard as Card, TaskEvent } from "./model";
 import {
   compactTask,
   codexURL,
@@ -22,7 +22,7 @@ import { Field, PollingForm, PromptFields, conditionLabels } from "./forms";
 type Panel = "details" | "new-task" | "new-source" | "add-chat";
 import { SourceEditor } from "./SourceEditor";
 import { PollingDiagnostics } from "./PollingDiagnostics";
-type Tab = "overview" | "settings" | "polling" | "activity";
+type Tab = "overview" | "polling" | "history";
 export function TaskCard({
   task,
   selected,
@@ -44,6 +44,7 @@ export function TaskCard({
 }) {
   const execution = executionLabel(task);
   return (
+    <div className="card-with-link">
     <button
       className={`task-card ${selected ? "selected" : ""}${grabbed ? " grabbed" : ""}${saving ? " saving" : ""}`}
       data-task-id={task.id}
@@ -72,7 +73,12 @@ export function TaskCard({
           ⠿
         </span>
       </span>
-      <strong>{task.title}</strong>
+      <span className="card-title">
+        <strong>{task.title}</strong>
+        <span className={`priority-icon ${task.priority || "normal"}`} role="img" aria-label={`${task.priority === "high" ? "High" : task.priority === "low" ? "Low" : "Normal"} priority`} title={`${task.priority || "normal"} priority`}>
+          {task.priority === "high" ? "↑" : task.priority === "low" ? "↓" : "—"}
+        </span>
+      </span>
       {task.description && (
         <span className="card-description">{task.description}</span>
       )}
@@ -93,6 +99,8 @@ export function TaskCard({
         ["pending_approval", "starting"].includes(r.status),
       ) && <span className="request-hint">Launch request · Telegram</span>}
     </button>
+    {task.thread_id && <a className="card-codex-link" href={codexURL(task.thread_id)} draggable={false}>Open in Codex ↗</a>}
+    </div>
   );
 }
 export function App() {
@@ -354,7 +362,7 @@ export function App() {
     const candidates = Array.from(element.querySelectorAll<HTMLElement>("[data-task-id]"))
       .filter((card) => card.dataset.taskId !== dragRef.current);
     const before = candidates.find((card) => {
-      const rect = card.getBoundingClientRect();
+      const rect = (card.closest(".card-with-link") || card).getBoundingClientRect();
       return y < rect.top + rect.height / 2;
     });
     return { column, beforeID: before?.dataset.taskId || "" };
@@ -597,7 +605,7 @@ export function App() {
                           ++refreshID.current;
                           setDrag({
                             id: task.id,
-                            height: e.currentTarget.getBoundingClientRect().height,
+                            height: (e.currentTarget.closest(".card-with-link") || e.currentTarget).getBoundingClientRect().height,
                           });
                         }}
                         onDragEnd={() => clearDrag()}
@@ -652,7 +660,15 @@ export function App() {
           <span>Launch approval happens in Telegram.</span>
         </footer>
       </main>
-      <aside className="detail-panel" aria-label="Task details and settings">
+      <aside className="detail-panel" aria-label="Task details and settings" onKeyDown={(e) => {
+        if (e.key !== "Enter" || !(e.metaKey || e.ctrlKey) || e.repeat || e.nativeEvent.isComposing) return;
+        const form = (e.target as HTMLElement).closest("form");
+        if (!form || busy) return;
+        const submitter = form.querySelector<HTMLButtonElement>('button:not([type="button"]):not([type="reset"])');
+        if (!submitter || submitter.disabled) return;
+        e.preventDefault();
+        form.requestSubmit(submitter);
+      }}>
         <div className="panel-header">
           <span className="eyebrow">
             {panel === "details"
@@ -748,7 +764,7 @@ export function App() {
               </Field>
             </div>
             <div className="tabs" role="tablist">
-              {(["overview", "settings", "polling", "activity"] as Tab[]).map(
+              {(["overview", "polling", "history"] as Tab[]).map(
                 (t) => (
                   <button
                     key={t}
@@ -772,21 +788,18 @@ export function App() {
             )}
             <div className="panel-body">
               {tab === "overview" ? (
-                <Overview task={selected} />
-              ) : tab === "settings" ? (
-                <TaskSettings
-                  key={selected.id}
-                  task={selected}
-                  busy={busy}
-                  onSave={(input) =>
-                    mutate<Task>(`/v1/tasks/${selected.id}`, "PATCH", input)
-                  }
-                />
+                <Overview key={selected.id} task={selected} busy={busy}
+                  onSave={(input) => mutate<Task>(`/v1/tasks/${selected.id}`, "PATCH", input)}
+                  onLink={(thread_id, expected_version) => mutate<Task>(`/v1/tasks/${selected.id}/chat`, "POST", { expected_version, thread_id })} />
               ) : tab === "polling" ? (
                 <>
+                  <h3>Task execution & source</h3>
+                  <TaskFieldsForm key={`execution-${selected.id}`} task={selected} busy={busy}
+                    onSave={(input) => mutate<Task>(`/v1/tasks/${selected.id}`, "PATCH", input)} />
+                  <h3>Waiting conditions</h3>
                   <PollingDiagnostics task={selected} />
                   <PollingForm
-                    key={selected.id}
+                    key={`polling-${selected.id}`}
                     initial={selected.polling}
                     expectedVersion={selected.version}
                     busy={busy}
@@ -797,7 +810,7 @@ export function App() {
                         "PUT",
                         { expected_version: expectedVersion, polling: p },
                       );
-                      let savedVersion = task.version;
+                      let savedTask = task;
                       if (activate) {
                         const moved = await mutate<Task>(
                           `/v1/tasks/${task.id}/move`,
@@ -808,7 +821,7 @@ export function App() {
                             position: task.position,
                           },
                         );
-                        savedVersion = moved.version;
+                        savedTask = moved;
                       }
                       setInfo(
                         activate || task.column === "polling"
@@ -816,12 +829,12 @@ export function App() {
                           : "Settings saved. Move to Polling to activate.",
                       );
                       setActivationRequested(false);
-                      return savedVersion;
+                      return { version: savedTask.version, polling: savedTask.polling };
                     }}
                   />
                 </>
               ) : (
-                <Activity task={selected} />
+                <History task={selected} />
               )}
             </div>
           </>
@@ -892,15 +905,15 @@ function ExternalLink({ url, label }: { url: string; label: string }) {
     </span>
   );
 }
-function Overview({ task }: { task: Task }) {
+function Overview({ task, busy, onSave, onLink }: { task: Task; busy: boolean; onSave: (input: unknown) => Promise<Task>; onLink: (threadID: string, version: number) => Promise<Task> }) {
   return (
     <div className="overview">
-      {task.description && <p className="description">{task.description}</p>}
-      {task.thread_id && (
+      <TaskFieldsForm task={task} busy={busy} onSave={onSave} overview />
+      {task.thread_id ? (
         <a className="detail-link codex-link" href={codexURL(task.thread_id)}>
           Open in Codex <span>↗</span>
         </a>
-      )}
+      ) : <TaskChatForm task={task} busy={busy} onLink={onLink} />}
       {task.source_url && (
         <ExternalLink url={task.source_url} label="Open source" />
       )}
@@ -943,6 +956,29 @@ function Overview({ task }: { task: Task }) {
     </div>
   );
 }
+function TaskChatForm({ task, busy, onLink }: { task: Task; busy: boolean; onLink: (threadID: string, version: number) => Promise<Task> }) {
+  const [chat, setChat] = useState("");
+  const [error, setError] = useState("");
+  const submit = async (e: FormEvent) => {
+    e.preventDefault();
+    if (busy) return;
+    const threadID = parseThreadID(chat);
+    if (!threadID) { setError("Enter a Codex chat ID or codex://threads/ link."); return; }
+    try { await onLink(threadID, task.version); } catch (err) { setError((err as Error).message); }
+  };
+  return <form onSubmit={(e) => void submit(e)}>
+    <Field label="Codex chat" hint="Paste an existing chat ID or codex://threads/ link.">
+      <input required value={chat} onChange={(e) => setChat(e.target.value)} />
+    </Field>
+    {error && <p role="alert" className="error-note">{error}</p>}
+    <button disabled={busy}>Link chat</button>
+  </form>;
+}
+function PriorityField({ value, onChange }: { value: Priority; onChange: (priority: Priority) => void }) {
+  return <Field label="Priority"><select value={value} onChange={(e) => onChange(e.target.value as Priority)}>
+    <option value="low">↓ Low</option><option value="normal">— Normal</option><option value="high">↑ High</option>
+  </select></Field>;
+}
 function RequestHistory({ task }: { task: Task }) {
   return (
     <section className="summary-block">
@@ -971,77 +1007,80 @@ function RequestHistory({ task }: { task: Task }) {
     </section>
   );
 }
-function TaskSettings({
-  task,
-  busy,
-  onSave,
-}: {
-  task: Task;
-  busy: boolean;
-  onSave: (input: unknown) => Promise<Task>;
+function TaskFieldsForm({ task, busy, onSave, overview = false }: {
+  task: Task; busy: boolean; onSave: (input: unknown) => Promise<Task>; overview?: boolean;
 }) {
-  const [title, setTitle] = useState(task.title),
-    [description, setDescription] = useState(task.description),
-    [sourceURL, setSourceURL] = useState(task.source_url),
-    [config, setConfig] = useState(task.config),
-    [version, setVersion] = useState(task.version),
-    [message, setMessage] = useState("");
+  const [baseline, setBaseline] = useState(task);
+  const [title, setTitle] = useState(task.title);
+  const [description, setDescription] = useState(task.description);
+  const [priority, setPriority] = useState<Priority>(task.priority || "normal");
+  const [sourceURL, setSourceURL] = useState(task.source_url);
+  const [config, setConfig] = useState(task.config);
+  const [message, setMessage] = useState("");
+  useEffect(() => {
+    const unchanged = overview
+      ? task.title === baseline.title && task.description === baseline.description && (task.priority || "normal") === (baseline.priority || "normal")
+      : task.source_url === baseline.source_url && JSON.stringify(task.config) === JSON.stringify(baseline.config);
+    if (unchanged && task.version > baseline.version) setBaseline(task);
+  }, [task, baseline, overview]);
+  const stale = baseline.version !== task.version;
+  const reload = () => {
+    setBaseline(task); setTitle(task.title); setDescription(task.description); setPriority(task.priority || "normal");
+    setSourceURL(task.source_url); setConfig(task.config); setMessage("");
+  };
   const save = async (e: FormEvent) => {
     e.preventDefault();
+    if (busy) return;
+    if (stale) { setMessage("Reload latest settings before saving. Your draft has been preserved."); return; }
     try {
-      const updated = await onSave({
-        expected_version: version,
-        title,
-        description,
-        source_url: sourceURL,
-        config,
-      });
-      setVersion(updated.version);
-      setMessage("Task settings saved.");
-    } catch (e) {
-      setMessage((e as Error).message);
-    }
+      const updated = await onSave({ expected_version: baseline.version,
+        title: overview ? title : baseline.title,
+        description: overview ? description : baseline.description,
+        priority: overview ? priority : baseline.priority || "normal",
+        source_url: overview ? baseline.source_url : sourceURL,
+        config: overview ? baseline.config : config });
+      const submitted = { ...baseline, title: overview ? title : baseline.title,
+        description: overview ? description : baseline.description,
+        priority: overview ? priority : baseline.priority || "normal",
+        source_url: overview ? baseline.source_url : sourceURL,
+        config: overview ? baseline.config : config };
+      const sameOwned = overview
+        ? updated.title === submitted.title && updated.description === submitted.description && (updated.priority || "normal") === submitted.priority
+        : updated.source_url === submitted.source_url && JSON.stringify(updated.config) === JSON.stringify(submitted.config);
+      if (updated.version > baseline.version + 1 && !sameOwned) {
+        // The backend reads the full task after committing: another editor may
+        // already have changed it. Keep our draft fenced at our commit version.
+        setBaseline({ ...submitted, version: baseline.version + 1 });
+        setMessage("This task changed after saving. Reload latest settings before saving again.");
+      } else {
+        setBaseline(updated);
+        setTitle(current => current === title ? updated.title : current);
+        setDescription(current => current === description ? updated.description : current);
+        setPriority(current => current === priority ? updated.priority || "normal" : current);
+        setSourceURL(current => current === sourceURL ? updated.source_url : current);
+        setConfig(current => JSON.stringify(current) === JSON.stringify(config) ? updated.config : current);
+        setMessage(overview ? "Overview saved." : "Task execution saved.");
+      }
+    } catch (e) { setMessage((e as Error).message); }
   };
-  return (
-    <form onSubmit={(e) => void save(e)}>
-      <p className="note">
-        Changes apply to this task. Pending launch requests keep their frozen
-        prompt and settings.
-      </p>
-      <Field label="Title">
-        <input
-          required
-          value={title}
-          onChange={(e) => setTitle(e.target.value)}
-        />
-      </Field>
-      <Field label="Description">
-        <textarea
-          value={description}
-          onChange={(e) => setDescription(e.target.value)}
-          rows={3}
-        />
-      </Field>
-      <Field label="Source URL">
-        <input
-          type="url"
-          value={sourceURL}
-          onChange={(e) => setSourceURL(e.target.value)}
-        />
-      </Field>
+  return <form onSubmit={(e) => void save(e)}>
+    <p className="note">⌘/Ctrl + Enter saves this section.</p>
+    {overview ? <>
+      <Field label="Title"><input required value={title} onChange={(e) => setTitle(e.target.value)} /></Field>
+      <Field label="Description"><textarea rows={3} value={description} onChange={(e) => setDescription(e.target.value)} /></Field>
+      <PriorityField value={priority} onChange={setPriority} />
+    </> : <>
+      <p className="note">Changes apply to this task. Pending launch requests keep their frozen prompt and settings.</p>
+      <Field label="Source URL" hint="Link to the task’s source. PR waiting uses the PR ID below."><input type="url" value={sourceURL} onChange={(e) => setSourceURL(e.target.value)} /></Field>
       <PromptFields value={config} onChange={setConfig} />
-      {message && (
-        <p role="status" className="info-note">
-          {message}
-        </p>
-      )}
-      <button className="primary" disabled={busy}>
-        Save this task
-      </button>
-    </form>
-  );
+    </>}
+    {stale && <p className="note">This task changed. Reload latest settings before saving. Your draft has been preserved.</p>}
+    {stale && <button type="button" disabled={busy} onClick={reload}>Reload latest {overview ? "overview" : "task execution"}</button>}
+    {message && <p role="status" className="info-note">{message}</p>}
+    <button className="primary" disabled={busy}>{overview ? "Save overview" : "Save task execution"}</button>
+  </form>;
 }
-function Activity({ task }: { task: Task }) {
+function History({ task }: { task: Task }) {
   const [events, setEvents] = useState<TaskEvent[]>([]),
     [error, setError] = useState("");
   useEffect(() => {
@@ -1088,12 +1127,13 @@ function NewTask({
 }) {
   const [title, setTitle] = useState(""),
     [description, setDescription] = useState(""),
+    [priority, setPriority] = useState<Priority>("normal"),
     [config, setConfig] = useState(emptyConfig()),
     [error, setError] = useState("");
   const submit = async (e: FormEvent) => {
     e.preventDefault();
     try {
-      await onSave({ title, description, column: "todo", config });
+      await onSave({ title, description, priority, column: "todo", config });
     } catch (err) {
       setError((err as Error).message);
     }
@@ -1118,6 +1158,7 @@ function NewTask({
             onChange={(e) => setDescription(e.target.value)}
           />
         </Field>
+        <PriorityField value={priority} onChange={setPriority} />
         <PromptFields value={config} onChange={setConfig} />
         {error && (
           <p role="alert" className="error-note">

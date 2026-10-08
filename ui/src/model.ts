@@ -59,7 +59,9 @@ export type RequestInfo = {
   created_at: string;
   target_thread_id?: string;
 };
+export type Priority = "low" | "normal" | "high";
 export type Task = {
+  priority?: Priority;
   id: string;
   title: string;
   description: string;
@@ -86,11 +88,11 @@ export type PollingSummary = Pick<Polling, "type" | "mode" | "next_check_at" | "
 export type TaskCard = Omit<Task, "config" | "polling" | "requests"> & { polling?: PollingSummary; requests: Pick<RequestInfo, "id" | "status">[] };
 export function compactTask(task: Task): TaskCard {
   const { id, title, description, column, position, thread_id, source_url,
-    source_key, source_task_id, source_author, version, created_at, updated_at,
+    source_key, source_task_id, source_author, priority, version, created_at, updated_at,
     execution, polling, requests } = task;
   return {
     id, title, description, column, position, thread_id, source_url, source_key,
-    source_task_id, source_author, version, created_at, updated_at,
+    source_task_id, source_author, priority: priority || "normal", version, created_at, updated_at,
     ...(execution ? { execution: {
       last_seen_turn_status: execution.last_seen_turn_status,
       last_seen_thread_status: execution.last_seen_thread_status,

@@ -63,6 +63,7 @@ export function SourceEditor({
   const config = definition.config;
   const submit = async (e: FormEvent) => {
     e.preventDefault();
+    if (busy) return;
     const next: Polling = {
       ...polling,
       mode: "repeat",

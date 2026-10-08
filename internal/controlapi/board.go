@@ -34,6 +34,7 @@ type BoardBackend interface {
 	MoveTask(context.Context, string, model.MoveTaskInput) (*model.Task, error)
 	SetTaskPolling(context.Context, string, model.SetTaskPollingInput) (*model.Task, error)
 	AddChat(context.Context, string, string) (*model.Task, error)
+	LinkTaskChat(context.Context, string, model.LinkTaskChatInput) (*model.Task, error)
 	ListTaskEvents(context.Context, string) ([]model.TaskEvent, error)
 }
 
@@ -129,6 +130,17 @@ func registerBoard(mux *http.ServeMux, b BoardBackend, opts Options) {
 				return
 			}
 			switch parts[1] {
+			case "chat":
+				if r.Method != http.MethodPost {
+					writeError(w, 405, "method not allowed")
+					return
+				}
+				var input model.LinkTaskChatInput
+				if !decodeCommand(w, r, &input) {
+					return
+				}
+				value, err := b.LinkTaskChat(r.Context(), id, input)
+				boardResult(w, 200, value, err)
 			case "reorder":
 				if r.Method != http.MethodPost {
 					writeError(w, 405, "method not allowed")

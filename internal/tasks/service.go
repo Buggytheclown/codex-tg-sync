@@ -102,3 +102,7 @@ func (s *Service) ListTaskEvents(ctx context.Context, id string) ([]model.TaskEv
 func (s *Service) SetExecutionDefaults(settings model.TaskExecutionSettings) {
 	s.store.SetTaskExecutionDefaults(settings)
 }
+
+func (s *Service) LinkTaskChat(ctx context.Context, id string, in model.LinkTaskChatInput) (*model.Task, error) {
+	return s.store.LinkTaskChat(ctx, id, in)
+}

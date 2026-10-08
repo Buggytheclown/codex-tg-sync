@@ -1416,3 +1416,12 @@ form > button {
   font-weight: 600;
   pointer-events: none;
 }
+
+.card-with-link { position: relative; }
+.card-with-link .task-card { width: 100%; }
+.card-title { display: flex; align-items: start; gap: 8px; }
+.card-title strong { flex: 1; }
+.card-codex-link { display: block; padding: 6px 12px; font-size: 11px; color: var(--muted); }
+.priority-icon { margin-left: auto; font-size: 14px; }
+.priority-icon.high { color: #e38860; }
+.priority-icon.low { color: #7aa6ba; }

@@ -278,3 +278,7 @@ func TestBoardCompactInvalidationIncludesRuntimeAndSettings(t *testing.T) {
 		t.Fatalf("SSE loaded %d full task lists", b.fullLists)
 	}
 }
+
+func (b *fakeBoard) LinkTaskChat(context.Context, string, model.LinkTaskChatInput) (*model.Task, error) {
+	return b.change()
+}

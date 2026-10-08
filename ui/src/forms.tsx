@@ -1,4 +1,4 @@
-import { cloneElement, useId, useState } from "react";
+import { cloneElement, useEffect, useId, useState } from "react";
 import type { FormEvent, ReactElement } from "react";
 import type { Polling, TaskConfig, ExecutionSettings } from "./model";
 import { defaultPolling, pollingProblem } from "./model";
@@ -263,15 +263,28 @@ export function PollingForm({
 }: {
   initial?: Polling;
   expectedVersion: number;
-  onSave: (p: Polling, activate: boolean, version: number) => Promise<number>;
+  onSave: (p: Polling, activate: boolean, version: number) => Promise<{ version: number; polling?: Polling }>;
   activate?: boolean;
   busy?: boolean;
 }) {
   const [value, setValue] = useState<Polling>(initial || defaultPolling());
   const [version, setVersion] = useState(expectedVersion);
+  const [baseline, setBaseline] = useState(initial);
+  // Runtime health/cursor changes are not editable polling fields.
+  const editable = (p?: Polling) => JSON.stringify(p ? { type: p.type, mode: p.mode, config: p.config, action: p.action } : null);
+  useEffect(() => {
+    if (expectedVersion > version && editable(initial) === editable(baseline)) {
+      setBaseline(initial); setVersion(expectedVersion);
+    }
+  }, [initial, baseline, expectedVersion, version]);
   const [error, setError] = useState("");
   const submit = async (e: FormEvent, enable: boolean) => {
     e.preventDefault();
+    if (busy) return;
+    if (version !== expectedVersion) {
+      setError("Reload latest settings before saving. Your polling draft has been preserved.");
+      return;
+    }
     const problem = pollingProblem(value);
     if (problem) {
       setError(problem);
@@ -279,14 +292,28 @@ export function PollingForm({
     }
     setError("");
     try {
-      const savedVersion = await onSave(value, enable, version);
-      setVersion(savedVersion);
+      const saved = await onSave(value, enable, version);
+      // A full reply can include a later concurrent edit after our commit.
+      if (saved.version > version + (enable ? 2 : 1) && editable(saved.polling) !== editable(value)) {
+        setVersion(version + 1);
+        setBaseline(value);
+        setError("This task changed after saving. Reload latest settings before saving again.");
+      } else {
+        setVersion(saved.version);
+        setBaseline(saved.polling);
+        setValue(current => editable(current) === editable(value) ? saved.polling || defaultPolling() : current);
+      }
     } catch (err) {
       setError((err as Error).message);
     }
   };
   return (
     <form onSubmit={(e) => void submit(e, activate)}>
+      <p className="note">⌘/Ctrl + Enter saves this section.</p>
+      {version !== expectedVersion && <>
+        <p className="note">This task changed. Reload latest settings before saving. Your polling draft has been preserved.</p>
+        <button type="button" disabled={busy} onClick={() => { setValue(initial || defaultPolling()); setBaseline(initial); setVersion(expectedVersion); setError(""); }}>Reload latest polling</button>
+      </>}
       <PollingFields value={value} onChange={setValue} />
       {error && (
         <p role="alert" className="error-note">

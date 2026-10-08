@@ -136,3 +136,46 @@ func (s *Service) TaskBoardMigrationDone(ctx context.Context, key string) (bool,
 func (s *Service) CompleteTaskBoardMigration(ctx context.Context, key string) error {
 	return s.store.SetState(ctx, "task_board.migration."+key, "done")
 }
+
+// LinkTaskChat observes authority passively before entering the launch gate.
+func (s *Service) LinkTaskChat(ctx context.Context, id string, in model.LinkTaskChatInput) (*model.Task, error) {
+	in.ThreadID = strings.TrimSpace(in.ThreadID)
+	if in.ThreadID == "" || in.ExpectedVersion <= 0 {
+		return nil, tasks.ErrInvalid
+	}
+	currentTask, err := s.taskBoard.GetTask(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	if currentTask == nil {
+		return nil, tasks.ErrNotFound
+	}
+	if currentTask.Version != in.ExpectedVersion {
+		return nil, tasks.ErrConflict
+	}
+	if currentTask.Polling != nil && currentTask.Polling.Action.Type == model.PollingCreateTask {
+		return nil, tasks.ErrInvalid
+	}
+	if currentTask.ThreadID != "" {
+		s.taskLaunchMu.Lock()
+		defer s.taskLaunchMu.Unlock()
+		return s.store.LinkTaskChat(ctx, id, in)
+	}
+	poll, err := s.controlReadSession(ctx)
+	if err != nil {
+		return nil, err
+	}
+	current, err := readAuthoritativeSyncSnapshot(ctx, poll, in.ThreadID)
+	if err != nil {
+		return nil, err
+	}
+	s.taskLaunchMu.Lock()
+	defer s.taskLaunchMu.Unlock()
+	task, err := s.store.LinkTaskChat(ctx, id, in)
+	if err == nil {
+		s.persistSyncSnapshot(ctx, model.SyncTopic{ThreadID: in.ThreadID}, current)
+		s.wakeSyncReconcile()
+		return s.taskBoard.GetTask(ctx, id)
+	}
+	return task, err
+}

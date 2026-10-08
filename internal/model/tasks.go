@@ -50,6 +50,7 @@ type TaskPolling struct {
 	LastError     string            `json:"last_error"`
 }
 type Task struct {
+	Priority     string               `json:"priority"`
 	ID           string               `json:"id"`
 	Title        string               `json:"title"`
 	Description  string               `json:"description"`
@@ -96,6 +97,7 @@ type TaskEvent struct {
 	CreatedAt    TimeString      `json:"created_at"`
 }
 type CreateTaskInput struct {
+	Priority    string       `json:"priority"`
 	Title       string       `json:"title"`
 	Description string       `json:"description"`
 	Column      string       `json:"column"`
@@ -107,6 +109,7 @@ type CreateTaskInput struct {
 	Polling     *TaskPolling `json:"polling,omitempty"`
 }
 type UpdateTaskInput struct {
+	Priority        *string    `json:"priority,omitempty"`
 	ExpectedVersion int64      `json:"expected_version"`
 	Title           string     `json:"title"`
 	Description     string     `json:"description"`
@@ -183,4 +186,9 @@ func (d TaskDefinition) MarshalJSON() ([]byte, error) {
 		Config      TaskConfig `json:"config"`
 		Polling     *settings  `json:"polling,omitempty"`
 	}{d.Title, d.Description, d.Config, waiting})
+}
+
+type LinkTaskChatInput struct {
+	ExpectedVersion int64  `json:"expected_version"`
+	ThreadID        string `json:"thread_id"`
 }

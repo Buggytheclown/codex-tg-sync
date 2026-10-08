@@ -8,7 +8,8 @@ import {
   waitFor,
 } from "@testing-library/react";
 import { App } from "./App";
-import { compactTask, defaultPolling, emptyConfig } from "./model";
+import { PollingForm } from "./forms";
+import { compactTask, defaultPolling, emptyConfig, formatTime } from "./model";
 import type { Task, Polling } from "./model";
 const makeTask = (extra: Partial<Task> = {}): Task => ({
   id: "task-1",
@@ -72,11 +73,21 @@ beforeEach(() => {
         : undefined;
       let payload: unknown =
         path === "/v1/task-cards" ? rows.map(compactTask) : path.endsWith("/events") ? [] : rows.find((t) => path === `/v1/tasks/${t.id}`) || {};
+      if (method === "PATCH") {
+        const task = rows.find((t) => path === `/v1/tasks/${t.id}`)!;
+        payload = { ...task, ...body, version: task.version + 1 };
+        rows = rows.map((t) => t.id === task.id ? payload as Task : t);
+      }
       if (method === "PUT" && path.endsWith("/polling")) {
         const id = path.split("/")[3];
         const task = rows.find((t) => t.id === id)!;
         payload = { ...task, polling: body.polling, version: task.version + 1 };
         rows = rows.map((t) => (t.id === id ? (payload as Task) : t));
+      }
+      if (method === "POST" && path.endsWith("/chat")) {
+        const task = rows.find(t => path === `/v1/tasks/${t.id}/chat`)!;
+        payload = { ...task, thread_id: body.thread_id, version: task.version + 1 };
+        rows = rows.map(t => t.id === task.id ? payload as Task : t);
       }
       if (method === "POST" && path === "/v1/tasks") {
         payload = makeTask({ id: "new-source", ...body });
@@ -562,6 +573,182 @@ it("does not promote stale full settings to the compact reorder version", async 
   await waitFor(() => expect(rows[0].version).toBe(3));
   await waitFor(() => expect(detailReads).toBeGreaterThan(2));
   resolve({ ok: true, status: 200, json: async () => makeTask({ version: 2, config: { ...emptyConfig(), initial_prompt: "Delayed obsolete settings" } }) } as Response);
-  fireEvent.click(screen.getByRole("tab", { name: "Settings" }));
+  fireEvent.click(screen.getByRole("tab", { name: "Polling" }));
   await waitFor(() => expect((screen.getByLabelText("Initial prompt") as HTMLTextAreaElement).value).toBe("External settings"));
+});
+
+it("edits overview text preserving execution/source and exposes History", async () => {
+  const config = { ...emptyConfig(), initial_prompt: "Keep prompt" };
+  rows = [makeTask({ source_url: "https://example.com/pr", config, polling: { ...defaultPolling(), config: { ...defaultPolling().config, pr_id: "42", login: "reviewer" } } })];
+  window.history.replaceState(null, "", "/?task=task-1");
+  render(<App />);
+  fireEvent.change(await screen.findByLabelText("Title"), { target: { value: "New title" } });
+  fireEvent.change(screen.getByLabelText("Description"), { target: { value: "First line\nSecond line" } });
+  fireEvent.click(screen.getByRole("button", { name: "Save overview" }));
+  await waitFor(() => expect(rows[0].title).toBe("New title"));
+  expect(rows[0].description).toBe("First line\nSecond line");
+  expect(rows[0].config).toEqual(config);
+  expect(rows[0].source_url).toBe("https://example.com/pr");
+  expect(screen.queryByRole("tab", { name: "Settings" })).toBeNull();
+  expect(screen.queryByRole("tab", { name: "Activity" })).toBeNull();
+  fireEvent.click(screen.getByRole("tab", { name: "History" }));
+  await waitFor(() => expect(calls.some(c => c.path.endsWith("/events"))).toBe(true));
+  fireEvent.click(screen.getByRole("tab", { name: "Polling" }));
+  expect(screen.getByLabelText("Source URL")).toBeTruthy();
+  expect(screen.getByLabelText("Initial prompt")).toBeTruthy();
+  expect(screen.queryByLabelText("Title")).toBeNull();
+  fireEvent.change(screen.getByLabelText("PR ID"), { target: { value: "123" } });
+  fireEvent.change(screen.getByLabelText("Initial prompt"), { target: { value: "Changed prompt" } });
+  await waitFor(() => expect((screen.getByRole("button", { name: "Save task execution" }) as HTMLButtonElement).disabled).toBe(false));
+  await waitFor(() => expect(screen.queryByRole("button", { name: "Reload latest task execution" })).toBeNull());
+  fireEvent.click(screen.getByRole("button", { name: "Save task execution" }));
+  await waitFor(() => expect(rows[0].config.initial_prompt).toBe("Changed prompt"));
+  expect(rows[0].title).toBe("New title");
+  await waitFor(() => expect((screen.getByRole("button", { name: "Save polling" }) as HTMLButtonElement).disabled).toBe(false));
+  await waitFor(() => expect(screen.queryByRole("button", { name: "Reload latest polling" })).toBeNull());
+  fireEvent.click(screen.getByRole("button", { name: "Save polling" }));
+  await waitFor(() => expect(rows[0].polling?.config.pr_id).toBe("123"));
+  fireEvent.change(screen.getByLabelText("Initial prompt"), { target: { value: "Another draft" } });
+  fireEvent.change(screen.getByLabelText("PR ID"), { target: { value: "456" } });
+  await waitFor(() => expect((screen.getByRole("button", { name: "Save polling" }) as HTMLButtonElement).disabled).toBe(false));
+  await waitFor(() => expect(screen.queryByRole("button", { name: "Reload latest polling" })).toBeNull());
+  fireEvent.click(screen.getByRole("button", { name: "Save polling" }));
+  await waitFor(() => expect(rows[0].polling?.config.pr_id).toBe("456"));
+  expect((screen.getByLabelText("Initial prompt") as HTMLTextAreaElement).value).toBe("Another draft");
+  await waitFor(() => expect((screen.getByRole("button", { name: "Save task execution" }) as HTMLButtonElement).disabled).toBe(false));
+  await waitFor(() => expect(screen.queryByRole("button", { name: "Reload latest task execution" })).toBeNull());
+  fireEvent.click(screen.getByRole("button", { name: "Save task execution" }));
+  await waitFor(() => expect(rows[0].config.initial_prompt).toBe("Another draft"));
+});
+it("preserves overview drafts and blocks replacement of externally edited fields", async () => {
+  window.history.replaceState(null, "", "/?task=task-1");
+  render(<App />);
+  fireEvent.change(await screen.findByLabelText("Title"), { target: { value: "Local draft" } });
+  rows = [makeTask({ version: 2, updated_at: "2026-01-02T12:00:00Z", config: { ...emptyConfig(), initial_prompt: "External prompt" } })];
+  fireEvent.focus(window);
+  await waitFor(() => expect(calls.filter(c => c.path === "/v1/tasks/task-1").length).toBeGreaterThan(1));
+  await waitFor(() => expect(screen.queryByText("Loading details…")).toBeNull());
+  await screen.findByText(formatTime("2026-01-02T12:00:00Z"));
+  expect((screen.getByLabelText("Title") as HTMLInputElement).value).toBe("Local draft");
+  fireEvent.click(screen.getByRole("button", { name: "Save overview" }));
+  await waitFor(() => expect(rows[0].title).toBe("Local draft"));
+  expect(rows[0].config.initial_prompt).toBe("External prompt");
+  await waitFor(() => expect((screen.getByRole("button", { name: "Save overview" }) as HTMLButtonElement).disabled).toBe(false));
+  fireEvent.change(screen.getByLabelText("Description"), { target: { value: "My description" } });
+  rows = [{ ...rows[0], version: 4, description: "External description" }];
+  fireEvent.focus(window);
+  await screen.findByRole("button", { name: "Reload latest overview" });
+  expect((screen.getByLabelText("Description") as HTMLTextAreaElement).value).toBe("My description");
+  const writes = calls.filter(c => c.method === "PATCH").length;
+  fireEvent.click(screen.getByRole("button", { name: "Save overview" }));
+  expect(calls.filter(c => c.method === "PATCH").length).toBe(writes);
+  fireEvent.click(screen.getByRole("button", { name: "Reload latest overview" }));
+  expect((screen.getByLabelText("Description") as HTMLTextAreaElement).value).toBe("External description");
+});
+it("does not bless a concurrent overview save reply and preserves typing during a save", async () => {
+  window.history.replaceState(null, "", "/?task=task-1");
+  const original = vi.mocked(fetch).getMockImplementation()!;
+  let resolve!: (value: Response) => void;
+  const held = new Promise<Response>(done => { resolve = done; });
+  vi.mocked(fetch).mockImplementation((path, options) => options?.method === "PATCH" ? held : original(path, options));
+  render(<App />);
+  fireEvent.change(await screen.findByLabelText("Title"), { target: { value: "Submitted title" } });
+  fireEvent.click(screen.getByRole("button", { name: "Save overview" }));
+  fireEvent.change(screen.getByLabelText("Title"), { target: { value: "Typing while saving" } });
+  rows = [makeTask({ title: "Concurrent title", version: 3 })];
+  resolve({ ok: true, status: 200, json: async () => rows[0] } as Response);
+  await screen.findByRole("button", { name: "Reload latest overview" });
+  expect((screen.getByLabelText("Title") as HTMLInputElement).value).toBe("Typing while saving");
+  await waitFor(() => expect((screen.getByRole("button", { name: "Save overview" }) as HTMLButtonElement).disabled).toBe(false));
+  fireEvent.click(screen.getByRole("button", { name: "Save overview" }));
+  expect(rows[0].title).toBe("Concurrent title");
+});
+
+it("does not bless a concurrent polling save reply", async () => {
+  const initial = { ...defaultPolling(), config: { ...defaultPolling().config, pr_id: "42", login: "reviewer" } };
+  const concurrent = { ...initial, config: { ...initial.config, pr_id: "44" } };
+  const save = vi.fn(async () => ({ version: 3, polling: concurrent }));
+  const { rerender } = render(<PollingForm initial={initial} expectedVersion={1} onSave={save} />);
+  fireEvent.change(screen.getByLabelText("PR ID"), { target: { value: "43" } });
+  fireEvent.click(screen.getByRole("button", { name: "Save polling" }));
+  await waitFor(() => expect(save).toHaveBeenCalledTimes(1));
+  rerender(<PollingForm initial={concurrent} expectedVersion={3} onSave={save} />);
+  await screen.findByRole("button", { name: "Reload latest polling" });
+  fireEvent.click(screen.getByRole("button", { name: "Save polling" }));
+  expect(save).toHaveBeenCalledTimes(1);
+  expect((screen.getByLabelText("PR ID") as HTMLInputElement).value).toBe("43");
+});
+it("saves priority with Cmd+Enter and links an existing chat from Overview", async () => {
+  rows = [makeTask({ thread_id: "", priority: "normal" })];
+  window.history.replaceState(null, "", "/?task=task-1");
+  render(<App />);
+  const title = await screen.findByLabelText("Title");
+  fireEvent.change(title, { target: { value: "Keyboard saved" } });
+  fireEvent.change(screen.getByLabelText("Priority"), { target: { value: "high" } });
+  fireEvent.keyDown(title, { key: "Enter", metaKey: true, isComposing: true });
+  fireEvent.keyDown(title, { key: "Enter", metaKey: true, repeat: true });
+  expect(calls.filter(c => c.method === "PATCH")).toHaveLength(0);
+  fireEvent.keyDown(title, { key: "Enter", metaKey: true });
+  await waitFor(() => expect(rows[0].priority).toBe("high"));
+  expect(rows[0].title).toBe("Keyboard saved");
+  expect(screen.getByLabelText("High priority")).toBeTruthy();
+  await waitFor(() => expect((screen.getByRole("button", { name: "Link chat" }) as HTMLButtonElement).disabled).toBe(false));
+  const chat = screen.getByLabelText("Codex chat");
+  fireEvent.change(chat, { target: { value: "codex://threads/existing-chat" } });
+  fireEvent.keyDown(chat, { key: "Enter", metaKey: true });
+  await waitFor(() => expect(rows[0].thread_id).toBe("existing-chat"));
+  expect(calls.find(c => c.path.endsWith("/chat") && c.method === "POST")?.body).toEqual({ expected_version: 2, thread_id: "existing-chat" });
+  const links = screen.getAllByRole("link", { name: /Open in Codex/ });
+  expect(links).toHaveLength(2);
+  expect(links.every(link => link.getAttribute("href") === "codex://threads/existing-chat")).toBe(true);
+  const boardLink = links.find(link => link.closest(".card-slot"))!;
+  expect(boardLink.closest("button")).toBeNull();
+  const count = calls.filter(c => c.method !== "GET").length;
+  boardLink.addEventListener("click", e => e.preventDefault());
+  fireEvent.click(boardLink);
+  expect(calls.filter(c => c.method !== "GET")).toHaveLength(count);
+});
+it("Cmd+Enter saves the focused polling section and respects native validation", async () => {
+  window.history.replaceState(null, "", "/?task=task-1");
+  render(<App />);
+  const title = await screen.findByLabelText("Title");
+  fireEvent.change(title, { target: { value: "" } });
+  fireEvent.keyDown(title, { key: "Enter", metaKey: true });
+  expect(calls.filter(c => c.method === "PATCH")).toHaveLength(0);
+  fireEvent.click(screen.getByRole("tab", { name: "Polling" }));
+  const prompt = screen.getByLabelText("Initial prompt");
+  fireEvent.change(prompt, { target: { value: "Keyboard prompt" } });
+  fireEvent.keyDown(prompt, { key: "Enter", metaKey: true });
+  await waitFor(() => expect(rows[0].config.initial_prompt).toBe("Keyboard prompt"));
+  expect(calls.filter(c => c.method === "PUT")).toHaveLength(0);
+  await waitFor(() => expect((screen.getByRole("button", { name: "Save polling" }) as HTMLButtonElement).disabled).toBe(false));
+  fireEvent.change(screen.getByLabelText("PR ID"), { target: { value: "43" } });
+  fireEvent.change(screen.getByLabelText("Your Arcanum login"), { target: { value: "reviewer" } });
+  fireEvent.keyDown(screen.getByLabelText("PR ID"), { key: "Enter", metaKey: true });
+  await waitFor(() => expect(rows[0].polling?.config.pr_id).toBe("43"));
+});
+it("preserves new overview typing during an ordinary save and saves sources with Cmd+Enter", async () => {
+  window.history.replaceState(null, "", "/?task=task-1");
+  const original = vi.mocked(fetch).getMockImplementation()!;
+  let resolve!: (value: Response) => void;
+  const held = new Promise<Response>(done => { resolve = done; });
+  vi.mocked(fetch).mockImplementation((path, options) => options?.method === "PATCH" ? held : original(path, options));
+  const view = render(<App />);
+  fireEvent.change(await screen.findByLabelText("Title"), { target: { value: "Submitted title" } });
+  fireEvent.click(screen.getByRole("button", { name: "Save overview" }));
+  fireEvent.change(screen.getByLabelText("Title"), { target: { value: "New draft" } });
+  rows = [makeTask({ title: "Submitted title", version: 2 })];
+  resolve({ ok: true, status: 200, json: async () => rows[0] } as Response);
+  await screen.findByText("Overview saved.");
+  expect((screen.getByLabelText("Title") as HTMLInputElement).value).toBe("New draft");
+  expect(screen.queryByRole("button", { name: "Reload latest overview" })).toBeNull();
+  view.unmount();
+  rows = [sourceTask()];
+  vi.mocked(fetch).mockImplementation(original);
+  window.history.replaceState(null, "", "/?task=source");
+  render(<App />);
+  const prompt = await screen.findByLabelText("Prompt");
+  fireEvent.change(prompt, { target: { value: "Keyboard source prompt" } });
+  fireEvent.keyDown(prompt, { key: "Enter", metaKey: true });
+  await waitFor(() => expect(rows[0].polling?.action.child_definition?.config.initial_prompt).toBe("Keyboard source prompt"));
 });
