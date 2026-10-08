@@ -22,12 +22,27 @@ type fakeBoard struct {
 	mutations int
 	version   int64
 	err       error
+	card      *model.TaskCardDTO
+	fullLists int
 }
 
 func (b *fakeBoard) ListTasks(context.Context) ([]model.Task, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	b.fullLists++
 	return []model.Task{{ID: "task-1", Title: "Task", Column: "todo", Version: b.version}}, nil
+}
+func (b *fakeBoard) ListTaskCards(context.Context) ([]model.TaskCardDTO, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.card != nil {
+		return []model.TaskCardDTO{*b.card}, nil
+	}
+	return []model.TaskCardDTO{{ID: "task-1", Title: "Task", Column: "todo", Version: b.version, Requests: []model.TaskCardRequest{}}}, nil
+}
+func (b *fakeBoard) ReorderTask(context.Context, string, model.MoveTaskInput) (*model.TaskCardDTO, error) {
+	t, err := b.change()
+	return &model.TaskCardDTO{ID: t.ID, Version: t.Version, Requests: []model.TaskCardRequest{}}, err
 }
 func (b *fakeBoard) GetTask(context.Context, string) (*model.Task, error) {
 	return &model.Task{ID: "task-1"}, nil
@@ -192,7 +207,7 @@ func TestBoardSSEInvalidatesAfterMutation(t *testing.T) {
 }
 func TestBoardListsAreArrays(t *testing.T) {
 	h := NewHandler("test", &fakeBackend{}, Options{Board: &fakeBoard{}})
-	for _, path := range []string{"/v1/tasks", "/v1/tasks/task-1/events"} {
+	for _, path := range []string{"/v1/tasks", "/v1/task-cards", "/v1/tasks/task-1/events"} {
 		w := boardRequest(h, "GET", path, "", "localhost:8099", "", "")
 		var array []json.RawMessage
 		if err := json.Unmarshal(w.Body.Bytes(), &array); err != nil {
@@ -210,5 +225,56 @@ func TestTemplateAPIIsRemoved(t *testing.T) {
 		if w.Code != http.StatusNotFound {
 			t.Fatalf("retired route %s: %d", path, w.Code)
 		}
+	}
+}
+
+func TestBoardCompactInvalidationIncludesRuntimeAndSettings(t *testing.T) {
+	b := &fakeBoard{card: &model.TaskCardDTO{ID: "card", Version: 1, Requests: []model.TaskCardRequest{}, Execution: &model.TaskCardExecution{}, Polling: &model.TaskCardPolling{}}}
+	hub := newBoardHub(b, time.Millisecond)
+	ch := hub.subscribe()
+	defer hub.unsubscribe(ch)
+	next := func() string {
+		t.Helper()
+		select {
+		case revision := <-ch:
+			return revision
+		case <-time.After(time.Second):
+			t.Fatal("missing compact invalidation")
+			return ""
+		}
+	}
+	if next() != "initial" {
+		t.Fatal("missing initial")
+	}
+	previous := next()
+	changes := []func(){
+		func() { b.card.Version++ },
+		func() { b.card.Execution.LastSeenTurnStatus = "completed" },
+		func() { b.card.Execution.LastSeenThreadStatus = "idle" },
+		func() { b.card.Execution.LastPollAt = "2026-01-01T00:00:00Z" },
+		func() {
+			b.card.Requests = append(b.card.Requests, model.TaskCardRequest{ID: "request", Status: "starting"})
+		},
+		func() { b.card.Requests[0].Status = "completed" },
+		func() { b.card.Polling.LastAttemptAt = "2026-01-01T00:00:00Z" },
+		func() { b.card.Polling.NextCheckAt = "2026-01-02T00:00:00Z" },
+		func() { b.card.Polling.LastSuccessAt = "2026-01-01T00:00:00Z" },
+		func() { b.card.Polling.LastError = "failed" },
+		func() { b.card.Polling.Problem = "invalid settings" },
+	}
+	for i, change := range changes {
+		b.mu.Lock()
+		change()
+		b.mu.Unlock()
+		revision := next()
+		if revision == previous {
+			t.Fatalf("change %d ignored", i)
+		}
+		previous = revision
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.fullLists != 0 {
+		t.Fatalf("SSE loaded %d full task lists", b.fullLists)
 	}
 }

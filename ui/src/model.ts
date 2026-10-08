@@ -69,6 +69,7 @@ export type Task = {
   source_url: string;
   source_key: string;
   source_task_id?: string;
+  source_author?: string;
   config: TaskConfig;
   version: number;
   created_at: string;
@@ -81,6 +82,29 @@ export type Task = {
   };
   requests: RequestInfo[];
 };
+export type PollingSummary = Pick<Polling, "type" | "mode" | "next_check_at" | "last_attempt_at" | "last_success_at" | "last_error"> & { action: { type: string }; problem: string };
+export type TaskCard = Omit<Task, "config" | "polling" | "requests"> & { polling?: PollingSummary; requests: Pick<RequestInfo, "id" | "status">[] };
+export function compactTask(task: Task): TaskCard {
+  const { id, title, description, column, position, thread_id, source_url,
+    source_key, source_task_id, source_author, version, created_at, updated_at,
+    execution, polling, requests } = task;
+  return {
+    id, title, description, column, position, thread_id, source_url, source_key,
+    source_task_id, source_author, version, created_at, updated_at,
+    ...(execution ? { execution: {
+      last_seen_turn_status: execution.last_seen_turn_status,
+      last_seen_thread_status: execution.last_seen_thread_status,
+      last_poll_at: execution.last_poll_at,
+    } } : {}),
+    requests: requests.map(({ id, status }) => ({ id, status })),
+    ...(polling ? { polling: {
+      type: polling.type, mode: polling.mode, action: { type: polling.action.type },
+      next_check_at: polling.next_check_at, last_attempt_at: polling.last_attempt_at,
+      last_success_at: polling.last_success_at, last_error: polling.last_error,
+      problem: pollingProblem(polling),
+    } } : {}),
+  };
+}
 export type Definition = {
   title: string;
   description: string;
@@ -141,9 +165,9 @@ export const defaultPolling = (type = "pr_wait"): Polling => ({
           },
         },
 });
-export const isSource = (task: Task) =>
+export const isSource = (task: Task | TaskCard) =>
   task.polling?.action.type === "create_task";
-export const executionLabel = (task: Task): string => {
+export const executionLabel = (task: Task | TaskCard): string => {
   const status = task.execution?.last_seen_turn_status?.toLowerCase();
   if (
     status === "inprogress" ||
@@ -238,10 +262,10 @@ export function pollingProblem(p?: Polling, child = false): string {
   }
   return "";
 }
-export function pollingLabel(task: Task): string {
+export function pollingLabel(task: Task | TaskCard): string {
   if (!task.polling) return "No polling";
   if (task.column !== "polling") return "Configured · paused";
-  if (pollingProblem(task.polling)) return "Needs configuration";
+  if ("problem" in task.polling ? task.polling.problem : pollingProblem(task.polling)) return "Needs configuration";
   return task.polling.last_error ? "Waiting · check failed" : "Waiting";
 }
 export function safeExternalURL(raw: string): string | undefined {

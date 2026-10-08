@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
+  compactTask,
   defaultPolling,
   emptyConfig,
   executionLabel,
@@ -160,4 +161,15 @@ it("requires explicit PR coordinates when a source uses a schedule", () => {
   expect(pollingProblem(p)).toContain("reviewer or author");
   wait.config.login = "reviewer";
   expect(pollingProblem(p)).toBe("");
+});
+
+it("projects full mutation tasks to cards without retaining snapshots or prompts", () => {
+  const full = { ...task(), private_payload: "large", execution: { last_seen_turn_status: "completed", snapshot: { prompt: "large secret prompt" } }, requests: [{ id: "r", status: "starting", prompt: "frozen", created_at: "" }], polling: defaultPolling("cron") };
+  const card = compactTask(full);
+  expect(card).not.toHaveProperty("config");
+  expect(card).not.toHaveProperty("private_payload");
+  expect(card.execution).not.toHaveProperty("snapshot");
+  expect(card.polling).not.toHaveProperty("config");
+  expect(card.polling?.action).toEqual({ type: "create_task" });
+  expect(card.requests).toEqual([{ id: "r", status: "starting" }]);
 });

@@ -2,7 +2,7 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { App } from "./App";
-import { defaultPolling, emptyConfig } from "./model";
+import { compactTask, defaultPolling, emptyConfig } from "./model";
 import type { Task } from "./model";
 import { placeTask } from "./taskOrder";
 
@@ -50,15 +50,17 @@ beforeEach(() => {
     close() {} onopen = null; onerror = null;
   });
   vi.stubGlobal("fetch", vi.fn(async (path: string, options?: RequestInit) => {
-    if (path === "/v1/tasks") return heldRead || reply(rows);
-    if (options?.method === "POST" && path.endsWith("/move")) {
+    if (path === "/v1/task-cards") return heldRead || reply(rows.map(compactTask));
+    if (!options?.method || options.method === "GET") return reply(rows.find((t) => path === `/v1/tasks/${t.id}`) || []);
+    if (options?.method === "POST" && (path.endsWith("/move") || path.endsWith("/reorder"))) {
       const body = JSON.parse(options.body as string);
       writes.push({ path, body });
       if (heldMove) return heldMove;
       const current = rows.find((t) => t.id === path.split("/")[3])!;
       rows = placeTask(rows, current, body.column, body.before_task_id);
       rows = rows.map((t) => t.id === current.id ? { ...t, version: t.version + 1 } : t);
-      return reply(rows.find((t) => t.id === current.id));
+      const saved = rows.find((t) => t.id === current.id)!;
+      return reply(path.endsWith("/reorder") ? compactTask(saved) : saved);
     }
     return reply([]);
   }));
@@ -78,7 +80,8 @@ it("marks the grabbed card and reserves its height at midpoint insertion; reorde
   expect(order()).toEqual(["placeholder", "a", "b", "c"]);
   dragEvent(column, "drop", 110, dataTransfer);
   await waitFor(() => expect(order()).toEqual(["c", "a", "b"]));
-  expect(writes).toEqual([{ path: "/v1/tasks/c/move", body: { expected_version: 1, column: "todo", before_task_id: "a" } }]);
+  expect(vi.mocked(fetch).mock.calls.some(([path]) => /^\/v1\/tasks\/[^/]+$/.test(String(path)))).toBe(false);
+  expect(writes).toEqual([{ path: "/v1/tasks/c/reorder", body: { expected_version: 1, column: "todo", before_task_id: "a" } }]);
   expect(screen.queryByLabelText("Drop task here")).toBeNull();
   expect(card("c").classList.contains("grabbed")).toBe(false);
   cleanup(); render(<App />);

@@ -26,6 +26,8 @@ import (
 // It intentionally has no browser Start or approval operation.
 type BoardBackend interface {
 	ListTasks(context.Context) ([]model.Task, error)
+	ListTaskCards(context.Context) ([]model.TaskCardDTO, error)
+	ReorderTask(context.Context, string, model.MoveTaskInput) (*model.TaskCardDTO, error)
 	GetTask(context.Context, string) (*model.Task, error)
 	CreateTask(context.Context, model.CreateTaskInput) (*model.Task, error)
 	UpdateTask(context.Context, string, model.UpdateTaskInput) (*model.Task, error)
@@ -46,6 +48,21 @@ type Options struct {
 
 func registerBoard(mux *http.ServeMux, b BoardBackend, opts Options) {
 	if b != nil {
+		mux.HandleFunc("/v1/task-cards", func(w http.ResponseWriter, r *http.Request) {
+			if r.Method != http.MethodGet {
+				writeError(w, 405, "method not allowed")
+				return
+			}
+			value, err := b.ListTaskCards(r.Context())
+			if err != nil {
+				boardError(w, err)
+				return
+			}
+			if value == nil {
+				value = []model.TaskCardDTO{}
+			}
+			writeJSON(w, 200, value)
+		})
 		mux.HandleFunc("/v1/tasks", func(w http.ResponseWriter, r *http.Request) {
 			switch r.Method {
 			case http.MethodGet:
@@ -112,6 +129,17 @@ func registerBoard(mux *http.ServeMux, b BoardBackend, opts Options) {
 				return
 			}
 			switch parts[1] {
+			case "reorder":
+				if r.Method != http.MethodPost {
+					writeError(w, 405, "method not allowed")
+					return
+				}
+				var input model.MoveTaskInput
+				if !decodeCommand(w, r, &input) {
+					return
+				}
+				value, err := b.ReorderTask(r.Context(), id, input)
+				boardResult(w, 200, value, err)
 			case "move":
 				if r.Method != http.MethodPost {
 					writeError(w, 405, "method not allowed")
@@ -342,7 +370,7 @@ func (h *boardHub) reconcile(ctx context.Context) {
 	last := ""
 	for {
 		callCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-		ts, err := h.backend.ListTasks(callCtx)
+		ts, err := h.backend.ListTaskCards(callCtx)
 		cancel()
 		if err == nil {
 			data, _ := json.Marshal(ts)

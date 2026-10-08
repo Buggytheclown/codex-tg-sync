@@ -2,8 +2,9 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { FormEvent } from "react";
 import { api, APIError } from "./api";
 import { compareTasks, placeTask } from "./taskOrder";
-import type { Column, Polling, Task, TaskEvent } from "./model";
+import type { Column, Polling, Task, TaskCard as Card, TaskEvent } from "./model";
 import {
+  compactTask,
   codexURL,
   columns,
   emptyConfig,
@@ -32,7 +33,7 @@ export function TaskCard({
   onDragStart,
   onDragEnd,
 }: {
-  task: Task;
+  task: Card;
   selected: boolean;
   onSelect: () => void;
   grabbed?: boolean;
@@ -95,7 +96,7 @@ export function TaskCard({
   );
 }
 export function App() {
-  const [tasks, setTasks] = useState<Task[]>([]);
+  const [tasks, setTasks] = useState<Card[]>([]);
   const [selectedID, setSelectedID] = useState(
       () => new URLSearchParams(window.location.search).get("task") || "",
     ),
@@ -134,7 +135,7 @@ export function App() {
     queuedRefresh.current = false;
     const id = ++refreshID.current;
     try {
-      const next = await api<Task[]>("/v1/tasks");
+      const next = await api<Card[]>("/v1/task-cards");
       if (mounted.current && id === refreshID.current) {
         if (dragRef.current || pendingMove.current) {
           queuedRefresh.current = true;
@@ -160,15 +161,17 @@ export function App() {
     stream.addEventListener("invalidate", () => {
       setConnection("Live");
       void refresh();
+      setDetailRevision((n) => n + 1);
     });
     stream.onopen = () => {
       setConnection("Live");
       void refresh();
+      setDetailRevision((n) => n + 1);
     };
     stream.onerror = () => setConnection("Reconnecting");
-    const focus = () => void refresh();
+    const focus = () => { void refresh(); setDetailRevision((n) => n + 1); };
     window.addEventListener("focus", focus);
-    const reconcile = window.setInterval(() => void refresh(), 30000);
+    const reconcile = window.setInterval(() => { void refresh(); setDetailRevision((n) => n + 1); }, 30000);
     return () => {
       mounted.current = false;
       stream.close();
@@ -194,8 +197,36 @@ export function App() {
     window.addEventListener("keydown", escape);
     return () => window.removeEventListener("keydown", escape);
   }, [refresh]);
-  const selected = tasks.find((t) => t.id === selectedID);
-  const select = (task: Task) => {
+  const selectedCard = tasks.find((t) => t.id === selectedID);
+  const [detail, setDetail] = useState<Task>();
+  const [detailError, setDetailError] = useState("");
+  const [detailRevision, setDetailRevision] = useState(0);
+  const detailID = useRef(0);
+  const latestSelectedCard = useRef(selectedCard);
+  latestSelectedCard.current = selectedCard;
+  const latestDetail = useRef(detail);
+  latestDetail.current = detail;
+  const detailVersion = useRef(0);
+  const consumedDetailRevision = useRef(-1);
+  const detailSelection = useRef(selectedID);
+  if (detailSelection.current !== selectedID) {
+    detailSelection.current = selectedID;
+    detailVersion.current = 0;
+  }
+  const selected = detail?.id === selectedID && selectedCard ? detail : undefined;
+  useEffect(() => {
+    const request = ++detailID.current;
+    if (panel !== "details" || !selectedCard) return;
+    if (detail?.id === selectedCard.id && detailVersion.current === selectedCard.version && consumedDetailRevision.current === detailRevision) return;
+    consumedDetailRevision.current = detailRevision;
+    setDetailError("");
+    api<Task>(`/v1/tasks/${selectedCard.id}`).then((task) => {
+      if (mounted.current && request === detailID.current && task.version >= Math.max(detailVersion.current, latestSelectedCard.current?.version || 0)) { detailVersion.current = task.version; setDetail(task); }
+    }).catch((e) => { if (mounted.current && request === detailID.current) setDetailError(e.message); });
+    return () => { ++detailID.current; };
+  }, [selectedCard?.id, selectedCard?.version, panel, detailRevision]);
+  const select = (task: Card) => {
+    detailVersion.current = 0;
     setSelectedID(task.id);
     setPanel("details");
     setTab("overview");
@@ -220,6 +251,11 @@ export function App() {
     setError("");
     try {
       const result = await api<T>(path, method, body);
+      if (result && typeof result === "object" && "config" in result) {
+        const saved = result as unknown as Task;
+        setDetail((old) => old?.id === saved.id && old.version <= saved.version ? saved : old);
+        if (detailSelection.current === saved.id) detailVersion.current = saved.version;
+      }
       await refresh();
       return result;
     } catch (e) {
@@ -234,10 +270,10 @@ export function App() {
       setBusy(false);
     }
   };
-  const move = async (task: Task, column: Column, beforeID = "") => {
+  const move = async (task: Card, column: Column, beforeID = "") => {
     if (pendingMove.current || busy) return;
     if (column === "polling" && task.column !== column) {
-      const problem = pollingProblem(task.polling);
+      const problem = task.polling ? task.polling.problem : pollingProblem();
       if (problem) {
         setSelectedID(task.id);
         setPanel("details");
@@ -257,12 +293,27 @@ export function App() {
     refreshError.current = false;
     setTasks(placeTask(tasks, task, column, beforeID));
     try {
-      const saved = await api<Task>(`/v1/tasks/${task.id}/move`, "POST", {
+      const sameColumn = task.column === column;
+      const response = await api<Task | Card>(`/v1/tasks/${task.id}/${sameColumn ? "reorder" : "move"}`, "POST", {
         expected_version: task.version,
         column,
         before_task_id: beforeID,
       });
       if (!mounted.current) return;
+      const saved = "config" in response ? compactTask(response) : response;
+      // Compact ordering replies can advance the editable version only when
+      // the loaded settings are exactly the version this command reordered.
+      const knownSettings = latestDetail.current?.id === saved.id &&
+        latestDetail.current.version === task.version && saved.version === task.version + 1;
+      if (detailSelection.current === saved.id && ("config" in response || knownSettings)) {
+        detailVersion.current = saved.version;
+      }
+      setDetail((old) => {
+        if (old?.id !== saved.id || old.version > saved.version) return old;
+        if ("config" in response) return response;
+        if (old.version !== task.version || saved.version !== task.version + 1) return old;
+        return { ...old, position: saved.position, column: saved.column, version: saved.version, updated_at: saved.updated_at };
+      });
       setTasks((current) =>
         current.map((t) => {
           if (t.id !== saved.id) return t;
@@ -323,6 +374,7 @@ export function App() {
     const url = new URL(window.location.href);
     url.searchParams.set("task", task.id);
     window.history.replaceState(null, "", url);
+    detailVersion.current = 0;
     setSelectedID(task.id);
     setPanel("details");
     setTab("overview");
@@ -623,7 +675,17 @@ export function App() {
             </button>
           )}
         </div>
-        {panel === "details" && selected && isSource(selected) ? (
+        {panel === "details" && selected && detailError && (
+          <div className="panel-body">
+            <p role="alert" className="error-note">{detailError}</p>
+            <button onClick={() => setDetailRevision((n) => n + 1)}>Retry details</button>
+          </div>
+        )}
+        {panel === "details" && selectedCard && !selected ? (
+          <div className="panel-body"><h2>{selectedCard.title}</h2>
+            {detailError ? <><p role="alert" className="error-note">{detailError}</p><button onClick={() => setDetailRevision((n) => n + 1)}>Retry details</button></> : <p role="status">Loading details…</p>}
+          </div>
+        ) : panel === "details" && selected && isSource(selected) ? (
           <>
             <div className="detail-heading">
               <h2>{selected.title}</h2>
@@ -674,7 +736,7 @@ export function App() {
                   value={selected.column}
                   disabled={busy}
                   onChange={(e) =>
-                    void move(selected, e.target.value as Column)
+                    void move(compactTask(selected), e.target.value as Column)
                   }
                 >
                   {columns.map((c) => (

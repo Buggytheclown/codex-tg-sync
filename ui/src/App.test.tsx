@@ -8,7 +8,7 @@ import {
   waitFor,
 } from "@testing-library/react";
 import { App } from "./App";
-import { defaultPolling, emptyConfig } from "./model";
+import { compactTask, defaultPolling, emptyConfig } from "./model";
 import type { Task, Polling } from "./model";
 const makeTask = (extra: Partial<Task> = {}): Task => ({
   id: "task-1",
@@ -71,7 +71,7 @@ beforeEach(() => {
         ? JSON.parse(options.body as string)
         : undefined;
       let payload: unknown =
-        path === "/v1/tasks" ? rows : path.endsWith("/events") ? [] : {};
+        path === "/v1/task-cards" ? rows.map(compactTask) : path.endsWith("/events") ? [] : rows.find((t) => path === `/v1/tasks/${t.id}`) || {};
       if (method === "PUT" && path.endsWith("/polling")) {
         const id = path.split("/")[3];
         const task = rows.find((t) => t.id === id)!;
@@ -82,7 +82,7 @@ beforeEach(() => {
         payload = makeTask({ id: "new-source", ...body });
         rows = [...rows, payload as Task];
       }
-      if (method === "POST" && path.endsWith("/move")) {
+      if (method === "POST" && (path.endsWith("/move") || path.endsWith("/reorder"))) {
         const id = path.split("/")[3];
         const task = rows.find((t) => t.id === id)!;
         payload = { ...task, column: body.column, version: task.version + 1 };
@@ -111,6 +111,7 @@ describe("board operator flows", () => {
       name: /CHAT Review the next revision/,
     });
     fireEvent.click(card);
+    await screen.findByRole("combobox", { name: "Move task" });
     fireEvent.change(screen.getByRole("combobox", { name: "Move task" }), {
       target: { value: "polling" },
     });
@@ -478,4 +479,89 @@ it("edits initial launch policy independently of execution approvals", async () 
     },
   });
   expect(screen.getByText(/continuations require Start/)).toBeTruthy();
+});
+
+it("loads full details only on selection and retries failed details without blank editors", async () => {
+  const original = vi.mocked(fetch).getMockImplementation()!;
+  let failed = true;
+  vi.mocked(fetch).mockImplementation(async (path, options) => {
+    if (path === "/v1/tasks/task-1" && failed) return { ok: false, status: 503, json: async () => ({ error: "Details unavailable" }) } as Response;
+    return original(path, options);
+  });
+  render(<App />);
+  const card = await screen.findByRole("button", { name: /CHAT Review the next revision/ });
+  expect(calls.map((c) => c.path)).toEqual(["/v1/task-cards"]);
+  fireEvent.click(card);
+  await screen.findByText("Details unavailable");
+  expect(screen.queryByRole("button", { name: "Save this task" })).toBeNull();
+  failed = false;
+  fireEvent.click(screen.getByRole("button", { name: "Retry details" }));
+  await screen.findByRole("combobox", { name: "Move task" });
+});
+it("ignores a delayed response after selecting another compact card", async () => {
+  rows.push(makeTask({ id: "task-2", title: "Other task" }));
+  const original = vi.mocked(fetch).getMockImplementation()!;
+  let resolve!: (value: Response) => void;
+  const held = new Promise<Response>((done) => { resolve = done; });
+  vi.mocked(fetch).mockImplementation((path, options) => path === "/v1/tasks/task-1" ? held : original(path, options));
+  render(<App />);
+  fireEvent.click(await screen.findByRole("button", { name: /CHAT Review the next revision/ }));
+  await screen.findByText("Loading details…");
+  fireEvent.click(screen.getByRole("button", { name: /CHAT Other task/ }));
+  await screen.findByRole("heading", { name: "Other task" });
+  resolve({ ok: true, status: 200, json: async () => rows[0] } as Response);
+  await waitFor(() => expect(screen.getByRole("heading", { name: "Other task" })).toBeTruthy());
+  expect(screen.queryByRole("heading", { name: "Review the next revision" })).toBeNull();
+});
+it("preserves an unsaved source prompt when background details refresh fails and retries", async () => {
+  rows = [sourceTask()];
+  window.history.replaceState(null, "", "/?task=source");
+  render(<App />);
+  const prompt = await screen.findByLabelText("Prompt");
+  fireEvent.change(prompt, { target: { value: "Unsaved draft" } });
+  const original = vi.mocked(fetch).getMockImplementation()!;
+  let failed = true;
+  vi.mocked(fetch).mockImplementation(async (path, options) => {
+    if (path === "/v1/tasks/source" && failed) return { ok: false, status: 503, json: async () => ({ error: "Details refresh unavailable" }) } as Response;
+    return original(path, options);
+  });
+  fireEvent.focus(window);
+  await screen.findByText("Details refresh unavailable");
+  expect((screen.getByLabelText("Prompt") as HTMLTextAreaElement).value).toBe("Unsaved draft");
+  expect(screen.getByLabelText("Prompt")).toBe(prompt);
+  failed = false;
+  fireEvent.click(screen.getByRole("button", { name: "Retry details" }));
+  await waitFor(() => expect(screen.queryByText("Details refresh unavailable")).toBeNull());
+  expect((screen.getByLabelText("Prompt") as HTMLTextAreaElement).value).toBe("Unsaved draft");
+  expect(screen.getByLabelText("Prompt")).toBe(prompt);
+});
+it("does not promote stale full settings to the compact reorder version", async () => {
+  rows = [makeTask({ config: { ...emptyConfig(), initial_prompt: "Old settings" } })];
+  window.history.replaceState(null, "", "/?task=task-1");
+  render(<App />);
+  await screen.findByRole("combobox", { name: "Move task" });
+  rows = [makeTask({ version: 2, config: { ...emptyConfig(), initial_prompt: "External settings" } })];
+  const original = vi.mocked(fetch).getMockImplementation()!;
+  let resolve!: (value: Response) => void;
+  const held = new Promise<Response>((done) => { resolve = done; });
+  let detailReads = 0;
+  vi.mocked(fetch).mockImplementation((path, options) => {
+    if (path === "/v1/tasks/task-1" && (!options?.method || options.method === "GET")) {
+      detailReads++;
+      if (detailReads <= 2) return held;
+    }
+    if (String(path).endsWith("/reorder")) return original(path, options).then(async (response) => ({ ...response, json: async () => compactTask(await response.json()) }) as Response);
+    return original(path, options);
+  });
+  fireEvent.focus(window);
+  await waitFor(() => expect(detailReads).toBe(2));
+  const card = document.querySelector('[data-task-id="task-1"]')!;
+  const dataTransfer = { setData() {}, getData: () => "task-1", effectAllowed: "", dropEffect: "" };
+  fireEvent.dragStart(card, { dataTransfer });
+  fireEvent.drop(screen.getByRole("region", { name: "TODO column" }), { dataTransfer, clientY: 0 });
+  await waitFor(() => expect(rows[0].version).toBe(3));
+  await waitFor(() => expect(detailReads).toBeGreaterThan(2));
+  resolve({ ok: true, status: 200, json: async () => makeTask({ version: 2, config: { ...emptyConfig(), initial_prompt: "Delayed obsolete settings" } }) } as Response);
+  fireEvent.click(screen.getByRole("tab", { name: "Settings" }));
+  await waitFor(() => expect((screen.getByLabelText("Initial prompt") as HTMLTextAreaElement).value).toBe("External settings"));
 });

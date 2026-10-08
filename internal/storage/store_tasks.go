@@ -386,59 +386,69 @@ func (s *Store) UpdateTask(ctx context.Context, id string, in model.UpdateTaskIn
 // MoveTask must run under the daemon's claim/dispatch gate. Starting without
 // result IDs can be cancelled only while that gate excludes dispatch IO.
 func (s *Store) MoveTask(ctx context.Context, id string, in model.MoveTaskInput) (*model.Task, error) {
+	if err := s.moveTask(ctx, id, in, false); err != nil {
+		return nil, err
+	}
+	return s.GetTask(ctx, id)
+}
+
+func (s *Store) moveTask(ctx context.Context, id string, in model.MoveTaskInput, reorderOnly bool) error {
 	if !validTaskColumn(in.Column) {
-		return nil, ErrTaskInvalid
+		return ErrTaskInvalid
 	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	defer tx.Rollback()
 	t, err := getTaskTx(ctx, tx, id)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	if err := checkTaskVersion(t, in.ExpectedVersion); err != nil {
-		return nil, err
+		return err
+	}
+	if reorderOnly && t.Column != in.Column {
+		return ErrTaskConflict
 	}
 	if t.Column != in.Column && in.Column == model.TaskPollingColumn {
 		if t.Polling == nil {
-			return nil, fmt.Errorf("%w: configure polling first", ErrTaskInvalid)
+			return fmt.Errorf("%w: configure polling first", ErrTaskInvalid)
 		}
 		if err := s.validateResolvedTaskPolling(*t.Polling); err != nil {
-			return nil, err
+			return err
 		}
 		if err := validatePolling(*t.Polling); err != nil {
-			return nil, err
+			return err
 		}
 		if err := validateTaskPollingReadiness(t, *t.Polling); err != nil {
-			return nil, err
+			return err
 		}
 		if err := validatePolling(*t.Polling); err != nil {
-			return nil, err
+			return err
 		}
 	}
 	if in.BeforeTaskID != nil {
 		position, err := reorderTaskTx(ctx, tx, t, in.Column, *in.BeforeTaskID)
 		if err != nil {
-			return nil, err
+			return err
 		}
 		in.Position = position
 	}
 	now := model.NowString()
 	_, err = tx.ExecContext(ctx, `UPDATE tasks SET column=?,position=?,version=version+1,updated_at=? WHERE id=?`, in.Column, in.Position, now, id)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	if t.Column != in.Column {
 		_, err = tx.ExecContext(ctx, `UPDATE task_polling SET generation=generation+1,next_check_at=CASE WHEN ?='polling' THEN '' ELSE next_check_at END WHERE task_id=?`, in.Column, id)
 		if err != nil {
-			return nil, err
+			return err
 		}
 	}
 	if t.Column != in.Column && (in.Column == model.TaskTODO || in.Column == model.TaskDone) {
 		if err := cancelUnstartedTaskRequestsTx(ctx, tx, id, now); err != nil {
-			return nil, err
+			return err
 		}
 	}
 	event := "moved"
@@ -446,12 +456,12 @@ func (s *Store) MoveTask(ctx context.Context, id string, in model.MoveTaskInput)
 		event = "reordered"
 	}
 	if err := addTaskEventTx(ctx, tx, id, event, map[string]string{"from": t.Column, "to": in.Column}); err != nil {
-		return nil, err
+		return err
 	}
 	if err := tx.Commit(); err != nil {
-		return nil, err
+		return err
 	}
-	return s.GetTask(ctx, id)
+	return nil
 }
 
 // Rebalance ordering coordinates in one transaction, including legacy equal

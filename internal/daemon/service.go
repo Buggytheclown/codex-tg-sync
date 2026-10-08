@@ -67,15 +67,18 @@ type Service struct {
 	threadClaims *appserver.ThreadClaimRegistry
 	syncWriter   *appserver.WriterManager[Session]
 
-	sessionMu                    sync.Mutex
-	mu                           sync.RWMutex
-	poll                         Session
-	runCtx                       context.Context
-	pollGeneration               uint64
-	cancel                       context.CancelFunc
-	wg                           sync.WaitGroup
-	externalRequestMu            sync.Mutex
-	externalLaunchWake           chan struct{}
+	sessionMu          sync.Mutex
+	mu                 sync.RWMutex
+	poll               Session
+	runCtx             context.Context
+	pollGeneration     uint64
+	cancel             context.CancelFunc
+	wg                 sync.WaitGroup
+	externalRequestMu  sync.Mutex
+	externalLaunchWake chan struct{}
+	// If both gates are needed, acquire syncMu before taskLaunchMu. Board
+	// operations never acquire syncMu while holding taskLaunchMu.
+	taskLaunchMu                 sync.Mutex
 	syncMu                       sync.Mutex
 	syncForum                    SyncForum
 	syncLeases                   map[string]appserver.WriterLease[Session]

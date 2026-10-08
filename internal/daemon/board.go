@@ -19,8 +19,6 @@ func (s *Service) CreateTask(ctx context.Context, in model.CreateTaskInput) (*mo
 	if strings.TrimSpace(in.ThreadID) != "" {
 		return nil, tasks.ErrInvalid
 	}
-	s.syncMu.Lock()
-	defer s.syncMu.Unlock()
 	task, err := s.taskBoard.CreateTask(ctx, in)
 	if err == nil {
 		s.wakeSyncReconcile()
@@ -30,11 +28,33 @@ func (s *Service) CreateTask(ctx context.Context, in model.CreateTaskInput) (*mo
 func (s *Service) UpdateTask(ctx context.Context, id string, in model.UpdateTaskInput) (*model.Task, error) {
 	return s.taskBoard.UpdateTask(ctx, id, in)
 }
+
+// ReorderTask never enters the launch or Sync gates and cannot change a column.
+func (s *Service) ReorderTask(ctx context.Context, id string, in model.MoveTaskInput) (*model.TaskCardDTO, error) {
+	if err := s.store.ReorderTask(ctx, id, in); err != nil {
+		return nil, err
+	}
+	return s.store.GetTaskCard(ctx, id)
+}
+
 func (s *Service) MoveTask(ctx context.Context, id string, in model.MoveTaskInput) (*model.Task, error) {
-	// Claim, reset, predispatch and moves share this gate. The store transaction
-	// cancels only requests for which no App Server side effect can have happened.
-	s.syncMu.Lock()
-	defer s.syncMu.Unlock()
+	current, err := s.store.GetTaskCard(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	if current == nil {
+		return nil, tasks.ErrNotFound
+	}
+	if current.Column == in.Column {
+		if err := s.store.ReorderTask(ctx, id, in); err != nil {
+			return nil, err
+		}
+		return s.taskBoard.GetTask(ctx, id)
+	}
+	// Column transitions cancel only definitely unstarted work, serialized with
+	// claim, reset and dispatch; they do not wait for unrelated background Sync.
+	s.taskLaunchMu.Lock()
+	defer s.taskLaunchMu.Unlock()
 	task, err := s.taskBoard.MoveTask(ctx, id, in)
 	if err == nil {
 		s.wakeExternalLaunchRenderer()
@@ -92,8 +112,8 @@ func (s *Service) ListDueTaskPolling(ctx context.Context, now time.Time, limit i
 	return s.store.ListDueTaskPolling(ctx, now, limit)
 }
 func (s *Service) AcceptTaskPollingOutcome(ctx context.Context, out model.TaskPollingOutcome, topicID int64) (bool, error) {
-	s.syncMu.Lock()
-	defer s.syncMu.Unlock()
+	s.taskLaunchMu.Lock()
+	defer s.taskLaunchMu.Unlock()
 	out.Error = sanitizeDiagnosticString(out.Error)
 	accepted, err := s.store.AcceptTaskPollingOutcome(ctx, out, topicID)
 	if err == nil && accepted {

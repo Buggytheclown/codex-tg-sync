@@ -13,6 +13,9 @@ import (
 func (s *Service) dispatchExternalLaunchRequest(ctx context.Context, requestID string) {
 	s.syncMu.Lock()
 	defer s.syncMu.Unlock()
+	// Wait for background Sync before taking the board/launch gate.
+	s.taskLaunchMu.Lock()
+	defer s.taskLaunchMu.Unlock()
 
 	request, err := s.store.GetExternalLaunchRequest(ctx, requestID)
 	if err != nil || request == nil || request.Status != model.ExternalLaunchStarting {

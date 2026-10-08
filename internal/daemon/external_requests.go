@@ -57,9 +57,9 @@ func (s *Service) processExternalLaunchRequests(ctx context.Context) {
 			s.logLifecycle("external_launch_auto_list_failed", lifecycleFields{"error": listErr})
 		}
 		for _, request := range autoRequests {
-			s.syncMu.Lock()
+			s.taskLaunchMu.Lock()
 			claimed, err := s.store.ClaimExternalLaunchRequest(ctx, request.ID)
-			s.syncMu.Unlock()
+			s.taskLaunchMu.Unlock()
 			if err != nil {
 				s.logLifecycle("external_launch_auto_claim_failed", lifecycleFields{"request_id": request.ID, "source": request.Source, "error": err})
 			} else if claimed {
@@ -468,8 +468,8 @@ func (s *Service) handleExternalLaunchCallback(ctx context.Context, chatID, topi
 	if route.Action == "external_launch_check" {
 		return s.checkExternalLaunchOutcome(ctx, *request)
 	}
-	s.syncMu.Lock()
-	defer s.syncMu.Unlock()
+	s.taskLaunchMu.Lock()
+	defer s.taskLaunchMu.Unlock()
 	var changed bool
 	switch route.Action {
 	case "external_launch_start":
