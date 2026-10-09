@@ -11,7 +11,7 @@ import {
 import { App } from "./App";
 import { WorkflowForm } from "./Workflow";
 import { TicketControl } from "./TicketControl";
-import { compactTask, defaultPolling, emptyConfig, formatTime } from "./model";
+import { compactTask, defaultPolling, emptyConfig } from "./model";
 import type { Task, Polling } from "./model";
 const makeTask = (extra: Partial<Task> = {}): Task => ({
   id: "task-1",
@@ -31,6 +31,78 @@ const makeTask = (extra: Partial<Task> = {}): Task => ({
   ...extra,
 });
 let rows: Task[], calls: { path: string; method: string; body: unknown }[];
+it("keeps Overview a native editable brief while polling diagnostics and frozen requests remain in their tabs", async () => {
+  rows = [makeTask({
+    title: "A readable task brief", description: "First line\nSecond line", priority: "high",
+    source_url: "https://example.com/source", source_task_id: "source-1",
+    created_at: "2026-01-01T12:00:00Z", updated_at: "2026-01-02T12:00:00Z",
+    execution: { last_seen_turn_status: "completed", last_poll_at: "2026-01-03T12:00:00Z" },
+    polling: { ...defaultPolling(), config: { ...defaultPolling().config, pr_id: "42" }, last_attempt_at: "2026-01-04T12:00:00Z" },
+    requests: [{ id: "request-brief", status: "pending_approval", prompt: "Preserved frozen instruction", created_at: "2026-01-05T12:00:00Z" }],
+  })];
+  window.history.replaceState(null, "", "/?task=task-1");
+  render(<App />);
+  const title = await screen.findByLabelText("Title");
+  const detail = within(screen.getByRole("complementary", { name: "Task details and settings" }));
+  expect(title.tagName).toBe("TEXTAREA");
+  expect(detail.getByLabelText("Description").tagName).toBe("TEXTAREA");
+  expect((detail.getByLabelText("Description") as HTMLTextAreaElement).value).toBe("First line\nSecond line");
+  expect(detail.queryByRole("heading", { name: rows[0].title })).toBeNull();
+  for (const label of ["Waiting conditions · ANY", "Next check", "Last attempt", "Last success", "Created", "Updated", "Chat read", "Launch requests", "Frozen prompt"]) {
+    expect(detail.queryByText(label)).toBeNull();
+  }
+  expect(detail.getByRole("link", { name: /Open source/ }).getAttribute("href")).toBe("https://example.com/source");
+  expect(detail.getByRole("link", { name: "Created by source" }).getAttribute("href")).toBe("?task=source-1");
+  fireEvent.click(detail.getByRole("tab", { name: "Polling" }));
+  expect(detail.getByLabelText("PR ID")).toBeTruthy();
+  expect(detail.getByText("Last attempt")).toBeTruthy();
+  expect(detail.getByLabelText("Move to Done when PR is merged")).toBeTruthy();
+  fireEvent.click(detail.getByRole("tab", { name: "History" }));
+  expect(await detail.findByText("Frozen prompt")).toBeTruthy();
+  expect(detail.getByText("Preserved frozen instruction")).toBeTruthy();
+  expect(calls.every(call => call.method === "GET")).toBe(true);
+});
+it("offers one card priority control and separate keyboard targets for ticket and Codex", async () => {
+  rows = [makeTask({ ticket_url: "https://example.com/TASK-123", priority: "high" })];
+  render(<App />);
+  const select = await screen.findByLabelText("Priority for Review the next revision");
+  const wrapper = select.closest<HTMLElement>(".card-with-link")!;
+  const card = within(wrapper).getByRole("button", { name: /CHAT Review the next revision/ });
+  expect(within(wrapper).getAllByRole("combobox")).toHaveLength(1);
+  expect(card.querySelector("a, select, input, textarea, button")).toBeNull();
+  expect(within(wrapper).queryByRole("img", { name: "High priority" })).toBeNull();
+  for (const target of [select, within(wrapper).getByRole("link", { name: "TASK-123" }), within(wrapper).getByRole("button", { name: "Edit ticket" }), within(wrapper).getByRole("link", { name: /Open in Codex/ })]) {
+    expect(target.closest(".task-card")).toBeNull();
+    target.focus();
+    expect(document.activeElement).toBe(target);
+  }
+  expect(screen.queryByLabelText("Title")).toBeNull();
+  expect(calls.every(call => call.method === "GET")).toBe(true);
+});
+it("preserves title Enter submission and native validation without consuming IME composition", async () => {
+  window.history.replaceState(null, "", "/?task=task-1");
+  render(<App />);
+  const title = await screen.findByLabelText("Title");
+  fireEvent.change(title, { target: { value: "" } });
+  fireEvent.keyDown(title, { key: "Enter" });
+  expect(calls.filter(call => call.method === "PATCH")).toHaveLength(0);
+  fireEvent.change(title, { target: { value: "A wrapped title saved with Enter" } });
+  expect(fireEvent.keyDown(title, { key: "Enter", isComposing: true })).toBe(true);
+  expect(calls.filter(call => call.method === "PATCH")).toHaveLength(0);
+  fireEvent.keyDown(title, { key: "Enter" });
+  await waitFor(() => expect(rows[0].title).toBe("A wrapped title saved with Enter"));
+  expect(calls.filter(call => call.method === "PATCH")).toHaveLength(1);
+});
+it("keeps an existing multiline title unchanged when saving another Overview field", async () => {
+  rows = [makeTask({ title: "Existing first line\nExisting second line" })];
+  window.history.replaceState(null, "", "/?task=task-1");
+  render(<App />);
+  expect((await screen.findByLabelText("Title") as HTMLTextAreaElement).value).toBe(rows[0].title);
+  fireEvent.change(screen.getByLabelText("Description"), { target: { value: "A changed brief\nWith a second line" } });
+  fireEvent.click(screen.getByRole("button", { name: "Save overview" }));
+  await waitFor(() => expect(rows[0].description).toBe("A changed brief\nWith a second line"));
+  expect(rows[0].title).toBe("Existing first line\nExisting second line");
+});
 it("shows the Telegram gate for an actual pending approval request", async () => {
   rows = [
     makeTask({
@@ -531,10 +603,10 @@ it("ignores a delayed response after selecting another compact card", async () =
   fireEvent.click(await screen.findByRole("button", { name: /CHAT Review the next revision/ }));
   await screen.findByText("Loading details…");
   fireEvent.click(screen.getByRole("button", { name: /CHAT Other task/ }));
-  await screen.findByRole("heading", { name: "Other task" });
+  await screen.findByDisplayValue("Other task");
   resolve({ ok: true, status: 200, json: async () => rows[0] } as Response);
-  await waitFor(() => expect(screen.getByRole("heading", { name: "Other task" })).toBeTruthy());
-  expect(screen.queryByRole("heading", { name: "Review the next revision" })).toBeNull();
+  await waitFor(() => expect((screen.getByLabelText("Title") as HTMLTextAreaElement).value).toBe("Other task"));
+  expect(screen.queryByDisplayValue("Review the next revision")).toBeNull();
 });
 it("preserves an unsaved source prompt when background details refresh fails and retries", async () => {
   rows = [sourceTask()];
@@ -636,11 +708,11 @@ it("preserves overview drafts and blocks replacement of externally edited fields
   window.history.replaceState(null, "", "/?task=task-1");
   render(<App />);
   fireEvent.change(await screen.findByLabelText("Title"), { target: { value: "Local draft" } });
-  rows = [makeTask({ version: 2, updated_at: "2026-01-02T12:00:00Z", config: { ...emptyConfig(), initial_prompt: "External prompt" } })];
+  rows = [makeTask({ version: 2, source_url: "https://example.com/new-source", updated_at: "2026-01-02T12:00:00Z", config: { ...emptyConfig(), initial_prompt: "External prompt" } })];
   fireEvent.focus(window);
   await waitFor(() => expect(calls.filter(c => c.path === "/v1/tasks/task-1").length).toBeGreaterThan(1));
   await waitFor(() => expect(screen.queryByText("Loading details…")).toBeNull());
-  await screen.findByText(formatTime("2026-01-02T12:00:00Z"));
+  await screen.findByRole("link", { name: /Open source/ });
   expect((screen.getByLabelText("Title") as HTMLInputElement).value).toBe("Local draft");
   fireEvent.click(screen.getByRole("button", { name: "Save overview" }));
   await waitFor(() => expect(rows[0].title).toBe("Local draft"));
@@ -704,7 +776,7 @@ it("saves priority with Cmd+Enter and links an existing chat from Overview", asy
   fireEvent.keyDown(title, { key: "Enter", metaKey: true });
   await waitFor(() => expect(rows[0].priority).toBe("high"));
   expect(rows[0].title).toBe("Keyboard saved");
-  expect(screen.getByLabelText("High priority")).toBeTruthy();
+  expect((screen.getByLabelText("Priority for Keyboard saved") as HTMLSelectElement).value).toBe("high");
   await waitFor(() => expect((screen.getByRole("button", { name: "Link chat" }) as HTMLButtonElement).disabled).toBe(false));
   const chat = screen.getByLabelText("Codex chat");
   fireEvent.change(chat, { target: { value: "codex://threads/existing-chat" } });
@@ -782,7 +854,7 @@ it("edits card priority without details or ordering and attaches a chat inline",
   expect(calls.some(c => c.path === "/v1/tasks/task-1")).toBe(false);
   expect(rows[0].position).toBe(1);
   expect(screen.queryByLabelText("Title")).toBeNull();
-  const codex = screen.getByRole("button", { name: "Codex: not linked" });
+  const codex = screen.getByRole("button", { name: "Link Codex: no chat linked" });
   expect(codex.closest(".task-card")).toBeNull();
   await waitFor(() => expect((codex as HTMLButtonElement).disabled).toBe(false));
   fireEvent.click(codex);
@@ -961,7 +1033,7 @@ it("does not advance unseen full settings from a newer compact ticket reply", as
   const held = new Promise<Response>(done => { resolve = done; });
   vi.mocked(fetch).mockImplementation(async (path, options) => {
     if (String(path).endsWith("/ticket") && options?.method === "POST") {
-      rows = [makeTask({ version: 3, ticket_url: "https://tracker.example/TASK-123", updated_at: "2026-01-02T12:00:00Z", config: { ...emptyConfig(), initial_prompt: "External prompt" } })];
+      rows = [makeTask({ version: 3, source_url: "https://example.com/new-source", ticket_url: "https://tracker.example/TASK-123", updated_at: "2026-01-02T12:00:00Z", config: { ...emptyConfig(), initial_prompt: "External prompt" } })];
       waiting = true;
       return { ok: true, status: 200, json: async () => compactTask(rows[0]) } as Response;
     }
@@ -987,7 +1059,7 @@ it("does not advance unseen full settings from a newer compact ticket reply", as
   expect(calls.find(c => c.method === "PATCH")?.body).toMatchObject({ expected_version: 1 });
   waiting = false;
   resolve({ ok: true, status: 200, json: async () => rows[0] } as Response);
-  await detail.findByText(formatTime("2026-01-02T12:00:00Z"));
+  await detail.findByRole("link", { name: /Open source/ });
   await waitFor(() => expect((detail.getByRole("button", { name: "Save overview" }) as HTMLButtonElement).disabled).toBe(false));
   await waitFor(() => expect(detail.queryByRole("button", { name: "Reload latest overview" })).toBeNull());
   fireEvent.click(detail.getByRole("button", { name: "Save overview" }));

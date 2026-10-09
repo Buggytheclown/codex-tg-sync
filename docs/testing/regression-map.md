@@ -279,3 +279,10 @@ For live Telegram QA, verify:
 - `internal/controlapi/board_workflow_test.go` covers the optional PATCH polling contract and omitted/null compatibility, version/error boundaries and atomic readback.
 - `ui/src/Workflow.test.tsx` and `App.test.tsx` cover the numbered source/task workflow, one save payload, separate readiness-guarded activation, concrete PR links versus placeholders/provenance, no-chat attachment and action selection, ordinary prompt-only tasks, keyboard saves and conflicting drafts.
 - Independent browser acceptance uses isolated tasks and the real loopback API/SQLite: source and child independence, frozen prompts, PR/cron configuration, no-model returns and merge completion, same-chat pending continuation, priority/ticket/Codex controls, ordering, Done toggle and responsive inspector. Do not use real PR tasks for mutation QA.
+
+## Shared board visual design
+
+- UI integration covers the task brief's editable title/description/priority and connections, omitted Overview summaries/dates/requests, and retained Polling/History readback. Native fields retain Cmd/Ctrl+Enter and conflict/typing protection.
+- Card acceptance includes a single priority control, multiline two-line description, independent polling/execution indicators, visible empty connections, and controls outside the draggable selection button. Integrated footer height remains part of insertion/placeholder measurement.
+- Independent browser visual/regression QA covers header/search, sources expanded/collapsed, columns/Done/empties, linked/unlinked cards, Overview, Polling, PR/cron SourceEditor, History, create/add/attachment forms and loading/error/conflict/saving states. Check narrow control wrapping, focus/keyboard use, long labels and native drag/drop using isolated fixture data.
+- This frontend-only change preserves schema/API/configuration/Telegram behavior. Install checked static assets and verify live readback without daemon restart or Sync changes.

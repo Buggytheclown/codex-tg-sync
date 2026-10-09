@@ -17,11 +17,10 @@ import {
   safeExternalURL,
   parseThreadID,
 } from "./model";
-import { Field, PromptFields, conditionLabels, TaskChatForm } from "./forms";
+import { Field, PromptFields, TaskChatForm } from "./forms";
 
 type Panel = "details" | "new-task" | "new-source" | "add-chat";
 import { SourceEditor } from "./SourceEditor";
-import { PollingDiagnostics } from "./PollingDiagnostics";
 import { WorkflowForm } from "./Workflow";
 import { TicketControl } from "./TicketControl";
 type Tab = "overview" | "polling" | "history";
@@ -53,10 +52,12 @@ export function TaskCard({
   onDragEnd?: () => void;
 }) {
   const execution = executionLabel(task);
+  const polling = pollingLabel(task);
+  const pollingTone = polling === "Waiting" ? "active" : polling === "No polling" ? "" : "warning";
   const [linking, setLinking] = useState(false);
   const [controlError, setControlError] = useState("");
   return (
-    <div className="card-with-link">
+    <div className={`card-with-link${selected ? " selected" : ""}${grabbed ? " grabbed" : ""}${saving ? " saving" : ""}`}>
     <button
       className={`task-card ${selected ? "selected" : ""}${grabbed ? " grabbed" : ""}${saving ? " saving" : ""}`}
       data-task-id={task.id}
@@ -78,27 +79,22 @@ export function TaskCard({
         </span>
       )}
       <span className="card-top">
+        <span className="card-grip" aria-hidden="true">⠿</span>
         <span className="eyebrow">
           {task.thread_id ? "CHAT" : task.source_key ? "AUTOMATION" : "TASK"}
-        </span>
-        <span className="card-grip" aria-hidden="true">
-          ⠿
         </span>
       </span>
       <span className="card-title">
         <strong>{task.title}</strong>
-        <span className={`priority-icon ${task.priority || "normal"}`} role="img" aria-label={`${task.priority === "high" ? "High" : task.priority === "low" ? "Low" : "Normal"} priority`} title={`${task.priority || "normal"} priority`}>
-          {task.priority === "high" ? "↑" : task.priority === "low" ? "↓" : "—"}
-        </span>
       </span>
       {task.description && (
         <span className="card-description">{task.description}</span>
       )}
       <span className="card-meta">
         <span
-          className={`poll-chip ${task.column === "polling" ? "active" : ""}`}
+          className={`poll-chip ${pollingTone}`}
         >
-          {pollingLabel(task)}
+          {polling}
         </span>
         {execution && (
           <span className={`execution ${execution.toLowerCase()}`}>
@@ -111,7 +107,6 @@ export function TaskCard({
         ["pending_approval", "starting"].includes(r.status),
       ) && <span className="request-hint">Launch request · Telegram</span>}
     </button>
-    <div className="card-controls">
       <select className={`card-priority ${task.priority || "normal"}`} aria-label={`Priority for ${task.title}`}
         title={`${task.priority || "normal"} priority`} value={task.priority || "normal"} disabled={controlsDisabled || !onPriority}
         onChange={(e) => {
@@ -120,11 +115,12 @@ export function TaskCard({
         }}>
         <option value="low">↓ Low</option><option value="normal">— Normal</option><option value="high">↑ High</option>
       </select>
+    <div className="card-controls">
     {onTicket && <TicketControl task={task} busy={controlsDisabled} onSave={onTicket} />}
       {task.thread_id
         ? <a className="card-codex-link card-footer-link" href={codexURL(task.thread_id)} draggable={false}>Open in Codex ↗</a>
-        : <button className="card-codex-link card-footer-link" type="button" aria-expanded={linking} disabled={controlsDisabled || !onLink}
-          onClick={() => setLinking(!linking)}>Codex: not linked</button>}
+        : <button className="card-codex-link card-footer-link" type="button" aria-label="Link Codex: no chat linked" aria-expanded={linking} disabled={controlsDisabled || !onLink}
+          onClick={() => setLinking(!linking)}>Link Codex ＋</button>}
     </div>
     {linking && !task.thread_id && onLink && <div className="card-chat-form">
       <TaskChatForm task={task} busy={controlsDisabled} onLink={onLink} inline onCancel={() => setLinking(false)} />
@@ -824,11 +820,11 @@ export function App() {
         ) : panel === "details" && selected ? (
           <>
             <div className="detail-heading">
-              <h2>{selected.title}</h2>
+              {tab !== "overview" && <h2>{selected.title}</h2>}
               <div className="detail-badges">
                 <span className="pill">{labels[selected.column]}</span>
                 {executionLabel(selected) && (
-                  <span className="pill">{executionLabel(selected)}</span>
+                  <span className={`pill execution ${executionLabel(selected).toLowerCase()}`}>{executionLabel(selected)}</span>
                 )}
               </div>
             </div>
@@ -968,25 +964,19 @@ function Overview({ task, busy, onSave, onLink, onTicket }: { task: Task; busy: 
   return (
     <div className="overview">
       <OverviewForm task={task} busy={busy} onSave={onSave} />
+      <section className="overview-connections" aria-label="Connections">
+      <h3>Connections</h3>
+      <div className="overview-links">
+      <TicketControl task={task} busy={busy} onSave={onTicket} />
       {task.thread_id ? (
         <a className="detail-link codex-link" href={codexURL(task.thread_id)}>
           Open in Codex <span>↗</span>
         </a>
       ) : <TaskChatForm task={task} busy={busy} onLink={onLink} />}
-      <TicketControl task={task} busy={busy} onSave={onTicket} />
+      </div>
+      <div className="overview-provenance">
       {task.source_url && (
         <ExternalLink url={task.source_url} label="Open source" />
-      )}
-      <PollingDiagnostics task={task} />
-      {task.polling?.type === "pr_wait" && (
-        <div className="summary-block">
-          <h3>Waiting conditions · ANY</h3>
-          <ul>
-            {task.polling.config.conditions?.map((c) => (
-              <li key={c}>{conditionLabels[c] || c}</li>
-            ))}
-          </ul>
-        </div>
       )}
       {task.source_task_id && (
         <a
@@ -996,23 +986,8 @@ function Overview({ task, busy, onSave, onLink, onTicket }: { task: Task; busy: 
           Created by source
         </a>
       )}
-      <dl className="metadata">
-        <div>
-          <dt>Created</dt>
-          <dd>{formatTime(task.created_at)}</dd>
-        </div>
-        <div>
-          <dt>Updated</dt>
-          <dd>{formatTime(task.updated_at)}</dd>
-        </div>
-        {task.execution?.last_poll_at && (
-          <div>
-            <dt>Chat read</dt>
-            <dd>{formatTime(task.execution.last_poll_at)}</dd>
-          </div>
-        )}
-      </dl>
-      <RequestHistory task={task} />
+      </div>
+      </section>
     </div>
   );
 }
@@ -1088,15 +1063,27 @@ function OverviewForm({ task, busy, onSave }: {
       }
     } catch (e) { setMessage((e as Error).message); }
   };
-  return <form onSubmit={e => void save(e)}>
-    <p className="note">⌘/Ctrl + Enter saves this section.</p>
-    <Field label="Title"><input required value={title} onChange={e => setTitle(e.target.value)} /></Field>
-    <Field label="Description"><textarea rows={3} value={description} onChange={e => setDescription(e.target.value)} /></Field>
+  return <form className="overview-form" onSubmit={e => void save(e)}>
+    <div className="overview-heading">
+    <Field label="Title" className="overview-title"><textarea required rows={title.length > 70 ? 3 : 2} value={title}
+      onChange={e => setTitle(e.target.value.replace(/[\r\n]/g, ""))}
+      onKeyDown={e => {
+        if (e.key !== "Enter" || e.metaKey || e.ctrlKey || e.repeat || e.nativeEvent.isComposing) return;
+        e.preventDefault();
+        if (!busy) e.currentTarget.form?.requestSubmit();
+      }} /></Field>
     <PriorityField value={priority} onChange={setPriority} />
-    {stale && <p className="note">This task changed. Reload latest settings before saving. Your draft has been preserved.</p>}
+    </div>
+    <Field label="Description" className="overview-description"><textarea rows={3} value={description} onChange={e => setDescription(e.target.value)} /></Field>
+    <div className="overview-save">
+    {stale && <p className="readiness-banner">This task changed. Reload latest settings before saving. Your draft has been preserved.</p>}
     {stale && <button type="button" disabled={busy} onClick={reload}>Reload latest overview</button>}
     {message && <p role="status" className="info-note">{message}</p>}
+    <div className="form-actions overview-footer">
+    <p className="note">⌘/Ctrl + Enter saves this section.</p>
     <button className="primary" disabled={busy}>Save overview</button>
+    </div>
+    </div>
   </form>;
 }
 function History({ task }: { task: Task }) {
