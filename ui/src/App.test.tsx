@@ -31,6 +31,261 @@ const makeTask = (extra: Partial<Task> = {}): Task => ({
   ...extra,
 });
 let rows: Task[], calls: { path: string; method: string; body: unknown }[];
+it("autosaves changed Overview fields on blur without an explicit save button or unchanged writes", async () => {
+  window.history.replaceState(null, "", "/?task=task-1");
+  render(<App />);
+  const title = await screen.findByLabelText("Title");
+  expect(screen.queryByRole("button", { name: "Save overview" })).toBeNull();
+  fireEvent.blur(title);
+  expect(calls.filter(call => call.method === "PATCH")).toHaveLength(0);
+  fireEvent.change(title, { target: { value: "Autosaved title" } });
+  fireEvent.blur(title);
+  await screen.findByText("Overview saved.");
+  expect(rows[0].title).toBe("Autosaved title");
+  fireEvent.blur(title);
+  expect(calls.filter(call => call.method === "PATCH")).toHaveLength(1);
+  const priority = screen.getByLabelText("Priority");
+  fireEvent.change(priority, { target: { value: "high" } });
+  fireEvent.blur(priority);
+  await waitFor(() => expect(rows[0].priority).toBe("high"));
+});
+it.each(["", "   "])("shows a required-title error and retains the draft when autosaving %j", async value => {
+  window.history.replaceState(null, "", "/?task=task-1");
+  render(<App />);
+  const title = await screen.findByLabelText("Title");
+  fireEvent.change(title, { target: { value } });
+  fireEvent.blur(title);
+  await screen.findByText("Enter a title before saving Overview.");
+  expect(calls.filter(call => call.method === "PATCH")).toHaveLength(0);
+  expect((title as HTMLTextAreaElement).value).toBe(value);
+});
+it.each(["tab", "card"])("serializes Overview edits blurred while saving across a %s switch", async destination => {
+  rows.push(makeTask({ id: "task-2", title: "Other task" }));
+  window.history.replaceState(null, "", "/?task=task-1");
+  const original = vi.mocked(fetch).getMockImplementation()!;
+  let release!: () => void;
+  const held = new Promise<void>(done => { release = done; });
+  let patches = 0;
+  vi.mocked(fetch).mockImplementation(async (path, options) => {
+    if (options?.method === "PATCH" && ++patches === 1) await held;
+    return original(path, options);
+  });
+  render(<App />);
+  const title = await screen.findByLabelText("Title");
+  fireEvent.change(title, { target: { value: "First saved draft" } });
+  fireEvent.blur(title);
+  await screen.findByText("Saving overview…");
+  fireEvent.change(title, { target: { value: "Latest queued draft" } });
+  const description = screen.getByLabelText("Description");
+  fireEvent.change(description, { target: { value: "Queued description\nStill multiline" } });
+  fireEvent.blur(description);
+  if (destination === "tab") fireEvent.click(screen.getByRole("tab", { name: "Polling" }));
+  else fireEvent.click(screen.getByRole("button", { name: /CHAT Other task/ }));
+  await waitFor(() => expect(screen.queryByDisplayValue("Latest queued draft")).toBeNull());
+  release();
+  await waitFor(() => expect(rows[0].title).toBe("Latest queued draft"));
+  expect(rows[0].description).toBe("Queued description\nStill multiline");
+  expect(calls.filter(call => call.method === "PATCH").map(call => call.body)).toEqual([
+    expect.objectContaining({ expected_version: 1, title: "First saved draft" }),
+    expect.objectContaining({ expected_version: 2, title: "Latest queued draft" }),
+  ]);
+  expect(rows[1].title).toBe("Other task");
+});
+it("keeps a failed Overview draft across navigation and retries explicitly", async () => {
+  window.history.replaceState(null, "", "/?task=task-1");
+  const original = vi.mocked(fetch).getMockImplementation()!;
+  let fail = true;
+  vi.mocked(fetch).mockImplementation(async (path, options) => options?.method === "PATCH" && fail
+    ? { ok: false, status: 503, json: async () => ({ error: "Overview temporarily unavailable" }) } as Response
+    : original(path, options));
+  render(<App />);
+  const title = await screen.findByLabelText("Title");
+  fireEvent.change(title, { target: { value: "Retained failed draft" } });
+  fireEvent.blur(title);
+  await screen.findByRole("button", { name: "Retry overview save" });
+  const writes = vi.mocked(fetch).mock.calls.filter(([, options]) => options?.method === "PATCH").length;
+  fireEvent.focus(title);
+  fireEvent.blur(title);
+  expect(vi.mocked(fetch).mock.calls.filter(([, options]) => options?.method === "PATCH")).toHaveLength(writes);
+  fireEvent.click(screen.getByRole("tab", { name: "History" }));
+  fireEvent.click(screen.getByRole("tab", { name: "Overview" }));
+  expect((await screen.findByLabelText("Title") as HTMLTextAreaElement).value).toBe("Retained failed draft");
+  fail = false;
+  fireEvent.click(screen.getByRole("button", { name: "Retry overview save" }));
+  await waitFor(() => expect(rows[0].title).toBe("Retained failed draft"));
+});
+it("keeps the first ticket click available during a blur save and serializes its mutation", async () => {
+  window.history.replaceState(null, "", "/?task=task-1");
+  const original = vi.mocked(fetch).getMockImplementation()!;
+  let release!: () => void;
+  const held = new Promise<void>(done => { release = done; });
+  vi.mocked(fetch).mockImplementation(async (path, options) => {
+    if (options?.method === "PATCH") await held;
+    return original(path, options);
+  });
+  render(<App />);
+  const title = await screen.findByLabelText("Title");
+  const detail = within(screen.getByRole("complementary", { name: "Task details and settings" }));
+  fireEvent.change(title, { target: { value: "Blurred before ticket" } });
+  fireEvent.blur(title);
+  const add = detail.getByRole("button", { name: "Add ticket" });
+  expect((add as HTMLButtonElement).disabled).toBe(false);
+  fireEvent.click(add);
+  fireEvent.change(detail.getByLabelText("Ticket URL"), { target: { value: "TASK-123" } });
+  fireEvent.click(detail.getByRole("button", { name: "Save ticket" }));
+  expect(calls.some(call => call.path.endsWith("/ticket") && call.method === "POST")).toBe(false);
+  release();
+  await waitFor(() => expect(rows[0].ticket_url).toBe("https://st.yandex-team.ru/TASK-123"));
+  expect(calls.find(call => call.path.endsWith("/ticket") && call.method === "POST")?.body).toMatchObject({ expected_version: 2 });
+  expect(rows[0].title).toBe("Blurred before ticket");
+});
+it("saves a blur queued during another command after navigating away", async () => {
+  window.history.replaceState(null, "", "/?task=task-1");
+  const original = vi.mocked(fetch).getMockImplementation()!;
+  let release!: () => void;
+  const held = new Promise<void>(done => { release = done; });
+  vi.mocked(fetch).mockImplementation(async (path, options) => {
+    if (String(path).endsWith("/priority") && options?.method === "POST") await held;
+    return original(path, options);
+  });
+  render(<App />);
+  const title = await screen.findByLabelText("Title");
+  fireEvent.change(screen.getByLabelText("Priority for Review the next revision"), { target: { value: "low" } });
+  fireEvent.change(title, { target: { value: "Queued while command busy" } });
+  fireEvent.blur(title);
+  fireEvent.click(screen.getByRole("tab", { name: "History" }));
+  expect(calls.filter(call => call.method === "PATCH")).toHaveLength(0);
+  release();
+  await waitFor(() => expect(rows[0].title).toBe("Queued while command busy"));
+  expect(rows[0].priority).toBe("low");
+  expect(calls.find(call => call.method === "PATCH")?.body).toMatchObject({ expected_version: 2, priority: "low" });
+});
+it("keeps autosaved text when a workflow save waits for the same task", async () => {
+  window.history.replaceState(null, "", "/?task=task-1");
+  const original = vi.mocked(fetch).getMockImplementation()!;
+  let release!: () => void;
+  const held = new Promise<void>(done => { release = done; });
+  let patches = 0;
+  vi.mocked(fetch).mockImplementation(async (path, options) => {
+    if (options?.method === "PATCH" && ++patches === 1) await held;
+    return original(path, options);
+  });
+  render(<App />);
+  const title = await screen.findByLabelText("Title");
+  fireEvent.change(title, { target: { value: "Autosaved before workflow" } });
+  fireEvent.change(screen.getByLabelText("Description"), { target: { value: "Autosaved description" } });
+  fireEvent.blur(title);
+  fireEvent.click(screen.getByRole("tab", { name: "Polling" }));
+  fireEvent.change(screen.getByLabelText("Initial prompt"), { target: { value: "Workflow draft" } });
+  fireEvent.click(screen.getByRole("button", { name: "Save settings" }));
+  expect(patches).toBe(1);
+  release();
+  await waitFor(() => expect(rows[0].config.initial_prompt).toBe("Workflow draft"));
+  expect(rows[0].title).toBe("Autosaved before workflow");
+  expect(rows[0].description).toBe("Autosaved description");
+  expect(calls.filter(call => call.method === "PATCH")[1].body).toMatchObject({ expected_version: 2, title: "Autosaved before workflow", description: "Autosaved description" });
+});
+it("uses the owned autosave version for the first Move command", async () => {
+  window.history.replaceState(null, "", "/?task=task-1");
+  const original = vi.mocked(fetch).getMockImplementation()!;
+  let release!: () => void;
+  const held = new Promise<void>(done => { release = done; });
+  vi.mocked(fetch).mockImplementation(async (path, options) => {
+    if (options?.method === "PATCH") await held;
+    return original(path, options);
+  });
+  render(<App />);
+  const title = await screen.findByLabelText("Title");
+  fireEvent.change(title, { target: { value: "Moved saved task" } });
+  fireEvent.blur(title);
+  const move = screen.getByLabelText("Move task");
+  expect((move as HTMLSelectElement).disabled).toBe(false);
+  fireEvent.change(move, { target: { value: "inbox" } });
+  expect(calls.some(call => call.path.endsWith("/move") && call.method === "POST")).toBe(false);
+  release();
+  await waitFor(() => expect(rows[0].column).toBe("inbox"));
+  expect(rows[0].title).toBe("Moved saved task");
+  expect(calls.find(call => call.path.endsWith("/move") && call.method === "POST")?.body).toMatchObject({ expected_version: 2 });
+});
+it("does not run a waiting ticket command when autosave fails", async () => {
+  window.history.replaceState(null, "", "/?task=task-1");
+  const original = vi.mocked(fetch).getMockImplementation()!;
+  let release!: () => void;
+  const held = new Promise<void>(done => { release = done; });
+  vi.mocked(fetch).mockImplementation(async (path, options) => {
+    if (options?.method === "PATCH") {
+      await held;
+      return { ok: false, status: 503, json: async () => ({ error: "Autosave failed before ticket" }) } as Response;
+    }
+    return original(path, options);
+  });
+  render(<App />);
+  fireEvent.change(await screen.findByLabelText("Title"), { target: { value: "Unsaved failed title" } });
+  fireEvent.blur(screen.getByLabelText("Title"));
+  const detail = within(screen.getByRole("complementary", { name: "Task details and settings" }));
+  fireEvent.click(detail.getByRole("button", { name: "Add ticket" }));
+  fireEvent.change(detail.getByLabelText("Ticket URL"), { target: { value: "TASK-123" } });
+  fireEvent.click(detail.getByRole("button", { name: "Save ticket" }));
+  release();
+  await detail.findByRole("button", { name: "Retry overview save" });
+  expect(calls.some(call => call.path.endsWith("/ticket") && call.method === "POST")).toBe(false);
+  expect((detail.getByLabelText("Ticket URL") as HTMLInputElement).value).toBe("TASK-123");
+});
+it("coalesces a repeated blur of a server-normalized title and advances a waiting ticket", async () => {
+  window.history.replaceState(null, "", "/?task=task-1");
+  const original = vi.mocked(fetch).getMockImplementation()!;
+  let release!: () => void;
+  const held = new Promise<void>(done => { release = done; });
+  vi.mocked(fetch).mockImplementation(async (path, options) => {
+    if (options?.method === "PATCH") {
+      await held;
+      await original(path, options);
+      rows = rows.map(task => ({ ...task, title: task.title.trim() }));
+      return { ok: true, status: 200, json: async () => rows[0] } as Response;
+    }
+    return original(path, options);
+  });
+  render(<App />);
+  const title = await screen.findByLabelText("Title");
+  fireEvent.change(title, { target: { value: "  Normalized title  " } });
+  fireEvent.blur(title);
+  fireEvent.blur(title);
+  const detail = within(screen.getByRole("complementary", { name: "Task details and settings" }));
+  fireEvent.click(detail.getByRole("button", { name: "Add ticket" }));
+  fireEvent.change(detail.getByLabelText("Ticket URL"), { target: { value: "TASK-123" } });
+  fireEvent.click(detail.getByRole("button", { name: "Save ticket" }));
+  release();
+  await waitFor(() => expect(rows[0].ticket_url).toBe("https://st.yandex-team.ru/TASK-123"));
+  expect(rows[0].title).toBe("Normalized title");
+  expect(calls.filter(call => call.method === "PATCH")).toHaveLength(1);
+  expect(calls.find(call => call.path.endsWith("/ticket") && call.method === "POST")?.body).toMatchObject({ expected_version: 2 });
+});
+it("identifies an old task's failed autosave after selecting another card and restores its draft", async () => {
+  rows.push(makeTask({ id: "task-2", title: "Other task" }));
+  window.history.replaceState(null, "", "/?task=task-1");
+  const original = vi.mocked(fetch).getMockImplementation()!;
+  let release!: () => void;
+  const held = new Promise<void>(done => { release = done; });
+  vi.mocked(fetch).mockImplementation(async (path, options) => {
+    if (options?.method === "PATCH") {
+      await held;
+      return { ok: false, status: 503, json: async () => ({ error: "Original task save failed" }) } as Response;
+    }
+    return original(path, options);
+  });
+  render(<App />);
+  fireEvent.change(await screen.findByLabelText("Title"), { target: { value: "Keep original draft" } });
+  fireEvent.blur(screen.getByLabelText("Title"));
+  fireEvent.click(screen.getByRole("button", { name: /CHAT Other task/ }));
+  await screen.findByDisplayValue("Other task");
+  release();
+  await screen.findByText("Review the next revision: Original task save failed");
+  expect((screen.getByLabelText("Title") as HTMLTextAreaElement).value).toBe("Other task");
+  expect(rows[1].version).toBe(1);
+  fireEvent.click(screen.getByRole("button", { name: "Open failed task" }));
+  expect((await screen.findByLabelText("Title") as HTMLTextAreaElement).value).toBe("Keep original draft");
+  expect(screen.getByRole("button", { name: "Retry overview save" })).toBeTruthy();
+});
 it("keeps Overview a native editable brief while polling diagnostics and frozen requests remain in their tabs", async () => {
   rows = [makeTask({
     title: "A readable task brief", description: "First line\nSecond line", priority: "high",
@@ -99,7 +354,7 @@ it("keeps an existing multiline title unchanged when saving another Overview fie
   render(<App />);
   expect((await screen.findByLabelText("Title") as HTMLTextAreaElement).value).toBe(rows[0].title);
   fireEvent.change(screen.getByLabelText("Description"), { target: { value: "A changed brief\nWith a second line" } });
-  fireEvent.click(screen.getByRole("button", { name: "Save overview" }));
+  fireEvent.blur(screen.getByLabelText("Title"));
   await waitFor(() => expect(rows[0].description).toBe("A changed brief\nWith a second line"));
   expect(rows[0].title).toBe("Existing first line\nExisting second line");
 });
@@ -668,7 +923,7 @@ it("edits overview text preserving execution/source and exposes History", async 
   render(<App />);
   fireEvent.change(await screen.findByLabelText("Title"), { target: { value: "New title" } });
   fireEvent.change(screen.getByLabelText("Description"), { target: { value: "First line\nSecond line" } });
-  fireEvent.click(screen.getByRole("button", { name: "Save overview" }));
+  fireEvent.blur(screen.getByLabelText("Title"));
   await waitFor(() => expect(rows[0].title).toBe("New title"));
   expect(rows[0].description).toBe("First line\nSecond line");
   expect(rows[0].config).toEqual(config);
@@ -714,17 +969,17 @@ it("preserves overview drafts and blocks replacement of externally edited fields
   await waitFor(() => expect(screen.queryByText("Loading details…")).toBeNull());
   await screen.findByRole("link", { name: /Open source/ });
   expect((screen.getByLabelText("Title") as HTMLInputElement).value).toBe("Local draft");
-  fireEvent.click(screen.getByRole("button", { name: "Save overview" }));
+  fireEvent.blur(screen.getByLabelText("Title"));
   await waitFor(() => expect(rows[0].title).toBe("Local draft"));
   expect(rows[0].config.initial_prompt).toBe("External prompt");
-  await waitFor(() => expect((screen.getByRole("button", { name: "Save overview" }) as HTMLButtonElement).disabled).toBe(false));
+  await waitFor(() => expect(screen.queryByText("Saving overview…")).toBeNull());
   fireEvent.change(screen.getByLabelText("Description"), { target: { value: "My description" } });
   rows = [{ ...rows[0], version: 4, description: "External description" }];
   fireEvent.focus(window);
   await screen.findByRole("button", { name: "Reload latest overview" });
   expect((screen.getByLabelText("Description") as HTMLTextAreaElement).value).toBe("My description");
   const writes = calls.filter(c => c.method === "PATCH").length;
-  fireEvent.click(screen.getByRole("button", { name: "Save overview" }));
+  fireEvent.blur(screen.getByLabelText("Title"));
   expect(calls.filter(c => c.method === "PATCH").length).toBe(writes);
   fireEvent.click(screen.getByRole("button", { name: "Reload latest overview" }));
   expect((screen.getByLabelText("Description") as HTMLTextAreaElement).value).toBe("External description");
@@ -737,14 +992,14 @@ it("does not bless a concurrent overview save reply and preserves typing during 
   vi.mocked(fetch).mockImplementation((path, options) => options?.method === "PATCH" ? held : original(path, options));
   render(<App />);
   fireEvent.change(await screen.findByLabelText("Title"), { target: { value: "Submitted title" } });
-  fireEvent.click(screen.getByRole("button", { name: "Save overview" }));
+  fireEvent.blur(screen.getByLabelText("Title"));
   fireEvent.change(screen.getByLabelText("Title"), { target: { value: "Typing while saving" } });
   rows = [makeTask({ title: "Concurrent title", version: 3 })];
   resolve({ ok: true, status: 200, json: async () => rows[0] } as Response);
   await screen.findByRole("button", { name: "Reload latest overview" });
   expect((screen.getByLabelText("Title") as HTMLInputElement).value).toBe("Typing while saving");
-  await waitFor(() => expect((screen.getByRole("button", { name: "Save overview" }) as HTMLButtonElement).disabled).toBe(false));
-  fireEvent.click(screen.getByRole("button", { name: "Save overview" }));
+  await waitFor(() => expect(screen.queryByText("Saving overview…")).toBeNull());
+  fireEvent.blur(screen.getByLabelText("Title"));
   expect(rows[0].title).toBe("Concurrent title");
 });
 
@@ -827,7 +1082,7 @@ it("preserves new overview typing during an ordinary save and saves sources with
   vi.mocked(fetch).mockImplementation((path, options) => options?.method === "PATCH" ? held : original(path, options));
   const view = render(<App />);
   fireEvent.change(await screen.findByLabelText("Title"), { target: { value: "Submitted title" } });
-  fireEvent.click(screen.getByRole("button", { name: "Save overview" }));
+  fireEvent.blur(screen.getByLabelText("Title"));
   fireEvent.change(screen.getByLabelText("Title"), { target: { value: "New draft" } });
   rows = [makeTask({ title: "Submitted title", version: 2 })];
   resolve({ ok: true, status: 200, json: async () => rows[0] } as Response);
@@ -879,10 +1134,10 @@ it("keeps an Overview text draft after a safe compact card priority change", asy
   fireEvent.change(await screen.findByLabelText("Title"), { target: { value: "Unsaved text" } });
   fireEvent.change(screen.getByLabelText("Priority for Review the next revision"), { target: { value: "low" } });
   await waitFor(() => expect(rows[0].priority).toBe("low"));
-  await waitFor(() => expect((screen.getByRole("button", { name: "Save overview" }) as HTMLButtonElement).disabled).toBe(false));
+  await waitFor(() => expect(screen.queryByText("Saving overview…")).toBeNull());
   await waitFor(() => expect(screen.queryByRole("button", { name: "Reload latest overview" })).toBeNull());
   expect((screen.getByLabelText("Title") as HTMLInputElement).value).toBe("Unsaved text");
-  fireEvent.click(screen.getByRole("button", { name: "Save overview" }));
+  fireEvent.blur(screen.getByLabelText("Title"));
   await waitFor(() => expect(rows[0].title).toBe("Unsaved text"));
   expect(rows[0].priority).toBe("low");
 });
@@ -912,11 +1167,11 @@ it("retains drafts on inline priority conflict and does not certify unseen setti
   fireEvent.change(screen.getByLabelText("Priority for Review the next revision"), { target: { value: "high" } });
   await screen.findByText("Priority changed elsewhere");
   expect((screen.getByLabelText("Title") as HTMLInputElement).value).toBe("Keep draft");
-  await waitFor(() => expect((screen.getByRole("button", { name: "Save overview" }) as HTMLButtonElement).disabled).toBe(false));
+  await waitFor(() => expect(screen.queryByText("Saving overview…")).toBeNull());
   rejectPriority = false;
   fireEvent.change(screen.getByLabelText("Priority for Review the next revision"), { target: { value: "high" } });
-  await waitFor(() => expect((screen.getByRole("button", { name: "Save overview" }) as HTMLButtonElement).disabled).toBe(false));
-  fireEvent.click(screen.getByRole("button", { name: "Save overview" }));
+  await waitFor(() => expect(screen.queryByText("Saving overview…")).toBeNull());
+  fireEvent.blur(screen.getByLabelText("Title"));
   await waitFor(() => expect(calls.some(call => call.method === "PATCH")).toBe(true));
   expect(calls.find(call => call.method === "PATCH")?.body).toMatchObject({ expected_version: 1 });
   // The compact reply must not grant stale full settings its newer version.
@@ -966,9 +1221,9 @@ it("saves an Overview ticket with Cmd+Enter while keeping its title draft", asyn
   fireEvent.keyDown(input, { key: "Enter", metaKey: true });
   await waitFor(() => expect(rows[0].ticket_url).toBe("https://st.yandex-team.ru/TASK-123"));
   expect((detail.getByLabelText("Title") as HTMLInputElement).value).toBe("Draft title");
-  await waitFor(() => expect((detail.getByRole("button", { name: "Save overview" }) as HTMLButtonElement).disabled).toBe(false));
+  await waitFor(() => expect(detail.queryByText("Saving overview…")).toBeNull());
   await waitFor(() => expect(detail.queryByRole("button", { name: "Reload latest overview" })).toBeNull());
-  fireEvent.click(detail.getByRole("button", { name: "Save overview" }));
+  fireEvent.blur(detail.getByLabelText("Title"));
   await waitFor(() => expect(rows[0].title).toBe("Draft title"));
   expect(rows[0].ticket_url).toBe("https://st.yandex-team.ru/TASK-123");
 });
@@ -1053,16 +1308,16 @@ it("does not advance unseen full settings from a newer compact ticket reply", as
   fireEvent.change(detail.getByLabelText("Ticket URL"), { target: { value: "https://tracker.example/TASK-123" } });
   fireEvent.click(detail.getByRole("button", { name: "Save ticket" }));
   await screen.findByRole("link", { name: "TASK-123" });
-  await waitFor(() => expect((detail.getByRole("button", { name: "Save overview" }) as HTMLButtonElement).disabled).toBe(false));
-  fireEvent.click(detail.getByRole("button", { name: "Save overview" }));
+  await waitFor(() => expect(detail.queryByText("Saving overview…")).toBeNull());
+  fireEvent.blur(detail.getByLabelText("Title"));
   await detail.findByText("Stale detail version");
   expect(calls.find(c => c.method === "PATCH")?.body).toMatchObject({ expected_version: 1 });
   waiting = false;
   resolve({ ok: true, status: 200, json: async () => rows[0] } as Response);
   await detail.findByRole("link", { name: /Open source/ });
-  await waitFor(() => expect((detail.getByRole("button", { name: "Save overview" }) as HTMLButtonElement).disabled).toBe(false));
+  await waitFor(() => expect(detail.queryByText("Saving overview…")).toBeNull());
   await waitFor(() => expect(detail.queryByRole("button", { name: "Reload latest overview" })).toBeNull());
-  fireEvent.click(detail.getByRole("button", { name: "Save overview" }));
+  fireEvent.click(detail.getByRole("button", { name: "Retry overview save" }));
   await waitFor(() => expect(rows[0].title).toBe("Keep title draft"));
   expect(rows[0].config.initial_prompt).toBe("External prompt");
   expect(rows[0].ticket_url).toBe("https://tracker.example/TASK-123");

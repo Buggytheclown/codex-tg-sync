@@ -241,8 +241,8 @@ small { font-size: 12px; line-height: 1.6; color: var(--muted); }
 .detail-link { display: inline-flex; gap: 6px; align-items: center; color: var(--blue); font-size: 12px; font-weight: 550; min-height: 30px; padding: 5px 0; overflow-wrap: anywhere; }
 .detail-link span { font-size: 14px; }
 .overview-save { order: 2; padding-top: 14px; }
-.overview-footer { justify-content: space-between; align-items: center; margin: 0; }
-.overview-footer .note { font-size: 11px; margin: 0; }
+.overview-status { font-size: 12px; line-height: 1.6; color: var(--muted); margin-bottom: 8px; }
+.overview-save > .note { font-size: 11px; margin: 0; }
 .poll-diagnostics { background: #f6f8fc; border: 1px solid var(--border); border-radius: var(--radius); padding: 12px; margin: 18px 0 22px; }
 .diagnostic-heading { display: flex; align-items: center; gap: 7px; }
 .diagnostic-heading strong { font-size: 12px; color: #465771; font-weight: 600; }

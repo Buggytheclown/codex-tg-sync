@@ -24,6 +24,144 @@ import { SourceEditor } from "./SourceEditor";
 import { WorkflowForm } from "./Workflow";
 import { TicketControl } from "./TicketControl";
 type Tab = "overview" | "polling" | "history";
+type OverviewValues = { title: string; description: string; priority: Priority };
+const overviewValues = (task: Task): OverviewValues => ({ title: task.title, description: task.description, priority: task.priority || "normal" });
+const sameOverview = (a: OverviewValues, b: OverviewValues) => a.title === b.title && a.description === b.description && a.priority === b.priority;
+
+// App owns these task-specific drafts so a blurred edit can finish after its
+// editor is closed. Only the latest blurred snapshot is queued, never typing
+// that is still focused. Exact owned replies permit later commands to rebase.
+class OverviewDraft {
+  baseline: Task;
+  latest: Task;
+  values: OverviewValues;
+  queued?: OverviewValues;
+  pending?: Promise<void>;
+  busy = false;
+  composing = false;
+  failed = false;
+  message = "";
+  error = "";
+  notify = () => {};
+  deltas = new Map<number, { before: OverviewValues; after: OverviewValues; version: number }>();
+  constructor(task: Task, private onSave: (input: unknown) => Promise<Task>, private onError: (message: string) => void) {
+    this.baseline = this.latest = task;
+    this.values = overviewValues(task);
+  }
+  get stale() { return this.baseline.version !== this.latest.version; }
+  receive(task: Task) {
+    if (task.version < this.latest.version) return;
+    this.latest = task;
+    if (this.pending || task.version <= this.baseline.version) return;
+    const previous = overviewValues(this.baseline);
+    const priorityUnedited = this.values.priority === previous.priority;
+    if (task.title === previous.title && task.description === previous.description &&
+      ((task.priority || "normal") === previous.priority || priorityUnedited)) {
+      if (priorityUnedited) this.values.priority = task.priority || "normal";
+      if (this.queued?.priority === previous.priority) this.queued.priority = task.priority || "normal";
+      this.baseline = task;
+    }
+    this.notify();
+  }
+  enqueue(explicit = false) {
+    // An unchanged focus cycle must not replay a failed/ambiguous request.
+    if (this.failed && !explicit && this.queued && sameOverview(this.values, this.queued)) return;
+    this.queued = { ...this.values };
+    this.failed = false;
+    this.error = "";
+    void this.flush();
+  }
+  reject(message: string) {
+    this.failed = true;
+    this.error = message;
+    this.message = "";
+    this.onError(message);
+    this.notify();
+  }
+  flush(force = false): Promise<void> {
+    if (this.pending) return this.pending;
+    if (!this.queued || this.failed || this.composing || (this.busy && !force)) return Promise.resolve();
+    const values = this.queued;
+    if (!values.title.trim()) {
+      this.reject("Enter a title before saving Overview.");
+      return Promise.resolve();
+    }
+    if (this.stale) {
+      this.reject("Reload latest settings before saving. Your draft has been preserved.");
+      return Promise.resolve();
+    }
+    this.queued = undefined;
+    if (sameOverview(values, overviewValues(this.baseline))) return Promise.resolve();
+    const baseline = this.baseline;
+    this.message = "Saving overview…";
+    this.error = "";
+    this.pending = (async () => {
+      try {
+        const updated = await this.onSave({ expected_version: baseline.version, ...values, source_url: baseline.source_url, config: baseline.config });
+        const sameOwned = sameOverview(overviewValues(updated), { ...values, title: values.title.trim() });
+        if (updated.version > baseline.version + 1 && !sameOwned) {
+          this.baseline = { ...baseline, ...values, version: baseline.version + 1 };
+          this.reject("This task changed after saving. Reload latest settings before saving again.");
+          return;
+        }
+        if (updated.version === baseline.version + 1) {
+          this.deltas.set(baseline.version, { before: overviewValues(baseline), after: overviewValues(updated), version: updated.version });
+        }
+        this.baseline = updated;
+        if (updated.version >= this.latest.version) this.latest = updated;
+        const current = this.values;
+        this.values = {
+          title: current.title === values.title ? updated.title : current.title,
+          description: current.description === values.description ? updated.description : current.description,
+          priority: current.priority === values.priority ? updated.priority || "normal" : current.priority,
+        };
+        if (this.queued) for (const key of ["title", "description", "priority"] as const) {
+          if (this.queued[key] === values[key]) this.queued = { ...this.queued, [key]: overviewValues(updated)[key] };
+        }
+        this.message = "Overview saved.";
+        this.onError("");
+      } catch (err) {
+        this.queued ||= values;
+        this.reject((err as Error).message);
+      } finally {
+        this.pending = undefined;
+        this.receive(this.latest);
+        this.notify();
+        if (!this.busy) void this.flush();
+      }
+    })();
+    this.notify();
+    return this.pending;
+  }
+  async settle() {
+    if (!this.pending && (!this.queued || this.failed || !this.queued.title.trim())) return;
+    // A command that already received its click may drain its own task's queue
+    // even while the board is busy with that command.
+    do { await this.flush(true); } while (this.pending || (this.queued && !this.failed && !this.composing));
+    if (this.failed) throw new Error(this.error);
+  }
+  rebase(input: Record<string, unknown>, overviewFields = false) {
+    let body = { ...input };
+    let delta = this.deltas.get(body.expected_version as number);
+    while (delta) {
+      if (overviewFields) for (const key of ["title", "description", "priority"] as const) {
+        if (key in body && body[key] === delta.before[key]) body[key] = delta.after[key];
+      }
+      body.expected_version = delta.version;
+      delta = this.deltas.get(delta.version);
+    }
+    return body;
+  }
+  reload() {
+    this.baseline = this.latest;
+    this.values = overviewValues(this.latest);
+    this.queued = undefined;
+    this.failed = false;
+    this.message = this.error = "";
+    this.onError("");
+    this.notify();
+  }
+}
 export function TaskCard({
   task,
   selected,
@@ -130,6 +268,8 @@ export function TaskCard({
   );
 }
 export function App() {
+  const overviewDrafts = useRef(new Map<string, OverviewDraft>());
+  const [overviewFailureID, setOverviewFailureID] = useState("");
   const [tasks, setTasks] = useState<Card[]>([]);
   const [selectedID, setSelectedID] = useState(
       () => new URLSearchParams(window.location.search).get("task") || "",
@@ -240,6 +380,13 @@ export function App() {
   latestSelectedCard.current = selectedCard;
   const latestDetail = useRef(detail);
   latestDetail.current = detail;
+  useEffect(() => {
+    if (detail) overviewDrafts.current.get(detail.id)?.receive(detail);
+    for (const draft of overviewDrafts.current.values()) {
+      draft.busy = busy;
+      if (!busy) void draft.flush();
+    }
+  }, [busy, detail]);
   const detailVersion = useRef(0);
   const consumedDetailRevision = useRef(-1);
   const detailSelection = useRef(selectedID);
@@ -280,13 +427,21 @@ export function App() {
     path: string,
     method: string,
     body: unknown,
+    background = false,
   ): Promise<T> => {
-    setBusy(true);
+    if (!background) setBusy(true);
     setError("");
     try {
+      const taskID = path.match(/^\/v1\/tasks\/([^/]+)/)?.[1];
+      const draft = taskID ? overviewDrafts.current.get(taskID) : undefined;
+      if (!background && draft && body && typeof body === "object" && "expected_version" in body) {
+        await draft.settle();
+        body = draft.rebase(body as Record<string, unknown>, method === "PATCH");
+      }
       const result = await api<T>(path, method, body);
       if (result && typeof result === "object" && "config" in result) {
         const saved = result as unknown as Task;
+        overviewDrafts.current.get(saved.id)?.receive(saved);
         setDetail((old) => old?.id === saved.id && old.version <= saved.version ? saved : old);
         if (detailSelection.current === saved.id) detailVersion.current = saved.version;
       }
@@ -301,7 +456,7 @@ export function App() {
       if (e instanceof APIError && e.status === 409) void refresh();
       throw e;
     } finally {
-      setBusy(false);
+      if (!background) setBusy(false);
     }
   };
   const saveCardPriority = async (task: Card, priority: Priority) => {
@@ -309,19 +464,25 @@ export function App() {
     setBusy(true);
     setError("");
     try {
+      const draft = overviewDrafts.current.get(task.id);
+      await draft?.settle();
+      const expectedVersion = (draft?.rebase({ expected_version: task.version }).expected_version as number | undefined) ?? task.version;
       const saved = await api<Card>(`/v1/tasks/${task.id}/priority`, "POST", {
-        expected_version: task.version, priority,
+        expected_version: expectedVersion, priority,
       });
       if (!mounted.current) return;
       // A compact reply may advance details only for the exact edit we own.
       // It cannot certify settings we have never loaded at this version.
       const knownSettings = latestDetail.current?.id === saved.id &&
-        latestDetail.current.version === task.version &&
-        saved.version === task.version + 1 && saved.priority === priority;
+        latestDetail.current.version === expectedVersion &&
+        saved.version === expectedVersion + 1 && saved.priority === priority;
+      if (draft && draft.baseline.version === expectedVersion && saved.version === expectedVersion + 1 && saved.priority === priority) {
+        draft.receive({ ...draft.baseline, priority: saved.priority, version: saved.version, updated_at: saved.updated_at });
+      }
       if (detailSelection.current === saved.id && knownSettings) detailVersion.current = saved.version;
       setDetail(old => {
-        if (old?.id !== saved.id || old.version !== task.version ||
-          saved.version !== task.version + 1 || saved.priority !== priority) return old;
+        if (old?.id !== saved.id || old.version !== expectedVersion ||
+          saved.version !== expectedVersion + 1 || saved.priority !== priority) return old;
         return { ...old, priority: saved.priority, version: saved.version, updated_at: saved.updated_at };
       });
       setTasks(current => current.map(card => card.id === saved.id && card.version <= saved.version ? saved : card));
@@ -336,6 +497,9 @@ export function App() {
     setBusy(true);
     setError("");
     try {
+      const draft = overviewDrafts.current.get(task.id);
+      await draft?.settle();
+      expectedVersion = (draft?.rebase({ expected_version: expectedVersion }).expected_version as number | undefined) ?? expectedVersion;
       const saved = await api<Card>(`/v1/tasks/${task.id}/ticket`, "POST", {
         expected_version: expectedVersion, ticket_url: ticketURL,
       });
@@ -343,6 +507,9 @@ export function App() {
       const knownSettings = latestDetail.current?.id === saved.id &&
         latestDetail.current.version === expectedVersion &&
         saved.version === expectedVersion + 1 && (saved.ticket_url || "") === ticketURL;
+      if (draft && draft.baseline.version === expectedVersion && saved.version === expectedVersion + 1 && (saved.ticket_url || "") === ticketURL) {
+        draft.receive({ ...draft.baseline, ticket_url: saved.ticket_url, version: saved.version, updated_at: saved.updated_at });
+      }
       if (detailSelection.current === saved.id && knownSettings) detailVersion.current = saved.version;
       setDetail(old => {
         if (old?.id !== saved.id || old.version !== expectedVersion ||
@@ -380,9 +547,12 @@ export function App() {
     refreshError.current = false;
     setTasks(placeTask(tasks, task, column, beforeID));
     try {
+      const draft = overviewDrafts.current.get(task.id);
+      await draft?.settle();
+      const expectedVersion = (draft?.rebase({ expected_version: task.version }).expected_version as number | undefined) ?? task.version;
       const sameColumn = task.column === column;
       const response = await api<Task | Card>(`/v1/tasks/${task.id}/${sameColumn ? "reorder" : "move"}`, "POST", {
-        expected_version: task.version,
+        expected_version: expectedVersion,
         column,
         before_task_id: beforeID,
       });
@@ -391,14 +561,20 @@ export function App() {
       // Compact ordering replies can advance the editable version only when
       // the loaded settings are exactly the version this command reordered.
       const knownSettings = latestDetail.current?.id === saved.id &&
-        latestDetail.current.version === task.version && saved.version === task.version + 1;
+        latestDetail.current.version === expectedVersion && saved.version === expectedVersion + 1;
+      if (draft) {
+        if ("config" in response) draft.receive(response);
+        else if (draft.baseline.version === expectedVersion && saved.version === expectedVersion + 1) {
+          draft.receive({ ...draft.baseline, position: saved.position, column: saved.column, version: saved.version, updated_at: saved.updated_at });
+        }
+      }
       if (detailSelection.current === saved.id && ("config" in response || knownSettings)) {
         detailVersion.current = saved.version;
       }
       setDetail((old) => {
         if (old?.id !== saved.id || old.version > saved.version) return old;
         if ("config" in response) return response;
-        if (old.version !== task.version || saved.version !== task.version + 1) return old;
+        if (old.version !== expectedVersion || saved.version !== expectedVersion + 1) return old;
         return { ...old, position: saved.position, column: saved.column, version: saved.version, updated_at: saved.updated_at };
       });
       setTasks((current) =>
@@ -612,6 +788,10 @@ export function App() {
         {error && (
           <div role="alert" className="error-banner">
             <span>{error}</span>
+            {overviewFailureID && overviewDrafts.current.get(overviewFailureID)?.failed && overviewFailureID !== selectedID && <button onClick={() => {
+              const failedTask = tasks.find(task => task.id === overviewFailureID);
+              if (failedTask) select(failedTask);
+            }}>Open failed task</button>}
             <button onClick={() => void refresh()}>Refresh</button>
           </div>
         )}
@@ -746,7 +926,13 @@ export function App() {
       <aside className="detail-panel" aria-label="Task details and settings" onKeyDown={(e) => {
         if (e.key !== "Enter" || !(e.metaKey || e.ctrlKey) || e.repeat || e.nativeEvent.isComposing) return;
         const form = (e.target as HTMLElement).closest("form");
-        if (!form || busy) return;
+        if (!form) return;
+        if (form.matches(".overview-form")) {
+          e.preventDefault();
+          form.requestSubmit();
+          return;
+        }
+        if (busy) return;
         const submitter = form.querySelector<HTMLButtonElement>('button:not([type="button"]):not([type="reset"])');
         if (!submitter || submitter.disabled) return;
         e.preventDefault();
@@ -872,7 +1058,15 @@ export function App() {
             <div className="panel-body">
               {tab === "overview" ? (
                 <Overview key={selected.id} task={selected} busy={busy}
-                  onSave={(input) => mutate<Task>(`/v1/tasks/${selected.id}`, "PATCH", input)}
+                  drafts={overviewDrafts.current}
+                  onFailure={message => {
+                    if (message) { setOverviewFailureID(selected.id); setError(`${selected.title}: ${message}`); }
+                    else {
+                      setOverviewFailureID(current => current === selected.id ? "" : current);
+                      setError(current => current.startsWith(`${selected.title}: `) ? "" : current);
+                    }
+                  }}
+                  onSave={(input) => mutate<Task>(`/v1/tasks/${selected.id}`, "PATCH", input, true)}
                   onLink={(thread_id, expected_version) => mutate<Task>(`/v1/tasks/${selected.id}/chat`, "POST", { expected_version, thread_id })}
                   onTicket={(url, version) => saveTicket(selected, url, version)} />
               ) : tab === "polling" ? (
@@ -960,10 +1154,10 @@ function ExternalLink({ url, label }: { url: string; label: string }) {
     </span>
   );
 }
-function Overview({ task, busy, onSave, onLink, onTicket }: { task: Task; busy: boolean; onSave: (input: unknown) => Promise<Task>; onLink: (threadID: string, version: number) => Promise<Task>; onTicket: (url: string, version: number) => Promise<Card> }) {
+function Overview({ task, busy, onSave, onLink, onTicket, drafts, onFailure }: { task: Task; busy: boolean; onSave: (input: unknown) => Promise<Task>; onLink: (threadID: string, version: number) => Promise<Task>; onTicket: (url: string, version: number) => Promise<Card>; drafts: Map<string, OverviewDraft>; onFailure: (message: string) => void }) {
   return (
     <div className="overview">
-      <OverviewForm task={task} busy={busy} onSave={onSave} />
+      <OverviewForm task={task} busy={busy} onSave={onSave} drafts={drafts} onFailure={onFailure} />
       <section className="overview-connections" aria-label="Connections">
       <h3>Connections</h3>
       <div className="overview-links">
@@ -1024,65 +1218,53 @@ function RequestHistory({ task }: { task: Task }) {
     </section>
   );
 }
-function OverviewForm({ task, busy, onSave }: {
+function OverviewForm({ task, busy, onSave, drafts, onFailure }: {
   task: Task; busy: boolean; onSave: (input: unknown) => Promise<Task>;
+  drafts: Map<string, OverviewDraft>; onFailure: (message: string) => void;
 }) {
-  const [baseline, setBaseline] = useState(task);
-  const [title, setTitle] = useState(task.title);
-  const [description, setDescription] = useState(task.description);
-  const [priority, setPriority] = useState<Priority>(task.priority || "normal");
-  const [message, setMessage] = useState("");
+  const [draft] = useState(() => {
+    const existing = drafts.get(task.id);
+    if (existing) return existing;
+    const created = new OverviewDraft(task, onSave, onFailure);
+    drafts.set(task.id, created);
+    return created;
+  });
+  const [, redraw] = useState(0);
+  draft.busy = busy;
   useEffect(() => {
-    const priorityUnedited = priority === (baseline.priority || "normal");
-    const unchanged = task.title === baseline.title && task.description === baseline.description &&
-      ((task.priority || "normal") === (baseline.priority || "normal") || priorityUnedited);
-    if (unchanged && task.version > baseline.version) {
-      if (priorityUnedited) setPriority(task.priority || "normal");
-      setBaseline(task);
-    }
-  }, [task, baseline, priority]);
-  const stale = baseline.version !== task.version;
-  const reload = () => { setBaseline(task); setTitle(task.title); setDescription(task.description); setPriority(task.priority || "normal"); setMessage(""); };
-  const save = async (e: FormEvent) => {
-    e.preventDefault();
-    if (busy) return;
-    if (stale) { setMessage("Reload latest settings before saving. Your draft has been preserved."); return; }
-    try {
-      const updated = await onSave({ expected_version: baseline.version, title, description, priority, source_url: baseline.source_url, config: baseline.config });
-      const submitted = { ...baseline, title, description, priority };
-      const sameOwned = updated.title === title && updated.description === description && (updated.priority || "normal") === priority;
-      if (updated.version > baseline.version + 1 && !sameOwned) {
-        setBaseline({ ...submitted, version: baseline.version + 1 });
-        setMessage("This task changed after saving. Reload latest settings before saving again.");
-      } else {
-        setBaseline(updated);
-        setTitle(current => current === title ? updated.title : current);
-        setDescription(current => current === description ? updated.description : current);
-        setPriority(current => current === priority ? updated.priority || "normal" : current);
-        setMessage("Overview saved.");
-      }
-    } catch (e) { setMessage((e as Error).message); }
+    draft.notify = () => redraw(value => value + 1);
+    draft.receive(task);
+    return () => { draft.notify = () => {}; };
+  }, [draft]);
+  useEffect(() => { draft.receive(task); }, [draft, task]);
+  const { title, description, priority } = draft.values;
+  const change = (values: Partial<OverviewValues>) => {
+    draft.values = { ...draft.values, ...values };
+    redraw(value => value + 1);
   };
-  return <form className="overview-form" onSubmit={e => void save(e)}>
+  return <form className="overview-form" aria-busy={!!draft.pending}
+    onSubmit={e => { e.preventDefault(); draft.enqueue(true); }}
+    onBlur={e => { if (e.target.matches("input, textarea, select")) draft.enqueue(); }}
+    onInvalid={() => draft.reject("Enter a title before saving Overview.")}
+    onCompositionStart={() => { draft.composing = true; }}
+    onCompositionEnd={() => { draft.composing = false; void draft.flush(); }}>
     <div className="overview-heading">
-    <Field label="Title" className="overview-title"><textarea required rows={title.length > 70 ? 3 : 2} value={title}
-      onChange={e => setTitle(e.target.value.replace(/[\r\n]/g, ""))}
-      onKeyDown={e => {
-        if (e.key !== "Enter" || e.metaKey || e.ctrlKey || e.repeat || e.nativeEvent.isComposing) return;
-        e.preventDefault();
-        if (!busy) e.currentTarget.form?.requestSubmit();
-      }} /></Field>
-    <PriorityField value={priority} onChange={setPriority} />
+      <Field label="Title" className="overview-title"><textarea required rows={title.length > 70 ? 3 : 2} value={title}
+        onChange={e => change({ title: e.target.value.replace(/[\r\n]/g, "") })}
+        onKeyDown={e => {
+          if (e.key !== "Enter" || e.metaKey || e.ctrlKey || e.repeat || e.nativeEvent.isComposing) return;
+          e.preventDefault();
+          e.currentTarget.form?.requestSubmit();
+        }} /></Field>
+      <PriorityField value={priority} onChange={priority => change({ priority })} />
     </div>
-    <Field label="Description" className="overview-description"><textarea rows={3} value={description} onChange={e => setDescription(e.target.value)} /></Field>
+    <Field label="Description" className="overview-description"><textarea rows={3} value={description} onChange={e => change({ description: e.target.value })} /></Field>
     <div className="overview-save">
-    {stale && <p className="readiness-banner">This task changed. Reload latest settings before saving. Your draft has been preserved.</p>}
-    {stale && <button type="button" disabled={busy} onClick={reload}>Reload latest overview</button>}
-    {message && <p role="status" className="info-note">{message}</p>}
-    <div className="form-actions overview-footer">
-    <p className="note">⌘/Ctrl + Enter saves this section.</p>
-    <button className="primary" disabled={busy}>Save overview</button>
-    </div>
+      {draft.stale && <p className="readiness-banner">This task changed. Reload latest settings before saving. Your draft has been preserved.</p>}
+      {draft.stale && <button type="button" disabled={busy || !!draft.pending} onClick={() => draft.reload()}>Reload latest overview</button>}
+      {draft.error ? <p role="alert" className="error-note">{draft.error}</p> : draft.message && <p role="status" className="overview-status">{draft.message}</p>}
+      {draft.failed && !draft.stale && <button type="button" disabled={busy || !!draft.pending} onClick={() => draft.enqueue(true)}>Retry overview save</button>}
+      <p className="note">Changes save when a field loses focus.</p>
     </div>
   </form>;
 }

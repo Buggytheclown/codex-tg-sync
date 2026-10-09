@@ -286,3 +286,9 @@ For live Telegram QA, verify:
 - Card acceptance includes a single priority control, multiline two-line description, independent polling/execution indicators, visible empty connections, and controls outside the draggable selection button. Integrated footer height remains part of insertion/placeholder measurement.
 - Independent browser visual/regression QA covers header/search, sources expanded/collapsed, columns/Done/empties, linked/unlinked cards, Overview, Polling, PR/cron SourceEditor, History, create/add/attachment forms and loading/error/conflict/saving states. Check narrow control wrapping, focus/keyboard use, long labels and native drag/drop using isolated fixture data.
 - This frontend-only change preserves schema/API/configuration/Telegram behavior. Install checked static assets and verify live readback without daemon restart or Sync changes.
+
+## Overview autosave
+
+- Test title/description/priority blur, unchanged focus cycles, empty-title validation, exact multiline readback and optional keyboard flush without an ordinary save button.
+- Hold saves to prove later blurred edits serialize and survive navigation; preserve failed/stale drafts on return with explicit retry/reload, never certify an unseen newer version or discard typing.
+- Verify the first destination click, same-task mutation coordination, separate Ticket/Codex forms and explicit Polling save/activation. Browser tests use isolated tasks, delayed/failing requests and the real local API; live installation readback is GET-only.
