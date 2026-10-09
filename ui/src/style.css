@@ -1446,3 +1446,105 @@ form > button {
 .ticket-form { padding: 8px; border: 1px solid var(--line); border-radius: 8px; background: #fff; }
 .ticket-form .field { margin-bottom: 8px; }
 .overview .ticket-actions { padding: 8px 0; }
+
+/* Workflow inspectors keep the board usable while giving settings room. */
+@media (min-width: 1181px) {
+  .app { grid-template-columns: 184px minmax(430px, 1fr) minmax(440px, 480px); }
+  .app.sources-collapsed { grid-template-columns: 58px minmax(430px, 1fr) minmax(440px, 480px); }
+}
+@media (min-width: 1700px) {
+  .app { grid-template-columns: 208px minmax(560px, 1fr) 520px; }
+  .app.sources-collapsed { grid-template-columns: 58px minmax(560px, 1fr) 520px; }
+}
+@media (min-width: 721px) and (max-width: 1180px) {
+  .app { grid-template-columns: 56px minmax(320px, 1fr) minmax(360px, 42vw); }
+  .app.sources-collapsed { grid-template-columns: 48px minmax(320px, 1fr) minmax(360px, 42vw); }
+  .board-columns { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .board-heading { flex-wrap: wrap; }
+}
+.workflow-editor > h2 { font-size: 18px; margin-bottom: 10px; color: #172448; }
+.workflow-step { position: relative; margin: 0 0 0 16px; padding: 0 0 22px 28px; border-left: 1px dashed #91b5ff; }
+.workflow-step > h3 { color: #172448; font-size: 13px; margin: 0 0 9px; padding-top: 5px; }
+.workflow-number { position: absolute; top: 0; left: -16px; width: 31px; height: 31px; display: grid; place-items: center; background: #087aff; color: #fff; border-radius: 50%; box-shadow: 0 2px 5px #087aff28; font-size: 14px; }
+.workflow-content { border: 1px solid #dfe6f1; border-radius: 8px; background: #f9fbff; padding: 12px; }
+.workflow-content .field { margin-bottom: 12px; }
+.workflow-content .field > label { color: #435176; }
+.workflow-content .field input, .workflow-content .field select, .workflow-content .field textarea { color: #172448; border-color: #d9e1ef; }
+.workflow-content .form-section { margin: 12px 0 0; border-color: #dfe6f1; }
+.workflow-content .conditions { margin: 0 0 12px; border-color: #dce6fa; }
+.workflow-content .conditions legend, .workflow-content .conditions label { color: #435176; }
+.workflow-content input[type="checkbox"], .workflow-content input[type="radio"] { accent-color: #087aff; }
+.workflow-step.future > .workflow-number { background: #7544ff; }
+.workflow-step.future > h3 { color: #5630b9; }
+.workflow-step.future .workflow-content { background: #f6f0ff; border-color: #e4d7ff; }
+.workflow-step.terminal { border-left-color: transparent; padding-bottom: 12px; }
+.workflow-step.terminal > .workflow-number { background: #008b50; }
+.workflow-step.terminal > h3 { color: #08653c; }
+.workflow-step.terminal .workflow-content { background: #f1fbf5; border-color: #d5ebde; }
+.workflow-step.terminal .check-line { margin: 0; color: #08653c; flex-wrap: wrap; }
+.workflow-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.workflow-actions > label { display: flex; align-items: start; gap: 8px; background: #fff; border: 1px solid #dfe6f1; border-radius: 7px; padding: 10px; cursor: pointer; color: #172448; }
+.workflow-actions > label.selected { border-color: #087aff; background: #eef6ff; box-shadow: 0 0 0 1px #087aff14; }
+.workflow-actions strong { font-size: 11px; display: block; }
+.workflow-actions small { font-size: 10px; display: block; line-height: 1.5; margin-top: 3px; color: #596988; }
+.readiness-banner { background: #fff7df; border: 1px solid #ffe0a0; border-radius: 7px; padding: 10px; margin-top: 12px; color: #855110; font-size: 11px; }
+.readiness-banner p { margin: 4px 0 8px; line-height: 1.5; }
+.readiness-banner > div { display: flex; flex-wrap: wrap; gap: 6px; }
+.readiness-banner button { font-size: 10px; padding: 6px 8px; }
+.pr-target-link { display: inline-flex; gap: 6px; align-items: center; color: #087aff; background: #eef6ff; border: 1px solid #c6dcff; border-radius: 5px; padding: 5px 9px; font-size: 11px; }
+.approval-path { margin: 0; color: #465778; font-size: 11px; line-height: 1.7; }
+.workflow-footer { justify-content: flex-end; }
+.workflow-editor .primary { background: #087aff; border-color: #087aff; color: #fff; }
+.future-notice { color: #1165c7; background: #eef6ff; padding: 9px 12px; border-radius: 6px; margin: 12px 0; font-size: 11px; }
+.workflow-chat { background: #fff7df; border: 1px solid #ffe0a0; border-radius: 8px; padding: 12px; margin-top: 12px; }
+@media (max-width: 820px) { .workflow-actions { grid-template-columns: 1fr; } }
+@media (min-width: 721px) and (max-width: 790px) {
+  .app, .app.sources-collapsed { grid-template-columns: 48px minmax(260px, 1fr) minmax(340px, 45vw); }
+}
+.pr-id-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.pr-id-row > .field { flex: 1; min-width: 120px; }
+.pr-id-row > .pr-target-link { margin-top: 12px; white-space: nowrap; }
+.workflow-content .field input[readonly] { background: #f0edf8; color: #7b7590; }
+/* Keep the workflow steps compact enough to read as a sequence. */
+.workflow-editor .polling-fields { display: grid; grid-template-columns: minmax(0, 1fr) minmax(100px, .75fr); column-gap: 10px; row-gap: 8px; }
+.workflow-editor .polling-type { grid-column: 1; grid-row: 1; }
+.workflow-editor .polling-interval { grid-column: 2; grid-row: 1; }
+.workflow-editor .pr-id-row, .workflow-editor .conditions, .workflow-editor .polling-author { grid-column: 1 / -1; }
+.workflow-editor .polling-cron { grid-column: 1 / -1; }
+.workflow-editor .polling-fields .field { margin: 0; gap: 4px; }
+.workflow-editor .polling-fields .conditions { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 10px; margin: 0; padding: 8px; }
+.workflow-editor .polling-fields .conditions label { margin: 0; line-height: 1.45; font-size: 11px; }
+.workflow-editor .polling-fields .conditions small { grid-column: 1 / -1; margin: 0; line-height: 1.5; }
+.workflow-editor .polling-author { margin: 0; color: #596988; font-size: 11px; }
+.workflow-editor .polling-author > summary { cursor: pointer; }
+.workflow-editor .polling-author > .field { margin-top: 6px; }
+.workflow-step { padding-bottom: 12px; }
+.workflow-step > h3 { margin-bottom: 7px; }
+.workflow-content { padding: 9px; }
+.workflow-content .field input, .workflow-content .field select { min-height: 32px; padding: 6px 8px; }
+.workflow-content .field textarea { padding: 6px 8px; }
+.workflow-content .form-section > summary { padding: 8px; }
+.workflow-content .pr-id-row > .pr-target-link { margin-top: 14px; }
+.workflow-content .note { margin-bottom: 8px; line-height: 1.5; }
+.workflow-editor > .note { line-height: 1.5; margin-bottom: 14px; }
+.workflow-content .readiness-banner { padding: 8px; margin-top: 8px; }
+.workflow-content .readiness-banner p { margin-bottom: 6px; }
+.workflow-content .workflow-actions > label { padding: 8px; }
+.workflow-editor .workflow-footer { position: sticky; bottom: -1px; z-index: 3; background: #fcfdf9f5; backdrop-filter: blur(8px); padding: 10px 0; border-top: 1px solid #dfe6f1; margin: 14px 0 0; }
+.source-footer { display: flex; gap: 10px; align-items: center; justify-content: space-between; }
+.source-footer .future-notice { margin: 0; padding: 7px 9px; }
+.detail-panel .detail-heading { padding-top: 15px; padding-bottom: 8px; }
+.detail-panel .detail-badges { margin-top: 7px; }
+.detail-panel .move-control .field { margin-bottom: 9px; }
+.detail-panel .tabs button { padding-top: 9px; padding-bottom: 9px; }
+.detail-panel .panel-body { padding-top: 16px; }
+.workflow-editor .initial-launch { margin-top: 12px; margin-bottom: 12px; }
+.workflow-editor .initial-launch > summary { padding: 9px 12px; }
+@media (max-width: 400px) { .workflow-editor .polling-fields .conditions { grid-template-columns: 1fr; } }
+/* Narrow kanban cards wrap controls instead of squeezing their labels. */
+.card-controls { display: flex; flex-wrap: wrap; gap: 4px 6px; }
+.card-controls .card-priority { flex: 0 0 auto; max-width: 100%; order: 0; }
+.card-controls .ticket-actions { flex: 1 1 85px; max-width: 100%; order: 1; }
+.card-controls .ticket-actions > a { min-width: 0; overflow-wrap: anywhere; }
+.card-controls .card-codex-link { flex: 1 1 100px; min-width: 0; max-width: 100%; order: 2; overflow-wrap: anywhere; }
+.card-controls .ticket-form { flex: 1 0 100%; width: 100%; max-width: 100%; order: 3; }

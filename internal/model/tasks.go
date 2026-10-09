@@ -111,13 +111,14 @@ type CreateTaskInput struct {
 	Polling     *TaskPolling `json:"polling,omitempty"`
 }
 type UpdateTaskInput struct {
-	TicketURL       *string    `json:"ticket_url,omitempty"`
-	Priority        *string    `json:"priority,omitempty"`
-	ExpectedVersion int64      `json:"expected_version"`
-	Title           string     `json:"title"`
-	Description     string     `json:"description"`
-	SourceURL       string     `json:"source_url"`
-	Config          TaskConfig `json:"config"`
+	Polling         *TaskPolling `json:"polling,omitempty"`
+	TicketURL       *string      `json:"ticket_url,omitempty"`
+	Priority        *string      `json:"priority,omitempty"`
+	ExpectedVersion int64        `json:"expected_version"`
+	Title           string       `json:"title"`
+	Description     string       `json:"description"`
+	SourceURL       string       `json:"source_url"`
+	Config          TaskConfig   `json:"config"`
 }
 type MoveTaskInput struct {
 	ExpectedVersion int64   `json:"expected_version"`

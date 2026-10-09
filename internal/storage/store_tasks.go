@@ -400,6 +400,32 @@ func (s *Store) UpdateTask(ctx context.Context, id string, in model.UpdateTaskIn
 		t.Priority = *in.Priority
 	}
 	t.Config = s.normalizeTaskConfig(in.Config)
+	if in.Polling != nil {
+		if (t.Polling != nil && t.Polling.Action.Type == model.PollingCreateTask) || in.Polling.Action.Type == model.PollingCreateTask {
+			return nil, fmt.Errorf("%w: source settings use the polling command", ErrTaskInvalid)
+		}
+		p := *in.Polling
+		if err := s.validateResolvedTaskPolling(p); err != nil {
+			return nil, err
+		}
+		if err := validatePolling(p); err != nil {
+			return nil, err
+		}
+		p.TaskID = id
+		p.Generation = 1
+		p.Cursor = json.RawMessage(`{}`)
+		if t.Polling != nil {
+			p.Generation = t.Polling.Generation + 1
+			if samePollingIdentity(*t.Polling, p) {
+				p.Cursor = t.Polling.Cursor
+			}
+		}
+		p.LastAttemptAt = ""
+		p.LastSuccessAt = ""
+		p.LastError = ""
+		p.NextCheckAt = ""
+		t.Polling = &p
+	}
 	if t.Column == model.TaskPollingColumn && t.Polling != nil {
 		if err := validateTaskPollingReadiness(t, *t.Polling); err != nil {
 			return nil, err
@@ -413,8 +439,20 @@ func (s *Store) UpdateTask(ctx context.Context, id string, in model.UpdateTaskIn
 	if err != nil {
 		return nil, err
 	}
-	if _, err := tx.ExecContext(ctx, `UPDATE task_polling SET generation=generation+1 WHERE task_id=?`, id); err != nil {
-		return nil, err
+	if in.Polling != nil {
+		if err := validatePolling(*t.Polling); err != nil {
+			return nil, err
+		}
+		if err := setPollingTx(ctx, tx, *t.Polling); err != nil {
+			return nil, err
+		}
+		if err := addTaskEventTx(ctx, tx, id, "polling_configured", map[string]any{"generation": t.Polling.Generation}); err != nil {
+			return nil, err
+		}
+	} else {
+		if _, err := tx.ExecContext(ctx, `UPDATE task_polling SET generation=generation+1 WHERE task_id=?`, id); err != nil {
+			return nil, err
+		}
 	}
 	if err := addTaskEventTx(ctx, tx, id, "edited", map[string]any{}); err != nil {
 		return nil, err

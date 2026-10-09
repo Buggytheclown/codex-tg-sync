@@ -1,19 +1,21 @@
-import { cloneElement, useEffect, useId, useState } from "react";
+import { cloneElement, useId, useState } from "react";
 import type { FormEvent, ReactElement } from "react";
-import type { Polling, TaskConfig, ExecutionSettings } from "./model";
-import { defaultPolling, pollingProblem } from "./model";
+import type { Polling, TaskConfig, ExecutionSettings, Task, TaskCard } from "./model";
+import { defaultPolling, parseThreadID } from "./model";
 export function Field({
   label,
   children,
   hint,
+  className = "",
 }: {
   label: string;
   children: ReactElement<{ id?: string; "aria-describedby"?: string }>;
   hint?: string;
+  className?: string;
 }) {
   const id = useId();
   return (
-    <div className="field">
+    <div className={`field ${className}`}>
       <label htmlFor={id}>{label}</label>
       {cloneElement(children, {
         id,
@@ -75,12 +77,14 @@ export function PollingFields({
   child = false,
   variables = true,
   sourceOnly = false,
+  workflow = false,
 }: {
   value: Polling;
   onChange: (p: Polling) => void;
   child?: boolean;
   variables?: boolean;
   sourceOnly?: boolean;
+  workflow?: boolean;
 }) {
   const cfg = (key: string, v: unknown) =>
     onChange({ ...value, config: { ...value.config, [key]: v } });
@@ -105,14 +109,14 @@ export function PollingFields({
     value.type === "pr_changes_source" ||
     value.type === "cron";
   return (
-    <>
-      <Field label="Polling type">
+    <div className="polling-fields">
+      <Field label="Polling type" className="polling-type">
         <select value={value.type} onChange={(e) => changeType(e.target.value)}>
           {sourceOnly && (
             <>
               <option value="pr_review_source">PR review</option>
               <option value="pr_changes_source">
-                My PRs requesting changes
+                PR feedback
               </option>
               <option value="cron">Cron schedule</option>
             </>
@@ -123,7 +127,7 @@ export function PollingFields({
       {value.type === "cron" ? (
         <>
           <Field
-            label="Cron schedule"
+            label="Cron schedule" className="polling-cron"
             hint="Daily or one weekday (0–6), for example 0 9 * * 1."
           >
             <input
@@ -133,7 +137,7 @@ export function PollingFields({
               placeholder="0 9 * * 1"
             />
           </Field>
-          <Field label="Timezone">
+          <Field label="Timezone" className="polling-timezone">
             <input
               required
               value={value.config.timezone || ""}
@@ -142,7 +146,7 @@ export function PollingFields({
             />
           </Field>
           <Field
-            label="Maximum lateness"
+            label="Maximum lateness" className="polling-lateness"
             hint="Optional. Skip an occurrence older than this duration."
           >
             <input
@@ -156,15 +160,20 @@ export function PollingFields({
         <>
           {value.type === "pr_wait" && (
             <>
-              <Field label="PR ID">
+              <div className="pr-id-row"><Field label="PR ID" hint={child && variables && value.config.pr_id === "{{pr_id}}" ? "From detected PR" : undefined}>
                 <input
                   required
+                  inputMode={child && variables ? undefined : "numeric"}
+                  pattern={child ? undefined : "[1-9][0-9]*"}
+                  readOnly={child && variables && value.config.pr_id === "{{pr_id}}"}
                   value={value.config.pr_id || ""}
                   onChange={(e) => cfg("pr_id", e.target.value)}
                   placeholder={child && variables ? "{{pr_id}}" : "12345678"}
                 />
               </Field>
-              <Field
+              {workflow && !child && /^[1-9]\d*$/.test(value.config.pr_id || "") && <a className="pr-target-link" href={`https://a.yandex-team.ru/review/${value.config.pr_id}`} target="_blank" rel="noreferrer" aria-label={`#${value.config.pr_id} Open PR`}>#{value.config.pr_id} ↗ <span>Open PR</span></a>}
+              </div>
+              {<details className="polling-author"><summary>PR author (optional)</summary><Field
                 label="PR author"
                 hint="Optional; resolved from Arcanum when omitted."
               >
@@ -173,8 +182,8 @@ export function PollingFields({
                   onChange={(e) => cfg("author", e.target.value)}
                   placeholder={child && variables ? "{{author}}" : "author"}
                 />
-              </Field>
-              <label className="check-line">
+              </Field></details>}
+              {!workflow && <><label className="check-line">
                 <input
                   type="checkbox"
                   checked={value.config.complete_on_merge === true}
@@ -182,9 +191,9 @@ export function PollingFields({
                 />
                 Move to Done when PR is merged
               </label>
-              <p className="note">A merged PR completes this task without requesting a continuation.</p>
+              <p className="note">A merged PR completes this task without requesting a continuation.</p></>}
               <fieldset className="conditions">
-                <legend>Wake when any condition becomes true</legend>
+                <legend>Conditions (ANY)</legend>
                 {Object.entries(conditionLabels).map(([key, label]) => (
                   <label key={key}>
                     <input
@@ -205,13 +214,12 @@ export function PollingFields({
                   </label>
                 ))}
                 <small>
-                  Conditions use ANY. An empty set of tracked comments never
-                  counts as answered or resolved.
+                  Any selected condition wakes this task. Empty issue sets do not count.
                 </small>
               </fieldset>
             </>
           )}
-          <Field label="Check every · seconds">
+          <Field label="Check every · seconds" className="polling-interval">
             <input
               type="number"
               min="10"
@@ -223,7 +231,7 @@ export function PollingFields({
           </Field>
         </>
       )}
-      {!sourceOnly && (
+      {!sourceOnly && !workflow && (
         <div>
           <Field label="Action">
             <select
@@ -239,100 +247,13 @@ export function PollingFields({
           </Field>
         </div>
       )}
-      {child && variables && (
+      {child && variables && !workflow && (
         <p className="note">
           Copied to each child as inactive settings. Use {"{{pr_id}}"} and{" "}
           {"{{author}}"} for values from the source event.
         </p>
       )}
-    </>
-  );
-}
-export function PollingForm({
-  initial,
-  expectedVersion,
-  onSave,
-  activate = false,
-  busy = false,
-}: {
-  initial?: Polling;
-  expectedVersion: number;
-  onSave: (p: Polling, activate: boolean, version: number) => Promise<{ version: number; polling?: Polling }>;
-  activate?: boolean;
-  busy?: boolean;
-}) {
-  const [value, setValue] = useState<Polling>(initial || defaultPolling());
-  const [version, setVersion] = useState(expectedVersion);
-  const [baseline, setBaseline] = useState(initial);
-  // Runtime health/cursor changes are not editable polling fields.
-  const editable = (p?: Polling) => JSON.stringify(p ? { type: p.type, mode: p.mode, config: p.config, action: p.action } : null);
-  useEffect(() => {
-    if (expectedVersion > version && editable(initial) === editable(baseline)) {
-      setBaseline(initial); setVersion(expectedVersion);
-    }
-  }, [initial, baseline, expectedVersion, version]);
-  const [error, setError] = useState("");
-  const submit = async (e: FormEvent, enable: boolean) => {
-    e.preventDefault();
-    if (busy) return;
-    if (version !== expectedVersion) {
-      setError("Reload latest settings before saving. Your polling draft has been preserved.");
-      return;
-    }
-    const problem = pollingProblem(value);
-    if (problem) {
-      setError(problem);
-      return;
-    }
-    setError("");
-    try {
-      const saved = await onSave(value, enable, version);
-      // A full reply can include a later concurrent edit after our commit.
-      if (saved.version > version + (enable ? 2 : 1) && editable(saved.polling) !== editable(value)) {
-        setVersion(version + 1);
-        setBaseline(value);
-        setError("This task changed after saving. Reload latest settings before saving again.");
-      } else {
-        setVersion(saved.version);
-        setBaseline(saved.polling);
-        setValue(current => editable(current) === editable(value) ? saved.polling || defaultPolling() : current);
-      }
-    } catch (err) {
-      setError((err as Error).message);
-    }
-  };
-  return (
-    <form onSubmit={(e) => void submit(e, activate)}>
-      <p className="note">⌘/Ctrl + Enter saves this section.</p>
-      {version !== expectedVersion && <>
-        <p className="note">This task changed. Reload latest settings before saving. Your polling draft has been preserved.</p>
-        <button type="button" disabled={busy} onClick={() => { setValue(initial || defaultPolling()); setBaseline(initial); setVersion(expectedVersion); setError(""); }}>Reload latest polling</button>
-      </>}
-      <PollingFields value={value} onChange={setValue} />
-      {error && (
-        <p role="alert" className="error-note">
-          {error}
-        </p>
-      )}
-      <div className="form-actions">
-        <button className="primary" disabled={busy}>
-          {activate ? "Save & activate" : "Save polling"}
-        </button>
-        {!activate && (
-          <button
-            type="button"
-            disabled={busy}
-            onClick={(e) => void submit(e, true)}
-          >
-            Save & activate
-          </button>
-        )}
-      </div>
-      <p className="note">
-        Only the Polling column activates these settings. TODO and Done pause
-        checks.
-      </p>
-    </form>
+    </div>
   );
 }
 export function ExecutionFields({
@@ -451,4 +372,24 @@ export function ExecutionFields({
       )}
     </div>
   );
+}
+
+export function TaskChatForm({ task, busy, onLink, inline = false, onCancel, submitLabel = "Link chat" }: { task: Task | TaskCard; busy: boolean; onLink: (threadID: string, version: number) => Promise<Task>; inline?: boolean; onCancel?: () => void; submitLabel?: string }) {
+  const [chat, setChat] = useState("");
+  const [error, setError] = useState("");
+  const submit = async (e: FormEvent) => {
+    e.preventDefault();
+    if (busy) return;
+    const threadID = parseThreadID(chat);
+    if (!threadID) { setError("Enter a Codex chat ID or codex://threads/ link."); return; }
+    try { await onLink(threadID, task.version); } catch (err) { setError((err as Error).message); }
+  };
+  return <form onSubmit={(e) => void submit(e)}>
+    <Field label={inline ? `Codex chat for ${task.title}` : "Codex chat"} hint="Paste an existing chat ID or codex://threads/ link.">
+      <input required autoFocus={inline} value={chat} onChange={(e) => setChat(e.target.value)} />
+    </Field>
+    {error && <p role="alert" className="error-note">{error}</p>}
+    <button disabled={busy}>{submitLabel}</button>
+    {inline && onCancel && <button type="button" disabled={busy} onClick={onCancel}>Cancel</button>}
+  </form>;
 }

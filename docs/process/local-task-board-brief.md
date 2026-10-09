@@ -22,7 +22,7 @@ Task drag moves support reordering inside a column and insertion between cards a
 
 Board refreshes and SSE use compact summaries; full task/source details load only on selection with loading/error/retry and stale-response guards. Same-column ordering is a dedicated local reorder-only transaction, independent of Sync and launch locks. Creation and column moves no longer wait for unrelated background Sync; column transitions still serialize with active external dispatch.
 
-Ordinary tasks expose Overview (editable title/description), Polling (source URL, prompts/execution, waiting conditions) and History. There is no separate Settings tab. Source URL is the provenance link; PR ID selects the monitored PR. Separate saves preserve the other section's fields/drafts and reject conflicting external edits.
+Ordinary tasks expose Overview (editable title/description), Polling (source URL, prompts/execution, waiting conditions) and History. There is no separate Settings tab. Source URL is the provenance link; PR ID selects the monitored PR. The workflow inspector uses one atomic save for prompts and waiting settings, preserving draft/version conflict protection; activation remains an explicit subsequent move. See [the workflow brief](task-workflow-ui-brief.md).
 
 Cmd+Enter saves the focused detail form. Overview can attach an existing Codex chat and shows its deep link; linked dashboard cards expose Open in Codex. Task priority low/normal/high is stored, edited in Overview and shown as a card icon, independently of manual order. Linking observes existing authority only and rejects ambiguous launch/binding conflicts.
 

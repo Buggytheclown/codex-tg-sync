@@ -1,0 +1,85 @@
+// @vitest-environment jsdom
+import { afterEach, expect, it, vi } from 'vitest';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { WorkflowForm } from './Workflow';
+import { defaultPolling, emptyConfig } from './model';
+import type { Task } from './model';
+const task = (extra: Partial<Task> = {}): Task => ({ id: 'task', title: 'Review', description: '', column: 'todo', position: 1, thread_id: '', source_url: 'https://example.com/provenance', source_key: '', version: 1, config: emptyConfig(), requests: [], created_at: '', updated_at: '', ...extra });
+const polling = () => ({ ...defaultPolling(), config: { ...defaultPolling().config, pr_id: '123' }, action: { type: 'resume_task' } });
+afterEach(cleanup);
+it('saves prompts without configuring waiting or requiring a PR', async () => {
+  const t = task(); const save = vi.fn(async (input) => ({ ...t, ...input, version: 2 }));
+  render(<WorkflowForm task={t} busy={false} onSave={save} onActivate={vi.fn()} onLink={vi.fn()} />);
+  fireEvent.change(screen.getByLabelText('Initial prompt'), { target: { value: 'Start here' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Save settings' }));
+  await waitFor(() => expect(save).toHaveBeenCalledOnce());
+  expect(save.mock.calls[0][0].config.initial_prompt).toBe('Start here');
+  expect(save.mock.calls[0][0]).not.toHaveProperty('polling');
+  expect(screen.queryByLabelText('PR ID')).toBeNull();
+});
+it('uses the configured PR target and saves config and waiting together before separate activation', async () => {
+  const t = task({ thread_id: 'chat', config: { ...emptyConfig(), continuation_prompt: 'Continue' }, polling: polling() });
+  const save = vi.fn(async (input) => ({ ...t, ...input, version: 2 })); const activate = vi.fn(async (saved) => ({ ...saved, version: 3, column: 'polling' as const }));
+  const view = render(<WorkflowForm task={t} busy={false} onSave={save} onActivate={activate} onLink={vi.fn()} />);
+  fireEvent.change(screen.getByLabelText('PR ID'), { target: { value: '456' } });
+  expect(screen.getByRole('link', { name: '#456 Open PR' }).getAttribute('href')).toBe('https://a.yandex-team.ru/review/456');
+  fireEvent.change(screen.getByLabelText('Continuation prompt'), { target: { value: 'Follow up' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Save settings' }));
+  await waitFor(() => expect(save).toHaveBeenCalledOnce());
+  expect(save.mock.calls[0][0]).toMatchObject({ expected_version: 1, polling: { config: { pr_id: '456' } }, config: { continuation_prompt: 'Follow up' } });
+  expect(activate).not.toHaveBeenCalled();
+  view.rerender(<WorkflowForm task={await save.mock.results[0].value} busy={false} onSave={save} onActivate={activate} onLink={vi.fn()} />);
+  fireEvent.click(screen.getByRole('button', { name: 'Activate waiting' }));
+  await waitFor(() => expect(activate).toHaveBeenCalledOnce());
+  expect(activate.mock.calls[0][0].version).toBe(2);
+});
+it('requires chat for continuation, offers attachment outside the settings form and switches to return action', async () => {
+  const t = task({ polling: polling() }); const link = vi.fn(async () => ({ ...t, thread_id: 'chat', version: 2 }));
+  render(<WorkflowForm task={t} busy={false} onSave={vi.fn()} onActivate={vi.fn()} onLink={link} />);
+  expect((screen.getByRole('button', { name: 'Activate waiting' }) as HTMLButtonElement).disabled).toBe(true);
+  fireEvent.click(screen.getByRole('button', { name: 'Link chat' }));
+  const chat = screen.getByLabelText('Codex chat for Review');
+  expect(chat.closest('form')!.parentElement!.closest('form')).toBeNull();
+  fireEvent.change(chat, { target: { value: 'chat' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Attach chat' }));
+  await waitFor(() => expect(link).toHaveBeenCalledWith('chat', 1));
+  fireEvent.click(screen.getByRole('button', { name: 'Use Return to Inbox' }));
+  expect((screen.getByLabelText('Continuation prompt') as HTMLTextAreaElement).required).toBe(false);
+  expect(screen.getByText('After event: Inbox. No approval or model launch.')).toBeTruthy();
+});
+it('retains and fences the workflow draft after external changes', async () => {
+  const t = task({ polling: polling() }); const save = vi.fn();
+  const view = render(<WorkflowForm task={t} busy={false} onSave={save} onActivate={vi.fn()} onLink={vi.fn()} />);
+  fireEvent.change(screen.getByLabelText('PR ID'), { target: { value: '456' } });
+  view.rerender(<WorkflowForm task={{ ...t, version: 2, config: { ...t.config, initial_prompt: 'External' } }} busy={false} onSave={save} onActivate={vi.fn()} onLink={vi.fn()} />);
+  fireEvent.click(screen.getByRole('button', { name: 'Save settings' }));
+  expect(save).not.toHaveBeenCalled();
+  expect((screen.getByLabelText('PR ID') as HTMLInputElement).value).toBe('456');
+  fireEvent.click(screen.getByRole('button', { name: 'Reload latest settings' }));
+  expect((screen.getByLabelText('PR ID') as HTMLInputElement).value).toBe('123');
+});
+it('saves an incomplete inactive continuation while activation stays blocked', async () => {
+  const t = task({ polling: polling() }); const save = vi.fn(async (input) => ({ ...t, ...input, version: 2 }));
+  render(<WorkflowForm task={t} busy={false} onSave={save} onActivate={vi.fn()} onLink={vi.fn()} />);
+  expect((screen.getByLabelText('Continuation prompt') as HTMLTextAreaElement).required).toBe(false);
+  fireEvent.change(screen.getByLabelText('PR ID'), { target: { value: '789' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Save settings' }));
+  await waitFor(() => expect(save).toHaveBeenCalledOnce());
+  expect(save.mock.calls[0][0]).toMatchObject({ polling: { config: { pr_id: '789' } }, config: { continuation_prompt: '' } });
+  expect((screen.getByRole('button', { name: 'Activate waiting' }) as HTMLButtonElement).disabled).toBe(true);
+});
+it('preserves workflow drafts while attaching the required chat', async () => {
+  const t = task({ polling: polling() }); const link = vi.fn(async () => ({ ...t, thread_id: 'chat', version: 2 }));
+  const view = render(<WorkflowForm task={t} busy={false} onSave={vi.fn()} onActivate={vi.fn()} onLink={link} />);
+  fireEvent.change(screen.getByLabelText('PR ID'), { target: { value: '456' } });
+  fireEvent.change(screen.getByLabelText('Continuation prompt'), { target: { value: 'My follow up' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Link chat' }));
+  fireEvent.change(screen.getByLabelText('Codex chat for Review'), { target: { value: 'chat' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Attach chat' }));
+  await waitFor(() => expect(link).toHaveBeenCalledOnce());
+  view.rerender(<WorkflowForm task={await link.mock.results[0].value} busy={false} onSave={vi.fn()} onActivate={vi.fn()} onLink={link} />);
+  expect((screen.getByLabelText('PR ID') as HTMLInputElement).value).toBe('456');
+  expect((screen.getByLabelText('Continuation prompt') as HTMLTextAreaElement).value).toBe('My follow up');
+  expect(screen.queryByText('Codex chat required')).toBeNull();
+  expect(screen.queryByRole('button', { name: 'Reload latest settings' })).toBeNull();
+});

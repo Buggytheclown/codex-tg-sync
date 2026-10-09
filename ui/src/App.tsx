@@ -17,11 +17,12 @@ import {
   safeExternalURL,
   parseThreadID,
 } from "./model";
-import { Field, PollingForm, PromptFields, conditionLabels } from "./forms";
+import { Field, PromptFields, conditionLabels, TaskChatForm } from "./forms";
 
 type Panel = "details" | "new-task" | "new-source" | "add-chat";
 import { SourceEditor } from "./SourceEditor";
 import { PollingDiagnostics } from "./PollingDiagnostics";
+import { WorkflowForm } from "./Workflow";
 import { TicketControl } from "./TicketControl";
 type Tab = "overview" | "polling" | "history";
 export function TaskCard({
@@ -803,7 +804,7 @@ export function App() {
                     "PUT",
                     { expected_version: expectedVersion, polling: p },
                   );
-                  return saved.version;
+                  return saved;
                 }}
                 onToggle={async (enabled, expectedVersion) => {
                   const moved = await mutate<Task>(
@@ -815,7 +816,7 @@ export function App() {
                       position: selected.position,
                     },
                   );
-                  return moved.version;
+                  return moved;
                 }}
               />
             </div>
@@ -879,47 +880,16 @@ export function App() {
                   onLink={(thread_id, expected_version) => mutate<Task>(`/v1/tasks/${selected.id}/chat`, "POST", { expected_version, thread_id })}
                   onTicket={(url, version) => saveTicket(selected, url, version)} />
               ) : tab === "polling" ? (
-                <>
-                  <h3>Task execution & source</h3>
-                  <TaskFieldsForm key={`execution-${selected.id}`} task={selected} busy={busy}
-                    onSave={(input) => mutate<Task>(`/v1/tasks/${selected.id}`, "PATCH", input)} />
-                  <h3>Waiting conditions</h3>
-                  <PollingDiagnostics task={selected} />
-                  <PollingForm
-                    key={`polling-${selected.id}`}
-                    initial={selected.polling}
-                    expectedVersion={selected.version}
-                    busy={busy}
-                    activate={activationRequested}
-                    onSave={async (p, activate, expectedVersion) => {
-                      const task = await mutate<Task>(
-                        `/v1/tasks/${selected.id}/polling`,
-                        "PUT",
-                        { expected_version: expectedVersion, polling: p },
-                      );
-                      let savedTask = task;
-                      if (activate) {
-                        const moved = await mutate<Task>(
-                          `/v1/tasks/${task.id}/move`,
-                          "POST",
-                          {
-                            expected_version: task.version,
-                            column: "polling",
-                            position: task.position,
-                          },
-                        );
-                        savedTask = moved;
-                      }
-                      setInfo(
-                        activate || task.column === "polling"
-                          ? "Waiting is active."
-                          : "Settings saved. Move to Polling to activate.",
-                      );
-                      setActivationRequested(false);
-                      return { version: savedTask.version, polling: savedTask.polling };
-                    }}
-                  />
-                </>
+                <WorkflowForm key={`workflow-${selected.id}`} task={selected} busy={busy} configure={activationRequested}
+                  onSave={input => mutate<Task>(`/v1/tasks/${selected.id}`, "PATCH", input)}
+                  onActivate={async task => {
+                    const moved = await mutate<Task>(`/v1/tasks/${task.id}/move`, "POST", {
+                      expected_version: task.version, column: "polling", position: task.position,
+                    });
+                    setActivationRequested(false);
+                    return moved;
+                  }}
+                  onLink={(thread_id, expected_version) => mutate<Task>(`/v1/tasks/${selected.id}/chat`, "POST", { expected_version, thread_id })} />
               ) : (
                 <History task={selected} />
               )}
@@ -958,9 +928,11 @@ export function App() {
         ) : panel === "new-source" ? (
           <NewSource
             busy={busy}
-            onSave={async (input) =>
-              created(await mutate<Task>("/v1/tasks", "POST", input))
-            }
+            onSave={async (input) => {
+              const task = await mutate<Task>("/v1/tasks", "POST", input);
+              created(task);
+              return task;
+            }}
           />
         ) : panel === "add-chat" ? (
           <AddChat
@@ -995,7 +967,7 @@ function ExternalLink({ url, label }: { url: string; label: string }) {
 function Overview({ task, busy, onSave, onLink, onTicket }: { task: Task; busy: boolean; onSave: (input: unknown) => Promise<Task>; onLink: (threadID: string, version: number) => Promise<Task>; onTicket: (url: string, version: number) => Promise<Card> }) {
   return (
     <div className="overview">
-      <TaskFieldsForm task={task} busy={busy} onSave={onSave} overview />
+      <OverviewForm task={task} busy={busy} onSave={onSave} />
       {task.thread_id ? (
         <a className="detail-link codex-link" href={codexURL(task.thread_id)}>
           Open in Codex <span>↗</span>
@@ -1044,25 +1016,6 @@ function Overview({ task, busy, onSave, onLink, onTicket }: { task: Task; busy: 
     </div>
   );
 }
-function TaskChatForm({ task, busy, onLink, inline = false, onCancel }: { task: Task | Card; busy: boolean; onLink: (threadID: string, version: number) => Promise<Task>; inline?: boolean; onCancel?: () => void }) {
-  const [chat, setChat] = useState("");
-  const [error, setError] = useState("");
-  const submit = async (e: FormEvent) => {
-    e.preventDefault();
-    if (busy) return;
-    const threadID = parseThreadID(chat);
-    if (!threadID) { setError("Enter a Codex chat ID or codex://threads/ link."); return; }
-    try { await onLink(threadID, task.version); } catch (err) { setError((err as Error).message); }
-  };
-  return <form onSubmit={(e) => void submit(e)}>
-    <Field label={inline ? `Codex chat for ${task.title}` : "Codex chat"} hint="Paste an existing chat ID or codex://threads/ link.">
-      <input required autoFocus={inline} value={chat} onChange={(e) => setChat(e.target.value)} />
-    </Field>
-    {error && <p role="alert" className="error-note">{error}</p>}
-    <button disabled={busy}>Link chat</button>
-    {inline && onCancel && <button type="button" disabled={busy} onClick={onCancel}>Cancel</button>}
-  </form>;
-}
 function PriorityField({ value, onChange }: { value: Priority; onChange: (priority: Priority) => void }) {
   return <Field label="Priority"><select value={value} onChange={(e) => onChange(e.target.value as Priority)}>
     <option value="low">↓ Low</option><option value="normal">— Normal</option><option value="high">↑ High</option>
@@ -1096,54 +1049,34 @@ function RequestHistory({ task }: { task: Task }) {
     </section>
   );
 }
-function TaskFieldsForm({ task, busy, onSave, overview = false }: {
-  task: Task; busy: boolean; onSave: (input: unknown) => Promise<Task>; overview?: boolean;
+function OverviewForm({ task, busy, onSave }: {
+  task: Task; busy: boolean; onSave: (input: unknown) => Promise<Task>;
 }) {
   const [baseline, setBaseline] = useState(task);
   const [title, setTitle] = useState(task.title);
   const [description, setDescription] = useState(task.description);
   const [priority, setPriority] = useState<Priority>(task.priority || "normal");
-  const [sourceURL, setSourceURL] = useState(task.source_url);
-  const [config, setConfig] = useState(task.config);
   const [message, setMessage] = useState("");
   useEffect(() => {
     const priorityUnedited = priority === (baseline.priority || "normal");
-    const unchanged = overview
-      ? task.title === baseline.title && task.description === baseline.description &&
-        ((task.priority || "normal") === (baseline.priority || "normal") || priorityUnedited)
-      : task.source_url === baseline.source_url && JSON.stringify(task.config) === JSON.stringify(baseline.config);
+    const unchanged = task.title === baseline.title && task.description === baseline.description &&
+      ((task.priority || "normal") === (baseline.priority || "normal") || priorityUnedited);
     if (unchanged && task.version > baseline.version) {
-      if (overview && priorityUnedited) setPriority(task.priority || "normal");
+      if (priorityUnedited) setPriority(task.priority || "normal");
       setBaseline(task);
     }
-  }, [task, baseline, overview, priority]);
+  }, [task, baseline, priority]);
   const stale = baseline.version !== task.version;
-  const reload = () => {
-    setBaseline(task); setTitle(task.title); setDescription(task.description); setPriority(task.priority || "normal");
-    setSourceURL(task.source_url); setConfig(task.config); setMessage("");
-  };
+  const reload = () => { setBaseline(task); setTitle(task.title); setDescription(task.description); setPriority(task.priority || "normal"); setMessage(""); };
   const save = async (e: FormEvent) => {
     e.preventDefault();
     if (busy) return;
     if (stale) { setMessage("Reload latest settings before saving. Your draft has been preserved."); return; }
     try {
-      const updated = await onSave({ expected_version: baseline.version,
-        title: overview ? title : baseline.title,
-        description: overview ? description : baseline.description,
-        priority: overview ? priority : baseline.priority || "normal",
-        source_url: overview ? baseline.source_url : sourceURL,
-        config: overview ? baseline.config : config });
-      const submitted = { ...baseline, title: overview ? title : baseline.title,
-        description: overview ? description : baseline.description,
-        priority: overview ? priority : baseline.priority || "normal",
-        source_url: overview ? baseline.source_url : sourceURL,
-        config: overview ? baseline.config : config };
-      const sameOwned = overview
-        ? updated.title === submitted.title && updated.description === submitted.description && (updated.priority || "normal") === submitted.priority
-        : updated.source_url === submitted.source_url && JSON.stringify(updated.config) === JSON.stringify(submitted.config);
+      const updated = await onSave({ expected_version: baseline.version, title, description, priority, source_url: baseline.source_url, config: baseline.config });
+      const submitted = { ...baseline, title, description, priority };
+      const sameOwned = updated.title === title && updated.description === description && (updated.priority || "normal") === priority;
       if (updated.version > baseline.version + 1 && !sameOwned) {
-        // The backend reads the full task after committing: another editor may
-        // already have changed it. Keep our draft fenced at our commit version.
         setBaseline({ ...submitted, version: baseline.version + 1 });
         setMessage("This task changed after saving. Reload latest settings before saving again.");
       } else {
@@ -1151,27 +1084,19 @@ function TaskFieldsForm({ task, busy, onSave, overview = false }: {
         setTitle(current => current === title ? updated.title : current);
         setDescription(current => current === description ? updated.description : current);
         setPriority(current => current === priority ? updated.priority || "normal" : current);
-        setSourceURL(current => current === sourceURL ? updated.source_url : current);
-        setConfig(current => JSON.stringify(current) === JSON.stringify(config) ? updated.config : current);
-        setMessage(overview ? "Overview saved." : "Task execution saved.");
+        setMessage("Overview saved.");
       }
     } catch (e) { setMessage((e as Error).message); }
   };
-  return <form onSubmit={(e) => void save(e)}>
+  return <form onSubmit={e => void save(e)}>
     <p className="note">⌘/Ctrl + Enter saves this section.</p>
-    {overview ? <>
-      <Field label="Title"><input required value={title} onChange={(e) => setTitle(e.target.value)} /></Field>
-      <Field label="Description"><textarea rows={3} value={description} onChange={(e) => setDescription(e.target.value)} /></Field>
-      <PriorityField value={priority} onChange={setPriority} />
-    </> : <>
-      <p className="note">Changes apply to this task. Pending launch requests keep their frozen prompt and settings.</p>
-      <Field label="Source URL" hint="Link to the task’s source. PR waiting uses the PR ID below."><input type="url" value={sourceURL} onChange={(e) => setSourceURL(e.target.value)} /></Field>
-      <PromptFields value={config} onChange={setConfig} />
-    </>}
+    <Field label="Title"><input required value={title} onChange={e => setTitle(e.target.value)} /></Field>
+    <Field label="Description"><textarea rows={3} value={description} onChange={e => setDescription(e.target.value)} /></Field>
+    <PriorityField value={priority} onChange={setPriority} />
     {stale && <p className="note">This task changed. Reload latest settings before saving. Your draft has been preserved.</p>}
-    {stale && <button type="button" disabled={busy} onClick={reload}>Reload latest {overview ? "overview" : "task execution"}</button>}
+    {stale && <button type="button" disabled={busy} onClick={reload}>Reload latest overview</button>}
     {message && <p role="status" className="info-note">{message}</p>}
-    <button className="primary" disabled={busy}>{overview ? "Save overview" : "Save task execution"}</button>
+    <button className="primary" disabled={busy}>Save overview</button>
   </form>;
 }
 function History({ task }: { task: Task }) {
@@ -1271,7 +1196,7 @@ function NewSource({
   onSave,
 }: {
   busy: boolean;
-  onSave: (input: unknown) => Promise<void>;
+  onSave: (input: unknown) => Promise<Task>;
 }) {
   return (
     <div className="panel-body">
@@ -1279,13 +1204,12 @@ function NewSource({
       <SourceEditor
         busy={busy}
         onSave={async (polling, enabled, _version, title) => {
-          await onSave({
+          return onSave({
             title,
             column: enabled ? "polling" : "todo",
             config: emptyConfig(),
             polling,
           });
-          return 1;
         }}
       />
     </div>
