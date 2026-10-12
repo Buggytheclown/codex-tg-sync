@@ -77,3 +77,11 @@ Open the dev server using that exact origin. No wildcard CORS is used.
 `npm test` covers these boundaries and the PR condition validation. The Go
 controlapi suite checks Host/Origin/JSON admission, conflicts, SSE invalidation,
 and missing static/API assets.
+
+## Appearance
+
+The board uses an Arcanum-inspired dark theme with gray-purple surfaces, blue
+links and purple primary actions. Shared color tokens in `src/style.css` cover
+the board, inspector, forms, diagnostics and workflow states. YS Text loads from
+`yastatic.net`; if the font CDN is unavailable, the system sans-serif fallback
+keeps the board usable. Native controls also follow the dark color scheme.
