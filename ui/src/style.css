@@ -31,7 +31,6 @@
   color: var(--text);
   background: var(--background);
   --background: #2d2c33;
-  --sidebar: #38373e;
   --surface: #38373e;
   --soft: #ffffff1a;
   --hover: #ffffff1a;
@@ -118,7 +117,7 @@ small { font-size: 12px; line-height: 1.6; color: var(--muted); }
 .connection-dot { height: 6px; width: 6px; border-radius: 50%; background: var(--muted); display: inline-block; flex-shrink: 0; }
 .connection-dot.live { background: var(--positive); box-shadow: 0 0 0 3px var(--positive-soft); }
 .local-label { margin-left: 20px; color: var(--muted); }
-.sources { border-right: 1px solid var(--border); background: var(--sidebar); padding: 22px 12px; display: flex; flex-direction: column; min-height: 0; }
+.sources { border-right: 1px solid var(--border); background: var(--background); padding: 22px 12px; display: flex; flex-direction: column; min-height: 0; }
 .sources-heading { display: flex; align-items: center; justify-content: space-between; min-height: 30px; }
 .sources-heading h2 { font-size: 13px; font-weight: 500; }
 .sidebar-note { font-size: 12px; color: var(--muted); line-height: 1.6; margin: 6px 0 16px; }
@@ -153,7 +152,7 @@ small { font-size: 12px; line-height: 1.6; color: var(--muted); }
 .search kbd { font-family: inherit; font-size: 10px; color: var(--muted); }
 .board-columns { display: grid; grid-template-columns: repeat(var(--board-column-count, 4), minmax(180px, 1fr)); gap: 12px; flex: 1 0 auto; min-height: 380px; }
 .board-columns.done-hidden { --board-column-count: 3; }
-.column { display: flex; flex-direction: column; min-width: 0; border: 1px solid var(--border); border-radius: 8px; padding: 14px 9px 8px; background: var(--background); }
+.column { display: flex; flex-direction: column; min-width: 0; border: 0; border-radius: 8px; padding: 14px 9px 8px; background: var(--surface); }
 .column-heading { display: flex; flex-direction: column; gap: 5px; margin: 0 3px 14px; }
 .column-heading h2 { font-size: 14px; display: flex; align-items: center; gap: 7px; font-weight: 500; }
 .column-dot { height: 7px; width: 7px; border-radius: 50%; background: var(--action); }
