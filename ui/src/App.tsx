@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useRef, useState } from "react";
-import type { FormEvent } from "react";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
+import type { FormEvent, ReactNode } from "react";
 import { api, APIError } from "./api";
 import { compareTasks, placeTask } from "./taskOrder";
 import type { Column, Polling, Priority, Task, TaskCard as Card, TaskEvent } from "./model";
@@ -958,7 +958,8 @@ export function App() {
       </main>
       <aside ref={detailPanel} className={`detail-panel${panel === "details" && (detailDismissed || !selectedCard) ? " detail-panel-empty" : ""}`} aria-label="Task details and settings" onKeyDown={(e) => {
         if (e.key !== "Enter" || !(e.metaKey || e.ctrlKey) || e.repeat || e.nativeEvent.isComposing) return;
-        const form = (e.target as HTMLElement).closest("form");
+        const target = e.target as HTMLElement;
+        const form = target.closest("form") || (target instanceof HTMLTextAreaElement ? target.form : null);
         if (!form) return;
         if (form.matches(".overview-form")) {
           e.preventDefault();
@@ -1039,9 +1040,19 @@ export function App() {
             </div>
           </>
         ) : panel === "details" && selected ? (
-          <>
+          <OverviewForm key={selected.id} task={selected} busy={busy}
+            drafts={overviewDrafts.current}
+            onFailure={message => {
+              if (message) { setOverviewFailureID(selected.id); setError(`${selected.title}: ${message}`); }
+              else {
+                setOverviewFailureID(current => current === selected.id ? "" : current);
+                setError(current => current.startsWith(`${selected.title}: `) ? "" : current);
+              }
+            }}
+            onSave={input => mutate<Task>(`/v1/tasks/${selected.id}`, "PATCH", input, true)}>
+          {({ title, form, titleText }) => <>
             <div className="detail-heading">
-              {tab !== "overview" && <h2>{selected.title}</h2>}
+              <h2 className="detail-title" aria-label={titleText}>{tab === "overview" ? title : titleText}</h2>
               <div className="detail-badges">
                 <span className="pill">{labels[selected.column]}</span>
                 {executionLabel(selected) && (
@@ -1092,16 +1103,7 @@ export function App() {
             )}
             <div className="panel-body">
               {tab === "overview" ? (
-                <Overview key={selected.id} task={selected} busy={busy}
-                  drafts={overviewDrafts.current}
-                  onFailure={message => {
-                    if (message) { setOverviewFailureID(selected.id); setError(`${selected.title}: ${message}`); }
-                    else {
-                      setOverviewFailureID(current => current === selected.id ? "" : current);
-                      setError(current => current.startsWith(`${selected.title}: `) ? "" : current);
-                    }
-                  }}
-                  onSave={(input) => mutate<Task>(`/v1/tasks/${selected.id}`, "PATCH", input, true)}
+                <Overview task={selected} busy={busy} form={form}
                   onLink={(thread_id, expected_version) => mutate<Task>(`/v1/tasks/${selected.id}/chat`, "POST", { expected_version, thread_id })}
                   onTicket={(url, version) => saveTicket(selected, url, version)} />
               ) : tab === "polling" ? (
@@ -1119,7 +1121,8 @@ export function App() {
                 <History task={selected} />
               )}
             </div>
-          </>
+          </>}
+          </OverviewForm>
         ) : panel === "details" ? (
           !detailDismissed && <DetailPlaceholder />
         ) : panel === "new-task" ? (
@@ -1169,10 +1172,10 @@ function ExternalLink({ url, label }: { url: string; label: string }) {
     </span>
   );
 }
-function Overview({ task, busy, onSave, onLink, onTicket, drafts, onFailure }: { task: Task; busy: boolean; onSave: (input: unknown) => Promise<Task>; onLink: (threadID: string, version: number) => Promise<Task>; onTicket: (url: string, version: number) => Promise<Card>; drafts: Map<string, OverviewDraft>; onFailure: (message: string) => void }) {
+function Overview({ task, busy, form, onLink, onTicket }: { task: Task; busy: boolean; form: ReactNode; onLink: (threadID: string, version: number) => Promise<Task>; onTicket: (url: string, version: number) => Promise<Card> }) {
   return (
     <div className="overview">
-      <OverviewForm task={task} busy={busy} onSave={onSave} drafts={drafts} onFailure={onFailure} />
+      {form}
       <section className="overview-connections" aria-label="Connections">
       <h3>Connections</h3>
       <div className="overview-links">
@@ -1233,10 +1236,12 @@ function RequestHistory({ task }: { task: Task }) {
     </section>
   );
 }
-function OverviewForm({ task, busy, onSave, drafts, onFailure }: {
+function OverviewForm({ task, busy, onSave, drafts, onFailure, children }: {
   task: Task; busy: boolean; onSave: (input: unknown) => Promise<Task>;
   drafts: Map<string, OverviewDraft>; onFailure: (message: string) => void;
+  children: (editor: { title: ReactNode; form: ReactNode; titleText: string }) => ReactNode;
 }) {
+  const formID = useId();
   const [draft] = useState(() => {
     const existing = drafts.get(task.id);
     if (existing) return existing;
@@ -1257,20 +1262,29 @@ function OverviewForm({ task, busy, onSave, drafts, onFailure }: {
     draft.values = { ...draft.values, ...values };
     redraw(value => value + 1);
   };
-  return <form className="overview-form" aria-busy={!!draft.pending}
+  const composition = {
+    onCompositionStart: () => { draft.composing = true; },
+    onCompositionEnd: () => { draft.composing = false; void draft.flush(); },
+  };
+  const titleEditor = <span className="overview-title">
+    <span className="overview-title-size" aria-hidden="true">{title || "\u00a0"}</span>
+    <textarea aria-label="Title" form={formID} required rows={1} value={title}
+      onChange={e => change({ title: e.target.value.replace(/[\r\n]/g, "") })}
+      onBlur={() => draft.enqueue()}
+      onInvalid={() => draft.reject("Enter a title before saving Overview.")}
+      {...composition}
+      onKeyDown={e => {
+        if (e.key !== "Enter" || e.metaKey || e.ctrlKey || e.repeat || e.nativeEvent.isComposing) return;
+        e.preventDefault();
+        e.currentTarget.form?.requestSubmit();
+      }} />
+  </span>;
+  const form = <form id={formID} className="overview-form" aria-busy={!!draft.pending}
     onSubmit={e => { e.preventDefault(); draft.enqueue(true); }}
     onBlur={e => { if (e.target.matches("input, textarea, select")) draft.enqueue(); }}
     onInvalid={() => draft.reject("Enter a title before saving Overview.")}
-    onCompositionStart={() => { draft.composing = true; }}
-    onCompositionEnd={() => { draft.composing = false; void draft.flush(); }}>
-    <div className="overview-heading">
-      <Field label="Title" className="overview-title"><textarea required rows={title.length > 70 ? 3 : 2} value={title}
-        onChange={e => change({ title: e.target.value.replace(/[\r\n]/g, "") })}
-        onKeyDown={e => {
-          if (e.key !== "Enter" || e.metaKey || e.ctrlKey || e.repeat || e.nativeEvent.isComposing) return;
-          e.preventDefault();
-          e.currentTarget.form?.requestSubmit();
-        }} /></Field>
+    {...composition}>
+    <div className="overview-priority">
       <PriorityField value={priority} onChange={priority => change({ priority })} />
     </div>
     <Field label="Description" className="overview-description"><textarea rows={3} value={description} onChange={e => change({ description: e.target.value })} /></Field>
@@ -1282,6 +1296,7 @@ function OverviewForm({ task, busy, onSave, drafts, onFailure }: {
       <p className="note">Changes save when a field loses focus.</p>
     </div>
   </form>;
+  return children({ title: titleEditor, form, titleText: title });
 }
 function History({ task }: { task: Task }) {
   const [events, setEvents] = useState<TaskEvent[]>([]),

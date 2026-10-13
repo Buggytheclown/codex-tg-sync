@@ -31,6 +31,32 @@ const makeTask = (extra: Partial<Task> = {}): Task => ({
   ...extra,
 });
 let rows: Task[], calls: { path: string; method: string; body: unknown }[];
+it("places the editable title in the shared heading above all three tabs", async () => {
+  window.history.replaceState(null, "", "/?task=task-1");
+  render(<App />);
+  const title = await screen.findByLabelText("Title") as HTMLTextAreaElement;
+  const heading = title.closest(".detail-heading");
+  expect(heading).not.toBeNull();
+  expect(title.form).toBe((screen.getByLabelText("Description") as HTMLTextAreaElement).form);
+  for (const tab of ["Polling", "History", "Overview"]) {
+    fireEvent.click(screen.getByRole("tab", { name: tab }));
+    const current = screen.getByRole("heading", { name: rows[0].title });
+    expect(current.closest(".detail-heading")).toBe(heading);
+  }
+  expect(calls.every(call => call.method === "GET")).toBe(true);
+});
+it.each(["blur", "Enter", "CmdEnter"])("saves the header title with %s through the same Overview form", async trigger => {
+  window.history.replaceState(null, "", "/?task=task-1");
+  render(<App />);
+  const title = await screen.findByLabelText("Title");
+  expect(title.closest(".detail-heading")).not.toBeNull();
+  fireEvent.change(title, { target: { value: "Edited in the header" } });
+  if (trigger === "blur") fireEvent.blur(title);
+  else fireEvent.keyDown(title, { key: "Enter", metaKey: trigger === "CmdEnter" });
+  await waitFor(() => expect(rows[0].title).toBe("Edited in the header"));
+  expect(calls.filter(call => call.method === "PATCH")).toHaveLength(1);
+  expect(rows[0].description).toBe("Check comments");
+});
 it("shows a noninteractive empty inspector when no card is selected", async () => {
   render(<App />);
   await screen.findByText("Select a card to see its details.");
@@ -438,7 +464,7 @@ it("keeps Overview a native editable brief while polling diagnostics and frozen 
   expect(title.tagName).toBe("TEXTAREA");
   expect(detail.getByLabelText("Description").tagName).toBe("TEXTAREA");
   expect((detail.getByLabelText("Description") as HTMLTextAreaElement).value).toBe("First line\nSecond line");
-  expect(detail.queryByRole("heading", { name: rows[0].title })).toBeNull();
+  expect(detail.getByRole("heading", { name: rows[0].title })).toBeTruthy();
   for (const label of ["Waiting conditions · ANY", "Next check", "Last attempt", "Last success", "Created", "Updated", "Chat read", "Launch requests", "Frozen prompt"]) {
     expect(detail.queryByText(label)).toBeNull();
   }

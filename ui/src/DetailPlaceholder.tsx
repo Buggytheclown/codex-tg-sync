@@ -5,7 +5,10 @@ function Bar({ width, height = 10 }: { width: string; height?: number }) {
 export function DetailPlaceholder() {
   return <div className="detail-placeholder">
     <div className="placeholder-layout" aria-hidden="true">
-      <div className="detail-heading"><Bar width="48px" height={22} /></div>
+      <div className="detail-heading">
+        <div className="placeholder-title"><Bar width="94%" height={20} /><Bar width="64%" height={20} /></div>
+        <div className="detail-badges"><Bar width="48px" height={22} /></div>
+      </div>
       <div className="placeholder-move">
         <span className="placeholder-label">Move task</span>
         <div className="placeholder-control placeholder-select"><Bar width="65px" height={9} /><span className="placeholder-chevron" /></div>
@@ -14,15 +17,9 @@ export function DetailPlaceholder() {
         <span>Overview</span><span>Polling</span><span>History</span>
       </div>
       <div className="panel-body">
-        <div className="placeholder-heading">
-          <div>
-            <span className="placeholder-label">Title</span>
-            <div className="placeholder-title"><Bar width="94%" height={20} /><Bar width="64%" height={20} /></div>
-          </div>
-          <div>
+        <div className="placeholder-priority-field">
             <span className="placeholder-label">Priority</span>
             <div className="placeholder-control placeholder-priority"><Bar width="46px" height={9} /></div>
-          </div>
         </div>
         <div className="placeholder-description">
           <span className="placeholder-label">Description</span>

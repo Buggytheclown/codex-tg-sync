@@ -230,7 +230,8 @@ small { font-size: 12px; line-height: 1.6; color: var(--muted); }
 .panel-body > h2 { font-size: 22px; letter-spacing: -.4px; font-weight: 500; margin-bottom: 8px; }
 .panel-body > p.note { margin-bottom: 20px; }
 .detail-heading { padding: 16px 22px 10px; }
-.detail-heading h2 { font-size: 20px; line-height: 1.45; font-weight: 500; letter-spacing: -.3px; overflow-wrap: anywhere; }
+.detail-heading h2 { font-size: 20px; line-height: 1.45; font-weight: 500; letter-spacing: -.3px; overflow-wrap: anywhere; white-space: pre-wrap; }
+.detail-title { min-height: 1.45em; }
 .detail-badges { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 7px; }
 .pill { font-size: 11px; color: var(--muted); background: var(--soft); border: 0; border-radius: 5px; padding: 4px 8px; }
 .move-control { padding: 0 22px; }
@@ -250,7 +251,7 @@ small { font-size: 12px; line-height: 1.6; color: var(--muted); }
 .detail-placeholder { --placeholder-fill: #ffffff0b; --placeholder-label: #ffffff40; }
 .detail-placeholder * { animation: none; transition: none; }
 .placeholder-layout { pointer-events: none; }
-.detail-placeholder .detail-heading { padding: 23px 22px 10px; }
+.detail-placeholder .detail-heading { padding: 16px 22px 10px; }
 .placeholder-bar { display: block; flex-shrink: 0; border-radius: 4px; background: var(--placeholder-fill); }
 .placeholder-label { display: block; font-size: 12px; font-weight: 500; line-height: 18px; color: var(--placeholder-label); }
 .placeholder-move { padding: 0 22px 10px; display: flex; align-items: center; justify-content: space-between; gap: 12px; }
@@ -260,9 +261,8 @@ small { font-size: 12px; line-height: 1.6; color: var(--muted); }
 .placeholder-tabs { padding: 0 22px 10px; display: flex; gap: 4px; }
 .placeholder-tabs > span { height: 30px; display: flex; align-items: center; padding: 5px 13px; font-size: 13px; color: var(--placeholder-label); border-radius: 5px; }
 .placeholder-tabs > span:first-child { background: #ffffff05; }
-.placeholder-heading { display: grid; grid-template-columns: minmax(0, 1fr) 106px; gap: 14px; }
-.placeholder-heading > div:last-child { padding-left: 12px; }
-.placeholder-title { padding: 14px 5px 0; display: flex; flex-direction: column; gap: 11px; min-height: 91px; }
+.placeholder-priority-field { width: 145px; }
+.placeholder-title { display: flex; flex-direction: column; gap: 9px; min-height: 58px; }
 .placeholder-priority { height: 36px; margin-top: 6px; }
 .placeholder-description { margin-top: 16px; }
 .placeholder-lines { display: flex; flex-direction: column; gap: 13px; min-height: 91px; margin-top: 16px; padding-left: 5px; }
@@ -300,9 +300,11 @@ small { font-size: 12px; line-height: 1.6; color: var(--muted); }
 .error-banner button { flex-shrink: 0; }
 .overview { display: flex; flex-direction: column; }
 .overview-form { display: contents; }
-.overview-heading { display: grid; grid-template-columns: minmax(0, 1fr) 106px; gap: 14px; order: 0; }
-.overview-heading > .field:not(.overview-title) { border-left: 1px solid var(--border); padding-left: 12px; }
-.overview-title textarea { font-size: 22px; line-height: 1.35; font-weight: 500; letter-spacing: 0; resize: vertical; padding: 4px 5px; border-color: transparent; background: transparent; }
+.overview-priority { width: 145px; order: 0; }
+.overview-title { display: grid; }
+.overview-title-size, .overview-title textarea { grid-area: 1 / 1; font: inherit; letter-spacing: inherit; white-space: pre-wrap; overflow-wrap: anywhere; }
+.overview-title-size { visibility: hidden; min-height: 1.45em; }
+.overview-title textarea { display: block; width: 100%; height: 100%; min-height: 0; margin: 0; padding: 0; border: 0; border-radius: 3px; resize: none; overflow: hidden; color: var(--text); background: transparent; }
 .overview-title textarea:hover, .overview-description textarea:hover { border-color: var(--border); background: var(--hover); }
 .overview-title textarea:focus, .overview-description textarea:focus { border-color: var(--blue); background: var(--surface); }
 .overview-description { order: 0; }
@@ -474,8 +476,6 @@ small { font-size: 12px; line-height: 1.6; color: var(--muted); }
 }
 @media (max-width: 420px) {
   .board-columns { grid-template-columns: minmax(0, 1fr); }
-  .overview-heading { grid-template-columns: minmax(0, 1fr) 96px; gap: 9px; }
-  .overview-title textarea { font-size: 20px; }
   .field-pair { grid-template-columns: 1fr; gap: 0; }
   .workflow-editor .polling-fields .conditions { grid-template-columns: 1fr; }
 }
