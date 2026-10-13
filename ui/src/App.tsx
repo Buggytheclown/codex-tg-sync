@@ -26,6 +26,7 @@ type Panel = "details" | "new-task" | "new-source" | "add-chat";
 import { SourceEditor } from "./SourceEditor";
 import { WorkflowForm } from "./Workflow";
 import { TicketControl } from "./TicketControl";
+import { PRControl } from "./PRControl";
 import { DetailPlaceholder } from "./DetailPlaceholder";
 type Tab = "overview" | "polling" | "history";
 type OverviewValues = { title: string; description: string; priority: Priority };
@@ -173,6 +174,7 @@ export function TaskCard({
   onSelect,
   onPriority,
   onTicket,
+  onPR,
   onLink,
   controlsDisabled = false,
   grabbed = false,
@@ -187,6 +189,7 @@ export function TaskCard({
   onSelect: () => void;
   onPriority?: (priority: Priority) => Promise<void>;
   onTicket?: (url: string, version: number) => Promise<Card>;
+  onPR?: (url: string, version: number) => Promise<Task>;
   onLink?: (threadID: string, version: number) => Promise<Task>;
   controlsDisabled?: boolean;
   grabbed?: boolean;
@@ -254,7 +257,7 @@ export function TaskCard({
         <option value="low">↓ Low</option><option value="normal">— Normal</option><option value="high">↑ High</option>
       </select>
     <div className="card-controls">
-    <PRSourceLink url={task.source_url} />
+    <PRControl task={task} busy={controlsDisabled} onSave={onPR} />
     {onTicket && <TicketControl task={task} busy={controlsDisabled} onSave={onTicket} />}
       <CodexConnection task={task} linking={linking} disabled={controlsDisabled || !onLink} onToggle={() => setLinking(!linking)} />
     </div>
@@ -544,6 +547,34 @@ export function App() {
         return { ...old, ticket_url: saved.ticket_url, version: saved.version, updated_at: saved.updated_at };
       });
       setTasks(current => current.map(card => card.id === saved.id && card.version <= saved.version ? saved : card));
+      await refresh();
+      return saved;
+    } catch (err) {
+      if (err instanceof APIError && err.status === 409) void refresh();
+      throw err;
+    } finally { if (mounted.current) setBusy(false); }
+  };
+  const savePR = async (task: Card | Task, sourceURL: string, expectedVersion: number): Promise<Task> => {
+    if (busy || pendingMove.current || dragRef.current) throw new Error("Another edit is being saved. Try again.");
+    setBusy(true);
+    setError("");
+    try {
+      const draft = overviewDrafts.current.get(task.id);
+      await draft?.settle();
+      expectedVersion = (draft?.rebase({ expected_version: expectedVersion }).expected_version as number | undefined) ?? expectedVersion;
+      // Compact cards omit settings. Fetch the exact version before composing
+      // the existing PATCH, so a PR edit cannot replace unseen task settings.
+      const current = await api<Task>(`/v1/tasks/${task.id}`);
+      if (current.version !== expectedVersion) throw new APIError(409, "This card changed. Reload latest PR before saving; your draft is preserved.");
+      const saved = await api<Task>(`/v1/tasks/${task.id}`, "PATCH", {
+        expected_version: expectedVersion, title: current.title, description: current.description,
+        config: current.config, source_url: sourceURL,
+      });
+      if (!mounted.current) return saved;
+      draft?.receive(saved);
+      setDetail(old => old?.id === saved.id && old.version <= saved.version ? saved : old);
+      if (detailSelection.current === saved.id) detailVersion.current = saved.version;
+      setTasks(cards => cards.map(card => card.id === saved.id && card.version <= saved.version ? compactTask(saved) : card));
       await refresh();
       return saved;
     } catch (err) {
@@ -887,6 +918,7 @@ export function App() {
                         controlsDisabled={busy || !!drag}
                         onPriority={(priority) => saveCardPriority(task, priority)}
                         onTicket={(url, version) => saveTicket(task, url, version)}
+                        onPR={(url, version) => savePR(task, url, version)}
                         onLink={(thread_id, expected_version) => mutate<Task>(`/v1/tasks/${task.id}/chat`, "POST", { expected_version, thread_id })}
                         onDragStart={(e) => {
                           if (busy) {
@@ -1095,7 +1127,8 @@ export function App() {
                 </div>
                 <TaskConnections key={selected.id} task={selected} busy={busy}
                   onLink={(thread_id, expected_version) => mutate<Task>(`/v1/tasks/${selected.id}/chat`, "POST", { expected_version, thread_id })}
-                  onTicket={(url, version) => saveTicket(selected, url, version)} />
+                  onTicket={(url, version) => saveTicket(selected, url, version)}
+                  onPR={(url, version) => savePR(selected, url, version)} />
                 <div className="overview">{form}<TaskReferences task={selected} /></div>
               </div>
               {tab === "polling" ? (
@@ -1164,12 +1197,6 @@ function ExternalLink({ url, label }: { url: string; label: string }) {
     </span>
   );
 }
-function PRSourceLink({ url }: { url: string }) {
-  const pr = arcanumReviewLink(url);
-  return pr ? <a className="card-footer-link source-pr-link" aria-label={`Arcanum PR #${pr.id}`} href={pr.href} title={`Arcanum PR #${pr.id}`} target="_blank" rel="noreferrer" draggable={false}>
-    <ServiceIcon service="arcanum" /><span>#{pr.id}</span>
-  </a> : <span className="card-footer-link source-pr-placeholder" aria-label="No PR linked" title="No PR linked"><ServiceIcon service="arcanum" className="connection-empty-icon" /></span>;
-}
 function CodexConnection({ task, linking, disabled, onToggle }: { task: Pick<Task, "thread_id" | "execution">; linking: boolean; disabled?: boolean; onToggle: () => void }) {
   const running = !!task.thread_id && executionLabel(task) === "Running";
   const icon = <>
@@ -1183,12 +1210,12 @@ function CodexConnection({ task, linking, disabled, onToggle }: { task: Pick<Tas
     : <button className="card-codex-link card-footer-link codex-unlinked" type="button" aria-label="Link Codex: no chat linked" title="Link Codex" aria-expanded={linking} disabled={disabled}
       onClick={onToggle}>{icon}</button>}</span>;
 }
-function TaskConnections({ task, busy, onLink, onTicket }: { task: Task; busy: boolean; onLink: (threadID: string, version: number) => Promise<Task>; onTicket: (url: string, version: number) => Promise<Card> }) {
+function TaskConnections({ task, busy, onLink, onTicket, onPR }: { task: Task; busy: boolean; onLink: (threadID: string, version: number) => Promise<Task>; onTicket: (url: string, version: number) => Promise<Card>; onPR: (url: string, version: number) => Promise<Task> }) {
   const [linking, setLinking] = useState(false);
   return (
     <section className="overview-connections" aria-label="Connections">
       <div className="overview-links">
-        <PRSourceLink url={task.source_url} />
+        <PRControl task={task} busy={busy} onSave={onPR} />
         <TicketControl task={task} busy={busy} onSave={onTicket} />
         <CodexConnection task={task} linking={linking} disabled={busy} onToggle={() => setLinking(!linking)} />
       </div>

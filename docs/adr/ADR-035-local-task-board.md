@@ -109,6 +109,8 @@ PR review sources and their children use a neutral eye icon; PR feedback uses a 
 
 This binding amendment requires a normal daemon rebuild/restart with Sync state preserved.
 
+The PR placeholder is now a muted Add PR action in both footer and Overview. An existing PR has a hover/focus pencil, with a separate touch control. The explicit editor accepts a positive PR ID or Arcanum review URL; empty clears the link. It retains drafts across tabs, failed/conflicting saves and typing during a save. PR changes use the existing version-checked task PATCH after settling owned Overview saves and reading that exact full task version, preserving fields omitted by compact cards. Only the displayed source_url changes; durable source identity, chat/ticket links, frozen requests and polling target/settings remain intact. The existing PATCH generation fence still advances. This UI amendment needs only static asset installation.
+
 ## Dismissed inspector amendment
 
 With no selected card, the inspector shows a muted, static outline of Overview rather than loading feedback. The decorative shape has no animation, form controls or accessibility-tree content; a readable caption invites selection. Escape or a primary click outside the inspector clears the visible selection and removes only the task query parameter. Clicks on another card/source or an editor action still perform that destination's action. Escape during a drag cancels the drag first; composing input and unrelated creation/linking editors are not dismissed.

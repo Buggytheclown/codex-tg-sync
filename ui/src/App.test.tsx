@@ -11,6 +11,7 @@ import {
 import { App, TaskCard } from "./App";
 import { WorkflowForm } from "./Workflow";
 import { TicketControl } from "./TicketControl";
+import { PRControl } from "./PRControl";
 import { TaskChatForm } from "./forms";
 import { compactTask, defaultPolling, emptyConfig } from "./model";
 import type { Task, Polling } from "./model";
@@ -83,11 +84,117 @@ it("puts PR beside ticket/Codex in Overview and shows quiet missing connections"
   expect(detail.queryByRole("list", { name: "Task references" })).toBeNull();
   expect(detail.getByRole("button", { name: "Add ticket" }).classList.contains("connection-empty")).toBe(true);
 });
-it("uses a passive PR placeholder when no Arcanum PR is linked", async () => {
+it("offers a quiet Add PR action when no Arcanum PR is linked", async () => {
   render(<App />);
   await screen.findByLabelText("Priority for Review the next revision");
-  expect(screen.getByLabelText("No PR linked").tagName).toBe("SPAN");
+  expect(screen.getByRole("button", { name: "Add PR" }).classList.contains("connection-empty")).toBe(true);
   expect(calls.every(c => c.method === "GET")).toBe(true);
+});
+it("adds, edits and removes a PR from the footer while preserving the task settings", async () => {
+  const original = makeTask({ ticket_url: "https://st.yandex-team.ru/TASK-456", config: { ...emptyConfig(), initial_prompt: "Keep this prompt" }, polling: defaultPolling() });
+  rows = [original];
+  render(<App />);
+  fireEvent.click(await screen.findByRole("button", { name: "Add PR" }));
+  expect(calls.every(c => c.method === "GET")).toBe(true);
+  fireEvent.change(screen.getByLabelText("PR ID or URL"), { target: { value: "123" } });
+  fireEvent.click(screen.getByRole("button", { name: "Save PR" }));
+  await screen.findByRole("link", { name: "Arcanum PR #123" });
+  expect(rows[0]).toMatchObject({ thread_id: original.thread_id, config: original.config, ticket_url: original.ticket_url, polling: original.polling, source_url: "https://a.yandex-team.ru/review/123" });
+  expect(calls.find(c => c.method === "PATCH")?.body).toEqual({ expected_version: 1, title: original.title, description: original.description, config: original.config, source_url: "https://a.yandex-team.ru/review/123" });
+  fireEvent.click(screen.getByRole("button", { name: "Edit PR" }));
+  expect((screen.getByLabelText("PR ID or URL") as HTMLInputElement).value).toBe(rows[0].source_url);
+  fireEvent.change(screen.getByLabelText("PR ID or URL"), { target: { value: "https://arcanum.yandex-team.ru/review/124" } });
+  fireEvent.click(screen.getByRole("button", { name: "Save PR" }));
+  await screen.findByRole("link", { name: "Arcanum PR #124" });
+  fireEvent.click(screen.getByRole("button", { name: "Edit PR" }));
+  fireEvent.change(screen.getByLabelText("PR ID or URL"), { target: { value: "" } });
+  fireEvent.click(screen.getByRole("button", { name: "Save PR" }));
+  await screen.findByRole("button", { name: "Add PR" });
+  expect(rows[0].source_url).toBe("");
+});
+it("serializes a PR change after a pending owned Overview save", async () => {
+  const task = makeTask({ source_url: "https://a.yandex-team.ru/review/123" });
+  rows = [task];
+  window.history.replaceState(null, "", "/?task=task-1");
+  const original = vi.mocked(fetch).getMockImplementation()!;
+  let resolve!: (value: Response) => void;
+  const held = new Promise<Response>(done => { resolve = done; });
+  vi.mocked(fetch).mockImplementation((path, options) => {
+    if (options?.method === "PATCH" && JSON.parse(options.body as string).source_url === task.source_url) {
+      calls.push({ path: String(path), method: "PATCH", body: JSON.parse(options.body as string) });
+      return held;
+    }
+    return original(path, options);
+  });
+  render(<App />);
+  const title = await screen.findByLabelText("Title");
+  const detail = within(screen.getByRole("complementary", { name: "Task details and settings" }));
+  fireEvent.change(title, { target: { value: "Saved Overview title" } });
+  fireEvent.blur(title);
+  await waitFor(() => expect(calls.filter(c => c.method === "PATCH")).toHaveLength(1));
+  fireEvent.click(detail.getByRole("button", { name: "Edit PR" }));
+  fireEvent.change(detail.getByLabelText("PR ID or URL"), { target: { value: "124" } });
+  fireEvent.click(detail.getByRole("button", { name: "Save PR" }));
+  rows = [{ ...task, title: "Saved Overview title", version: 2 }];
+  resolve({ ok: true, status: 200, json: async () => rows[0] } as Response);
+  await waitFor(() => expect(rows[0].source_url).toBe("https://a.yandex-team.ru/review/124"));
+  expect(rows[0].title).toBe("Saved Overview title");
+  expect(calls.filter(c => c.method === "PATCH").map(c => (c.body as { expected_version: number }).expected_version)).toEqual([1, 2]);
+});
+it("keeps the PR draft across Overview tabs and cancels without saving", async () => {
+  window.history.replaceState(null, "", "/?task=task-1");
+  render(<App />);
+  await screen.findByLabelText("Title");
+  const detail = within(screen.getByRole("complementary", { name: "Task details and settings" }));
+  fireEvent.click(detail.getByRole("button", { name: "Add PR" }));
+  fireEvent.change(detail.getByLabelText("PR ID or URL"), { target: { value: "456" } });
+  fireEvent.click(detail.getByRole("tab", { name: "History" }));
+  fireEvent.click(detail.getByRole("tab", { name: "Overview" }));
+  expect((detail.getByLabelText("PR ID or URL") as HTMLInputElement).value).toBe("456");
+  fireEvent.click(detail.getByRole("button", { name: "Cancel" }));
+  expect(calls.every(c => c.method === "GET")).toBe(true);
+});
+it("refuses a PR save if the server changed before the full task read", async () => {
+  render(<App />);
+  fireEvent.click(await screen.findByRole("button", { name: "Add PR" }));
+  fireEvent.change(screen.getByLabelText("PR ID or URL"), { target: { value: "123" } });
+  rows[0] = { ...rows[0], source_url: "https://a.yandex-team.ru/review/789", version: 2 };
+  fireEvent.click(screen.getByRole("button", { name: "Save PR" }));
+  await screen.findByRole("button", { name: "Reload latest PR" });
+  expect(calls.some(c => c.method === "PATCH")).toBe(false);
+  expect((screen.getByLabelText("PR ID or URL") as HTMLInputElement).value).toBe("123");
+  fireEvent.click(screen.getByRole("button", { name: "Reload latest PR" }));
+  expect((screen.getByLabelText("PR ID or URL") as HTMLInputElement).value).toContain("789");
+});
+it.each(["javascript:alert(1)", "https://evil.example/review/123", "https://user:pass@a.yandex-team.ru/review/123", "0"])("rejects invalid PR input %s without saving", async value => {
+  const save = vi.fn();
+  render(<PRControl task={makeTask()} busy={false} onSave={save} />);
+  fireEvent.click(screen.getByRole("button", { name: "Add PR" }));
+  fireEvent.change(screen.getByLabelText("PR ID or URL"), { target: { value } });
+  fireEvent.click(screen.getByRole("button", { name: "Save PR" }));
+  expect(await screen.findByRole("alert")).toBeTruthy();
+  expect(save).not.toHaveBeenCalled();
+});
+it("retains PR typing during a pending save and fences concurrent link changes", async () => {
+  const task = makeTask({ source_url: "https://a.yandex-team.ru/review/123" });
+  let resolve!: (value: Task) => void;
+  const held = new Promise<Task>(done => { resolve = done; });
+  const save = vi.fn(() => held);
+  const view = render(<PRControl task={task} busy={false} onSave={save} />);
+  fireEvent.click(screen.getByRole("button", { name: "Edit PR" }));
+  const input = screen.getByLabelText("PR ID or URL");
+  fireEvent.change(input, { target: { value: "124" } });
+  fireEvent.click(screen.getByRole("button", { name: "Save PR" }));
+  fireEvent.change(input, { target: { value: "125" } });
+  const saved = { ...task, source_url: "https://a.yandex-team.ru/review/124", version: 2 };
+  view.rerender(<PRControl task={saved} busy={false} onSave={save} />);
+  resolve(saved);
+  await waitFor(() => expect(screen.queryByRole("button", { name: "Reload latest PR" })).toBeNull());
+  expect((input as HTMLInputElement).value).toBe("125");
+  view.rerender(<PRControl task={{ ...saved, source_url: "https://a.yandex-team.ru/review/126", version: 3 }} busy={false} onSave={save} />);
+  fireEvent.click(screen.getByRole("button", { name: "Save PR" }));
+  expect(save).toHaveBeenCalledOnce();
+  expect((input as HTMLInputElement).value).toBe("125");
 });
 it("edits a linked Codex chat from Overview and retains the draft across tabs", async () => {
   window.history.replaceState(null, "", "/?task=task-1");

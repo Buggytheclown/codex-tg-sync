@@ -208,7 +208,6 @@ small { font-size: 12px; line-height: 1.6; color: var(--muted); }
 .codex-connection:hover .codex-edit, .codex-edit:focus-visible { opacity: 1; pointer-events: auto; }
 .ticket-actions .connection-empty { color: var(--muted); }
 .connection-empty-icon { filter: grayscale(1); opacity: .45; }
-.source-pr-placeholder { pointer-events: none; }
 .card-controls .ticket-form { flex: 1 0 100%; width: 100%; order: 3; }
 .card-footer-link { display: inline-flex; align-items: center; gap: 4px; min-height: 30px; padding: 5px 0; font-size: 12px; line-height: 1.4; text-align: left; color: var(--blue); background: transparent; border: 0; border-radius: 6px; box-shadow: none; text-decoration: none; overflow-wrap: anywhere; }
 .card-footer-link:hover { background: var(--blue-soft); text-decoration: none; }
