@@ -8,6 +8,7 @@ import {
   pollingProblem,
   safeExternalURL,
   parseThreadID,
+  arcanumReviewLink,
 } from "./model";
 import type { Task } from "./model";
 const task = (extra: Partial<Task> = {}): Task => ({
@@ -26,6 +27,21 @@ const task = (extra: Partial<Task> = {}): Task => ({
   updated_at: "",
   requests: [],
   ...extra,
+});
+
+it.each([
+  ["https://a.yandex-team.ru/review/123", "123"],
+  ["https://arcanum.yandex-team.ru/reviews/456?tab=files", "456"],
+  ["https://a.yandex-team.ru/review/789/overview#comments", "789"],
+  ["https://example.test/review/123", undefined],
+  ["https://a.yandex-team.ru/reviews/outgoing", undefined],
+  ["https://a.yandex-team.ru/review/123extra", undefined],
+  ["https://a.yandex-team.ru.evil.test/review/123", undefined],
+  ["https://user:pass@a.yandex-team.ru/review/123", undefined],
+  ["javascript:alert(1)", undefined],
+])("recognizes only safe Arcanum PR links: %s", (url, id) => {
+  expect(arcanumReviewLink(url)?.id).toBe(id);
+  if (id) expect(arcanumReviewLink(url)?.href).toBe(url);
 });
 describe("card states", () => {
   it("has no execution state before a run", () =>

@@ -23,7 +23,7 @@ export function DetailPlaceholder() {
             <div className="placeholder-control placeholder-select"><Bar width="65px" height={9} /><span className="placeholder-chevron" /></div>
           </div>
         </div>
-        <div className="placeholder-links"><Bar width="104px" height={12} /><Bar width="80px" height={12} /></div>
+        <div className="placeholder-links"><Bar width="104px" height={12} /><Bar width="30px" height={24} /></div>
         <div className="placeholder-description">
           <span className="placeholder-label">Description</span>
           <div className="placeholder-lines">

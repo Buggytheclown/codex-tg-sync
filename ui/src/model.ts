@@ -171,7 +171,7 @@ export const defaultPolling = (type = "pr_wait"): Polling => ({
 });
 export const isSource = (task: Task | TaskCard) =>
   task.polling?.action.type === "create_task";
-export const executionLabel = (task: Task | TaskCard): string => {
+export const executionLabel = (task: Pick<Task, "execution">): string => {
   const status = task.execution?.last_seen_turn_status?.toLowerCase();
   if (
     status === "inprogress" ||
@@ -267,6 +267,16 @@ export function pollingLabel(task: Task | TaskCard): string {
   if ("problem" in task.polling ? task.polling.problem : pollingProblem(task.polling)) return "Needs configuration";
   return task.polling.last_error ? "Waiting · check failed" : "Waiting";
 }
+export function arcanumReviewLink(raw: string): { href: string; id: string } | undefined {
+  const href = safeExternalURL(raw);
+  if (!href) return undefined;
+  const url = new URL(href);
+  if (url.username || url.password) return undefined;
+  if (!["a.yandex-team.ru", "arcanum.yandex-team.ru"].includes(url.hostname)) return undefined;
+  const match = url.pathname.match(/^\/reviews?\/([0-9]+)(?:\/|$)/);
+  return match ? { href, id: match[1] } : undefined;
+}
+
 export function safeExternalURL(raw: string): string | undefined {
   try {
     const url = new URL(raw);

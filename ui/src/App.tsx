@@ -16,8 +16,10 @@ import {
   pollingProblem,
   safeExternalURL,
   parseThreadID,
+  arcanumReviewLink,
 } from "./model";
 import { Field, PromptFields, TaskChatForm } from "./forms";
+import { ServiceIcon } from "./ServiceIcons";
 
 type Panel = "details" | "new-task" | "new-source" | "add-chat";
 import { SourceEditor } from "./SourceEditor";
@@ -190,7 +192,6 @@ export function TaskCard({
   onDragStart?: (e: React.DragEvent<HTMLButtonElement>) => void;
   onDragEnd?: () => void;
 }) {
-  const execution = executionLabel(task);
   const polling = pollingLabel(task);
   const pollingTone = polling === "Waiting" ? "active" : polling === "No polling" ? "" : "warning";
   const [linking, setLinking] = useState(false);
@@ -235,12 +236,6 @@ export function TaskCard({
         >
           {polling}
         </span>
-        {execution && (
-          <span className={`execution ${execution.toLowerCase()}`}>
-            <i />
-            {execution}
-          </span>
-        )}
       </span>
       {task.requests?.some((r) =>
         ["pending_approval", "starting"].includes(r.status),
@@ -255,6 +250,7 @@ export function TaskCard({
         <option value="low">↓ Low</option><option value="normal">— Normal</option><option value="high">↑ High</option>
       </select>
     <div className="card-controls">
+    <PRSourceLink url={task.source_url} />
     {onTicket && <TicketControl task={task} busy={controlsDisabled} onSave={onTicket} />}
       <CodexConnection task={task} linking={linking} disabled={controlsDisabled || !onLink} onToggle={() => setLinking(!linking)} />
     </div>
@@ -1163,11 +1159,23 @@ function ExternalLink({ url, label }: { url: string; label: string }) {
     </span>
   );
 }
-function CodexConnection({ task, linking, disabled, onToggle }: { task: Pick<Task, "thread_id">; linking: boolean; disabled?: boolean; onToggle: () => void }) {
+function PRSourceLink({ url }: { url: string }) {
+  const pr = arcanumReviewLink(url);
+  return pr ? <a className="card-footer-link source-pr-link" aria-label={`Arcanum PR #${pr.id}`} href={pr.href} title={`Arcanum PR #${pr.id}`} target="_blank" rel="noreferrer" draggable={false}>
+    <ServiceIcon service="arcanum" /><span>#{pr.id}</span>
+  </a> : null;
+}
+function CodexConnection({ task, linking, disabled, onToggle }: { task: Pick<Task, "thread_id" | "execution">; linking: boolean; disabled?: boolean; onToggle: () => void }) {
+  const running = !!task.thread_id && executionLabel(task) === "Running";
+  const icon = <>
+    <ServiceIcon service="codex" className="codex-logo" />
+    {running && <span className="codex-spinner" role="status" aria-label="Codex running" />}
+    {!task.thread_id && <span className="codex-add" aria-hidden="true">＋</span>}
+  </>;
   return task.thread_id
-    ? <a className="card-codex-link card-footer-link" href={codexURL(task.thread_id)} draggable={false}>Open in Codex ↗</a>
-    : <button className="card-codex-link card-footer-link" type="button" aria-label="Link Codex: no chat linked" aria-expanded={linking} disabled={disabled}
-      onClick={onToggle}>Link Codex ＋</button>;
+    ? <a className="card-codex-link card-footer-link" aria-label="Open in Codex ↗" title={running ? "Open in Codex · Running" : "Open in Codex"} href={codexURL(task.thread_id)} draggable={false}>{icon}</a>
+    : <button className="card-codex-link card-footer-link codex-unlinked" type="button" aria-label="Link Codex: no chat linked" title="Link Codex" aria-expanded={linking} disabled={disabled}
+      onClick={onToggle}>{icon}</button>;
 }
 function TaskConnections({ task, busy, onLink, onTicket }: { task: Task; busy: boolean; onLink: (threadID: string, version: number) => Promise<Task>; onTicket: (url: string, version: number) => Promise<Card> }) {
   const [linking, setLinking] = useState(false);
@@ -1186,7 +1194,7 @@ function TaskConnections({ task, busy, onLink, onTicket }: { task: Task; busy: b
 function TaskReferences({ task }: { task: Task }) {
   if (!task.source_url && !task.source_task_id) return null;
   return <ul className="overview-provenance" aria-label="Task references">
-    {task.source_url && <li><ExternalLink url={task.source_url} label="Open source" /></li>}
+    {task.source_url && <li>{arcanumReviewLink(task.source_url) ? <PRSourceLink url={task.source_url} /> : <ExternalLink url={task.source_url} label="Open source" />}</li>}
     {task.source_task_id && <li><a className="detail-link" href={`?task=${encodeURIComponent(task.source_task_id)}`}>Created by source</a></li>}
   </ul>;
 }

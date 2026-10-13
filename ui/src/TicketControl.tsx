@@ -4,6 +4,7 @@ import type { TaskCard } from "./model";
 import { safeExternalURL } from "./model";
 import { Field } from "./forms";
 import { normalizeTicketInput, ticketLabel } from "./ticket";
+import { EditIcon, ServiceIcon } from "./ServiceIcons";
 
 type TicketTask = Pick<TaskCard, "id" | "title" | "version" | "ticket_url">;
 type SaveTicket = (url: string, version: number) => Promise<TaskCard>;
@@ -19,9 +20,11 @@ export function TicketControl({ task, busy, onSave }: {
   return <div className="ticket-control">
     <div className="ticket-actions">
       {href ? <>
-        <a className="card-footer-link" href={href} target="_blank" rel="noreferrer" draggable={false} title={url}>{ticketLabel(url)} <span aria-hidden="true">↗</span></a>
-        <button className="card-footer-link ticket-edit" type="button" aria-label="Edit ticket" title="Edit ticket" disabled={busy} onClick={() => setEditing(true)}>✎</button>
-      </> : <button className="card-footer-link" type="button" disabled={busy} onClick={() => setEditing(true)}>{url ? "Edit ticket" : "Add ticket"}</button>}
+        <a className="card-footer-link" href={href} target="_blank" rel="noreferrer" draggable={false} title={url}>
+          <ServiceIcon service="tracker" className="ticket-brand" /><span>{ticketLabel(url)}</span>
+        </a>
+        <button className="card-footer-link ticket-edit" type="button" aria-label="Edit ticket" title="Edit ticket" disabled={busy} onClick={() => setEditing(true)}><EditIcon /></button>
+      </> : <button className="card-footer-link" type="button" disabled={busy} onClick={() => setEditing(true)}><ServiceIcon service="tracker" />{url ? "Edit ticket" : "Add ticket"}</button>}
     </div>
     {editing && <TicketForm task={task} busy={busy} onSave={onSave} onClose={() => setEditing(false)} />}
   </div>;

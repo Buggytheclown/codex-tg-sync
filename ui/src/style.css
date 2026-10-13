@@ -32,6 +32,7 @@
   background: var(--background);
   --background: #2d2c33;
   --surface: #38373e;
+  --footer: #323138;
   --soft: #ffffff1a;
   --hover: #ffffff1a;
   --selection: #ffffff26;
@@ -195,16 +196,34 @@ small { font-size: 12px; line-height: 1.6; color: var(--muted); }
 .card-priority.high { color: var(--danger); }
 .card-priority.low { color: var(--positive); }
 .card-priority:disabled { opacity: .55; cursor: wait; }
-.card-controls { display: flex; flex-wrap: wrap; gap: 7px; align-items: center; border-top: 1px solid var(--border-soft); padding: 9px 10px; }
+.card-controls { display: flex; flex-wrap: wrap; gap: 14px; align-items: center; min-height: 52px; padding: 9px 12px; background: var(--footer); border-radius: 0 0 var(--radius) var(--radius); }
 .card-controls .ticket-control { display: contents; }
 .card-controls .ticket-actions { flex: 0 1 auto; flex-wrap: nowrap; max-width: 100%; min-width: 0; padding: 0; gap: 4px; }
-.card-controls .card-codex-link { flex: 0 1 auto; margin-left: auto; justify-content: flex-end; min-width: 0; max-width: 100%; }
+.card-controls .card-codex-link { flex: 0 0 30px; margin-left: auto; min-width: 0; }
 .card-controls .ticket-form { flex: 1 0 100%; width: 100%; order: 3; }
 .card-footer-link { display: inline-flex; align-items: center; gap: 4px; min-height: 30px; padding: 5px 0; font-size: 12px; line-height: 1.4; text-align: left; color: var(--blue); background: transparent; border: 0; border-radius: 6px; box-shadow: none; text-decoration: none; overflow-wrap: anywhere; }
 .card-footer-link:hover { background: var(--blue-soft); text-decoration: none; }
-.ticket-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; min-width: 0; }
+.ticket-actions { position: relative; display: flex; align-items: center; flex-wrap: wrap; gap: 6px; min-width: 0; }
 .ticket-actions > a { min-width: 0; max-width: 100%; }
-.ticket-actions .ticket-edit { padding: 4px 7px; flex: none; font-size: 16px; }
+.service-icon { width: 17px; height: 17px; flex: none; object-fit: contain; }
+.source-pr-link { min-width: 0; max-width: 100%; }
+.ticket-actions .ticket-edit { position: absolute; left: 0; top: 50%; transform: translateY(-50%); width: 17px; height: 20px; min-height: 0; padding: 0; opacity: 0; pointer-events: none; }
+.ticket-edit svg { width: 16px; height: 16px; }
+.ticket-actions:hover .ticket-edit, .ticket-edit:focus-visible { opacity: 1; pointer-events: auto; }
+.ticket-actions:hover .ticket-brand, .ticket-actions:has(.ticket-edit:focus-visible) .ticket-brand { opacity: 0; }
+.ticket-actions:hover > a { color: var(--blue-hover); background: var(--blue-soft); outline: 3px solid var(--blue-soft); }
+.card-codex-link { position: relative; width: 30px; height: 30px; padding: 0; justify-content: center; flex-shrink: 0; }
+.codex-logo { width: 29px; height: 29px; }
+.codex-unlinked .codex-logo { filter: grayscale(1); opacity: .45; }
+.codex-add { position: absolute; right: -2px; bottom: -1px; width: 13px; height: 13px; display: grid; place-items: center; font-size: 11px; line-height: 1; border-radius: 50%; color: var(--secondary); background: var(--footer); box-shadow: 0 0 0 1px var(--border-soft); }
+.codex-spinner { position: absolute; inset: -3px; pointer-events: none; overflow: hidden; border-radius: 50%; }
+.codex-spinner::before { content: ""; position: absolute; inset: 0; border: 1.5px solid var(--blue-hover); border-right-color: var(--border-soft); border-bottom-color: var(--border-soft); border-radius: 50%; animation: codex-spin .9s linear infinite; }
+@keyframes codex-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .codex-spinner::before { animation: none; } }
+@media (hover: none) {
+  .ticket-actions .ticket-edit { position: static; transform: none; width: 24px; height: 24px; opacity: 1; pointer-events: auto; }
+  .ticket-actions .ticket-brand { opacity: 1; }
+}
 .card-chat-form, .ticket-form { padding: 10px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); min-width: 0; }
 .card-chat-form { margin: 0 10px 10px; }
 .card-chat-form .field, .ticket-form .field { margin-bottom: 8px; }

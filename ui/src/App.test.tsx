@@ -8,7 +8,7 @@ import {
   screen,
   waitFor,
 } from "@testing-library/react";
-import { App } from "./App";
+import { App, TaskCard } from "./App";
 import { WorkflowForm } from "./Workflow";
 import { TicketControl } from "./TicketControl";
 import { compactTask, defaultPolling, emptyConfig } from "./model";
@@ -31,6 +31,52 @@ const makeTask = (extra: Partial<Task> = {}): Task => ({
   ...extra,
 });
 let rows: Task[], calls: { path: string; method: string; body: unknown }[];
+it("shows branded PR and ticket links in the compact footer without loading details", async () => {
+  rows = [makeTask({ source_url: "https://a.yandex-team.ru/review/123", ticket_url: "https://st.yandex-team.ru/TASK-456" })];
+  render(<App />);
+  const pr = await screen.findByRole("link", { name: "Arcanum PR #123" });
+  expect(pr.getAttribute("href")).toBe(rows[0].source_url);
+  expect(pr.getAttribute("target")).toBe("_blank");
+  expect(pr.getAttribute("rel")).toContain("noreferrer");
+  expect(pr.getAttribute("draggable")).toBe("false");
+  expect(pr.closest(".card-controls")).not.toBeNull();
+  expect(pr.closest(".task-card")).toBeNull();
+  const ticket = screen.getByRole("link", { name: "TASK-456" });
+  expect(ticket.querySelector(".service-icon")).not.toBeNull();
+  const edit = screen.getByRole("button", { name: "Edit ticket" });
+  expect(edit.closest("a")).toBeNull();
+  fireEvent.click(edit);
+  fireEvent.change(screen.getByLabelText("Ticket URL"), { target: { value: "TASK-789" } });
+  fireEvent.click(screen.getByRole("button", { name: "Save ticket" }));
+  await screen.findByRole("link", { name: "TASK-789" });
+  expect(rows[0].source_url).toBe("https://a.yandex-team.ru/review/123");
+  expect(screen.queryByLabelText("Title")).toBeNull();
+  expect(calls.some(c => c.path === "/v1/tasks/task-1" && c.method === "GET")).toBe(false);
+});
+it.each(["inProgress", "in_progress", "running", "completed", "failed", "interrupted", ""])("moves %s execution feedback to the Codex icon", status => {
+  const task = compactTask(makeTask({ execution: { last_seen_turn_status: status } }));
+  const { container } = render(<TaskCard task={task} selected={false} onSelect={() => {}} />);
+  const link = screen.getByRole("link", { name: "Open in Codex ↗" });
+  expect(link.querySelector(".codex-logo")).not.toBeNull();
+  const running = ["inProgress", "in_progress", "running"].includes(status);
+  expect(!!within(link).queryByRole("status", { name: "Codex running" })).toBe(running);
+  expect(container.querySelector(".task-card .execution")).toBeNull();
+  expect(link.textContent).not.toContain("Open in Codex");
+  expect(screen.queryByText("Completed")).toBeNull();
+});
+it("renders an unlinked Codex icon as an accessible attachment action", () => {
+  const task = compactTask(makeTask({ thread_id: "" }));
+  const open = vi.fn();
+  render(<TaskCard task={task} selected={false} onSelect={() => {}} onLink={async () => makeTask()} />);
+  const link = screen.getByRole("button", { name: "Link Codex: no chat linked" });
+  expect(link.querySelector(".codex-logo")).not.toBeNull();
+  expect(link.querySelector(".codex-add")).not.toBeNull();
+  expect(link.textContent).not.toContain("Link Codex");
+  link.addEventListener("click", open);
+  fireEvent.click(link);
+  expect(open).toHaveBeenCalledOnce();
+  expect(screen.getByLabelText("Codex chat for Review the next revision")).toBeTruthy();
+});
 it("places tabs below badges and switches the Overview controls with their content", async () => {
   rows = [makeTask({ thread_id: "", priority: "normal" })];
   window.history.replaceState(null, "", "/?task=task-1");
