@@ -31,6 +31,142 @@ const makeTask = (extra: Partial<Task> = {}): Task => ({
   ...extra,
 });
 let rows: Task[], calls: { path: string; method: string; body: unknown }[];
+it("shows a noninteractive empty inspector when no card is selected", async () => {
+  render(<App />);
+  await screen.findByText("Select a card to see its details.");
+  const panel = within(screen.getByRole("complementary", { name: "Task details and settings" }));
+  expect(panel.queryByRole("button")).toBeNull();
+  expect(panel.queryByRole("textbox")).toBeNull();
+  expect(panel.queryByRole("tab")).toBeNull();
+  expect(panel.queryByRole("status")).toBeNull();
+  expect(calls.every(call => call.method === "GET")).toBe(true);
+});
+it("dismisses details with Escape, clears only the task URL parameter and reopens the card", async () => {
+  window.history.replaceState(null, "", "/?task=task-1&view=board#queue");
+  render(<App />);
+  const title = await screen.findByLabelText("Title");
+  fireEvent.keyDown(title, { key: "Escape", isComposing: true });
+  expect(screen.getByLabelText("Title")).toBeTruthy();
+  fireEvent.keyDown(title, { key: "Escape" });
+  await screen.findByText("Select a card to see its details.");
+  expect(window.location.search).toBe("?view=board");
+  expect(window.location.hash).toBe("#queue");
+  expect(screen.queryByRole("textbox", { name: "Title" })).toBeNull();
+  expect(screen.getByRole("button", { name: /CHAT Review the next revision/ }).getAttribute("aria-pressed")).toBe("false");
+  fireEvent.click(screen.getByRole("button", { name: /CHAT Review the next revision/ }));
+  await screen.findByLabelText("Title");
+  expect(new URLSearchParams(window.location.search).get("task")).toBe("task-1");
+  expect(calls.every(call => call.method === "GET")).toBe(true);
+});
+it("dismisses on an outside click while preserving inside clicks and destination actions", async () => {
+  rows.push(makeTask({ id: "task-2", title: "Other task" }));
+  window.history.replaceState(null, "", "/?task=task-1");
+  render(<App />);
+  await screen.findByLabelText("Title");
+  fireEvent.click(screen.getByLabelText("Description"));
+  expect(screen.getByLabelText("Title")).toBeTruthy();
+  fireEvent.click(document.body);
+  await screen.findByText("Select a card to see its details.");
+  fireEvent.click(screen.getByRole("button", { name: /CHAT Review the next revision/ }));
+  await screen.findByLabelText("Title");
+  fireEvent.click(screen.getByRole("button", { name: /CHAT Other task/ }));
+  await screen.findByDisplayValue("Other task");
+  expect(new URLSearchParams(window.location.search).get("task")).toBe("task-2");
+  fireEvent.click(screen.getByRole("button", { name: "＋ New task" }));
+  await screen.findByText("Something to work on");
+  fireEvent.keyDown(window, { key: "Escape" });
+  expect(screen.getByText("Something to work on")).toBeTruthy();
+  expect(calls.every(call => call.method === "GET")).toBe(true);
+});
+it("blurs and saves Overview on Escape without reopening details when the save completes", async () => {
+  window.history.replaceState(null, "", "/?task=task-1");
+  const original = vi.mocked(fetch).getMockImplementation()!;
+  let release!: () => void;
+  const held = new Promise<void>(done => { release = done; });
+  vi.mocked(fetch).mockImplementation(async (path, options) => {
+    if (options?.method === "PATCH") await held;
+    return original(path, options);
+  });
+  render(<App />);
+  const title = await screen.findByLabelText("Title");
+  title.focus();
+  fireEvent.change(title, { target: { value: "Saved while dismissed" } });
+  fireEvent.keyDown(title, { key: "Escape" });
+  await screen.findByText("Select a card to see its details.");
+  release();
+  await waitFor(() => expect(rows[0].title).toBe("Saved while dismissed"));
+  expect(screen.queryByRole("textbox", { name: "Title" })).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: /CHAT Saved while dismissed/ }));
+  await screen.findByDisplayValue("Saved while dismissed");
+  expect(calls.filter(call => call.method === "PATCH")).toHaveLength(1);
+});
+it("retains unsaved Polling settings and its tab when reopening the dismissed card", async () => {
+  rows[0].polling = defaultPolling();
+  window.history.replaceState(null, "", "/?task=task-1");
+  render(<App />);
+  await screen.findByLabelText("Title");
+  fireEvent.click(screen.getByRole("tab", { name: "Polling" }));
+  const prID = screen.getByLabelText("PR ID");
+  fireEvent.change(prID, { target: { value: "456" } });
+  fireEvent.keyDown(prID, { key: "Escape" });
+  await screen.findByText("Select a card to see its details.");
+  fireEvent.click(screen.getByRole("button", { name: /CHAT Review the next revision/ }));
+  await screen.findByRole("tab", { name: "Polling", selected: true });
+  expect((screen.getByLabelText("PR ID") as HTMLInputElement).value).toBe("456");
+  expect(calls.every(call => call.method === "GET")).toBe(true);
+});
+it("keeps failed Overview drafts reachable after dismissal", async () => {
+  window.history.replaceState(null, "", "/?task=task-1");
+  const original = vi.mocked(fetch).getMockImplementation()!;
+  vi.mocked(fetch).mockImplementation(async (path, options) => options?.method === "PATCH"
+    ? { ok: false, status: 503, json: async () => ({ error: "Overview temporarily unavailable" }) } as Response
+    : original(path, options));
+  render(<App />);
+  const title = await screen.findByLabelText("Title");
+  title.focus();
+  fireEvent.change(title, { target: { value: "Retained on dismissal" } });
+  fireEvent.keyDown(title, { key: "Escape" });
+  const reopen = await screen.findByRole("button", { name: "Open failed task" });
+  fireEvent.click(reopen);
+  await screen.findByRole("button", { name: "Retry overview save" });
+  expect((screen.getByLabelText("Title") as HTMLTextAreaElement).value).toBe("Retained on dismissal");
+  expect(vi.mocked(fetch).mock.calls.filter(([, options]) => options?.method === "PATCH")).toHaveLength(1);
+});
+it("retains a source's unsaved child definition across outside dismissal", async () => {
+  rows = [makeTask({
+    id: "source", title: "PR source", thread_id: "",
+    polling: { ...defaultPolling("pr_review_source"), action: {
+      type: "create_task", child_definition: { title: "Child task", description: "", config: emptyConfig() },
+    } },
+  })];
+  window.history.replaceState(null, "", "/?task=source");
+  render(<App />);
+  const childTitle = await screen.findByLabelText("Task title");
+  fireEvent.change(childTitle, { target: { value: "Unsaved child title" } });
+  fireEvent.click(document.body);
+  await screen.findByText("Select a card to see its details.");
+  fireEvent.click(screen.getByRole("button", { name: /PR source/ }));
+  expect((await screen.findByLabelText("Task title") as HTMLInputElement).value).toBe("Unsaved child title");
+  expect(calls.every(call => call.method === "GET")).toBe(true);
+});
+it("ignores detail responses that finish after dismissal", async () => {
+  window.history.replaceState(null, "", "/?task=task-1");
+  const original = vi.mocked(fetch).getMockImplementation()!;
+  let release!: () => void;
+  const held = new Promise<void>(done => { release = done; });
+  vi.mocked(fetch).mockImplementation(async (path, options) => {
+    if (path === "/v1/tasks/task-1") await held;
+    return original(path, options);
+  });
+  render(<App />);
+  await screen.findByText("Loading details…");
+  fireEvent.keyDown(window, { key: "Escape" });
+  release();
+  await screen.findByText("Select a card to see its details.");
+  await waitFor(() => expect(calls.some(call => call.path === "/v1/tasks/task-1")).toBe(true));
+  expect(screen.queryByRole("textbox", { name: "Title" })).toBeNull();
+  expect(new URLSearchParams(window.location.search).has("task")).toBe(false);
+});
 it("autosaves changed Overview fields on blur without an explicit save button or unchanged writes", async () => {
   window.history.replaceState(null, "", "/?task=task-1");
   render(<App />);

@@ -73,6 +73,10 @@ Open the dev server using that exact origin. No wildcard CORS is used.
   and approvals remain in the existing Telegram Control topic.
 - `?task=<id>` selects a card without changing it. **Add chat** accepts a thread
   ID or a `codex://threads/<id>` link and is idempotent by thread ID.
+- **Esc** or a click outside the details panel clears its visible selection and
+  shows a static, noninteractive placeholder. Reopening the same card restores
+  its tab and unsaved explicit-save settings. Overview keeps its normal blur
+  autosave; Esc during a drag first cancels the drag.
 
 `npm test` covers these boundaries and the PR condition validation. The Go
 controlapi suite checks Host/Origin/JSON admission, conflicts, SSE invalidation,

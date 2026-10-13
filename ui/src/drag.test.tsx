@@ -31,7 +31,7 @@ function order(column = "TODO") {
     .map((element) => element.dataset.taskId || "placeholder");
 }
 async function startDrag() {
-  await screen.findByText("Task c");
+  await screen.findByRole("button", { name: /Task c/ });
   ["a", "b", "c"].forEach((id, i) => {
     const rect = { top: 100 + i * 100, height: 80, bottom: 180 + i * 100,
       width: 200, left: 0, right: 200, x: 0, y: 100 + i * 100, toJSON() {} };
@@ -68,6 +68,21 @@ beforeEach(() => {
   }));
 });
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
+
+it("uses the first Escape to cancel a drag and the next Escape to dismiss details", async () => {
+  window.history.replaceState(null, "", "/?task=c");
+  render(<App />);
+  await screen.findByLabelText("Title");
+  const dataTransfer = await startDrag();
+  dragEvent(screen.getByRole("region", { name: "TODO column" }), "dragover", 110, dataTransfer);
+  fireEvent.keyDown(window, { key: "Escape" });
+  expect(screen.queryByLabelText("Drop task here")).toBeNull();
+  expect(screen.getByLabelText("Title")).toBeTruthy();
+  fireEvent.keyDown(window, { key: "Escape" });
+  await screen.findByText("Select a card to see its details.");
+  expect(screen.queryByRole("textbox", { name: "Title" })).toBeNull();
+  expect(writes).toHaveLength(0);
+});
 
 it("marks the grabbed card and reserves its height at midpoint insertion; reorders equal positions", async () => {
   render(<App />);

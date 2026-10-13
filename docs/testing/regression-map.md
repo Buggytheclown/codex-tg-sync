@@ -300,3 +300,8 @@ For live Telegram QA, verify:
 - Test title/description/priority blur, unchanged focus cycles, empty-title validation, exact multiline readback and optional keyboard flush without an ordinary save button.
 - Hold saves to prove later blurred edits serialize and survive navigation; preserve failed/stale drafts on return with explicit retry/reload, never certify an unseen newer version or discard typing.
 - Verify the first destination click, same-task mutation coordination, separate Ticket/Codex forms and explicit Polling save/activation. Browser tests use isolated tasks, delayed/failing requests and the real local API; live installation readback is GET-only.
+
+## Dismissed inspector
+
+- UI tests cover the noninteractive empty inspector, Escape/outside dismissal, unrelated URL parameters, inside clicks, card/editor destination actions, IME input, preserved Polling drafts/tab, pending Overview autosave, failed draft recovery and late detail replies. Drag tests prove the first Escape cancels a gesture without closing details and the next Escape clears selection without writes.
+- Browser QA checks the static decorative outline, no active/accessible placeholder controls or animations, Escape and outside click on real read-only cards, same-card reopen, another-card selection and narrow-screen layout. Use isolated fixtures for edited drafts; never change real PR tasks for mutation QA.

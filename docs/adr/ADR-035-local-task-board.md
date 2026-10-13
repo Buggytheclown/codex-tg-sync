@@ -96,3 +96,9 @@ Overview is a readable editable task brief: native title/description fields, pri
 ## Overview autosave amendment
 
 Overview title, description and priority save on field blur without an ordinary Save overview action. A small per-task pending draft survives editor navigation, serializes blurred changes and retains failed/stale edits for explicit retry/reload. Unchanged drafts and invalid titles do not write. Saving feedback is local to the editor; destination clicks and same-task commands retain their expected-version protection. Ticket/Codex attachment and Polling commands remain explicit. Cmd/Ctrl+Enter remains an optional flush. This change does not alter storage/API/launch behavior or require restarting Sync.
+
+## Dismissed inspector amendment
+
+With no selected card, the inspector shows a muted, static outline of Overview rather than loading feedback. The decorative shape has no animation, form controls or accessibility-tree content; a readable caption invites selection. Escape or a primary click outside the inspector clears the visible selection and removes only the task query parameter. Clicks on another card/source or an editor action still perform that destination's action. Escape during a drag cancels the drag first; composing input and unrelated creation/linking editors are not dismissed.
+
+Dismissal blurs the active Overview field so its existing autosave rules run. The last editor remains mounted and hidden to preserve explicit-save drafts; reopening that same card restores its tab. Detail reads pause while dismissed and late replies cannot reopen the inspector. Failed Overview drafts remain reachable from the board. Dismissal itself adds no storage command or task-state transition.

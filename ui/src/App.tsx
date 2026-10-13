@@ -23,6 +23,7 @@ type Panel = "details" | "new-task" | "new-source" | "add-chat";
 import { SourceEditor } from "./SourceEditor";
 import { WorkflowForm } from "./Workflow";
 import { TicketControl } from "./TicketControl";
+import { DetailPlaceholder } from "./DetailPlaceholder";
 type Tab = "overview" | "polling" | "history";
 type OverviewValues = { title: string; description: string; priority: Priority };
 const overviewValues = (task: Task): OverviewValues => ({ title: task.title, description: task.description, priority: task.priority || "normal" });
@@ -268,6 +269,9 @@ export function TaskCard({
   );
 }
 export function App() {
+  const detailPanel = useRef<HTMLElement>(null);
+  // Keep the last editor mounted while dismissed so explicit-save drafts survive.
+  const [detailDismissed, setDetailDismissed] = useState(false);
   const overviewDrafts = useRef(new Map<string, OverviewDraft>());
   const [overviewFailureID, setOverviewFailureID] = useState("");
   const [tasks, setTasks] = useState<Card[]>([]);
@@ -359,19 +363,8 @@ export function App() {
     setInsertion(null);
     if (reconcile && queuedRefresh.current) void refresh();
   };
-  useEffect(() => {
-    const escape = (e: KeyboardEvent) => {
-      if (e.key !== "Escape" || !dragRef.current) return;
-      cancelledDrag.current = true;
-      dragRef.current = null;
-      setDrag(null);
-      setInsertion(null);
-      if (queuedRefresh.current) void refresh();
-    };
-    window.addEventListener("keydown", escape);
-    return () => window.removeEventListener("keydown", escape);
-  }, [refresh]);
   const selectedCard = tasks.find((t) => t.id === selectedID);
+  const visibleSelection = panel === "details" && !detailDismissed ? selectedID : "";
   const [detail, setDetail] = useState<Task>();
   const [detailError, setDetailError] = useState("");
   const [detailRevision, setDetailRevision] = useState(0);
@@ -397,7 +390,7 @@ export function App() {
   const selected = detail?.id === selectedID && selectedCard ? detail : undefined;
   useEffect(() => {
     const request = ++detailID.current;
-    if (panel !== "details" || !selectedCard) return;
+    if (panel !== "details" || detailDismissed || !selectedCard) return;
     if (detail?.id === selectedCard.id && detailVersion.current === selectedCard.version && consumedDetailRevision.current === detailRevision) return;
     consumedDetailRevision.current = detailRevision;
     setDetailError("");
@@ -405,12 +398,49 @@ export function App() {
       if (mounted.current && request === detailID.current && task.version >= Math.max(detailVersion.current, latestSelectedCard.current?.version || 0)) { detailVersion.current = task.version; setDetail(task); }
     }).catch((e) => { if (mounted.current && request === detailID.current) setDetailError(e.message); });
     return () => { ++detailID.current; };
-  }, [selectedCard?.id, selectedCard?.version, panel, detailRevision]);
+  }, [selectedCard?.id, selectedCard?.version, panel, detailDismissed, detailRevision]);
+  const dismissDetails = useCallback(() => {
+    if (panel !== "details" || detailDismissed || !selectedID) return;
+    const focused = document.activeElement;
+    if (focused instanceof HTMLElement && detailPanel.current?.contains(focused)) focused.blur();
+    setDetailDismissed(true);
+    setInfo("");
+    setActivationRequested(false);
+    const url = new URL(window.location.href);
+    url.searchParams.delete("task");
+    window.history.replaceState(null, "", url);
+  }, [panel, detailDismissed, selectedID]);
+  useEffect(() => {
+    const escape = (e: KeyboardEvent) => {
+      if (e.key !== "Escape" || e.isComposing || e.repeat || e.defaultPrevented) return;
+      if (dragRef.current) {
+        cancelledDrag.current = true;
+        dragRef.current = null;
+        setDrag(null);
+        setInsertion(null);
+        if (queuedRefresh.current) void refresh();
+        return;
+      }
+      dismissDetails();
+    };
+    const outsideClick = (e: MouseEvent) => {
+      if (e.button !== 0 || dragRef.current || !(e.target instanceof Node)) return;
+      if (!detailPanel.current?.contains(e.target)) dismissDetails();
+    };
+    window.addEventListener("keydown", escape);
+    // Clear the old selection before the destination's normal click action.
+    window.addEventListener("click", outsideClick, true);
+    return () => {
+      window.removeEventListener("keydown", escape);
+      window.removeEventListener("click", outsideClick, true);
+    };
+  }, [dismissDetails, refresh]);
   const select = (task: Card) => {
     detailVersion.current = 0;
     setSelectedID(task.id);
     setPanel("details");
-    setTab("overview");
+    if (!detailDismissed || task.id !== selectedID) setTab("overview");
+    setDetailDismissed(false);
     setInfo("");
     setActivationRequested(false);
     const url = new URL(window.location.href);
@@ -530,6 +560,7 @@ export function App() {
       const problem = task.polling ? task.polling.problem : pollingProblem();
       if (problem) {
         setSelectedID(task.id);
+        setDetailDismissed(false);
         setPanel("details");
         setTab("polling");
         setActivationRequested(true);
@@ -597,6 +628,7 @@ export function App() {
         : `Position was not saved: ${(e as Error).message}`);
       if (column === "polling" && e instanceof APIError && e.status === 400) {
         setSelectedID(task.id);
+        setDetailDismissed(false);
         setPanel("details");
         setTab("polling");
         setActivationRequested(true);
@@ -634,6 +666,7 @@ export function App() {
     else if (queuedRefresh.current) void refresh();
   };
   const created = (task: Task) => {
+    setDetailDismissed(false);
     const url = new URL(window.location.href);
     url.searchParams.set("task", task.id);
     window.history.replaceState(null, "", url);
@@ -707,7 +740,7 @@ export function App() {
               {sources.map((source) => (
                 <button
                   key={source.id}
-                  className={`source-item ${selectedID === source.id ? "selected" : ""}`}
+                  className={`source-item ${visibleSelection === source.id ? "selected" : ""}`}
                   onClick={() => select(source)}
                 >
                   <span
@@ -788,7 +821,7 @@ export function App() {
         {error && (
           <div role="alert" className="error-banner">
             <span>{error}</span>
-            {overviewFailureID && overviewDrafts.current.get(overviewFailureID)?.failed && overviewFailureID !== selectedID && <button onClick={() => {
+            {overviewFailureID && overviewDrafts.current.get(overviewFailureID)?.failed && overviewFailureID !== visibleSelection && <button onClick={() => {
               const failedTask = tasks.find(task => task.id === overviewFailureID);
               if (failedTask) select(failedTask);
             }}>Open failed task</button>}
@@ -848,7 +881,7 @@ export function App() {
                       {insertion?.beforeID === task.id && placeholder}
                       <TaskCard
                         task={task}
-                        selected={selectedID === task.id && panel === "details"}
+                        selected={visibleSelection === task.id}
                         grabbed={drag?.id === task.id}
                         saving={savingID === task.id}
                         disabled={busy}
@@ -923,7 +956,7 @@ export function App() {
           <span>Launch approval happens in Telegram.</span>
         </footer>
       </main>
-      <aside className="detail-panel" aria-label="Task details and settings" onKeyDown={(e) => {
+      <aside ref={detailPanel} className={`detail-panel${panel === "details" && (detailDismissed || !selectedCard) ? " detail-panel-empty" : ""}`} aria-label="Task details and settings" onKeyDown={(e) => {
         if (e.key !== "Enter" || !(e.metaKey || e.ctrlKey) || e.repeat || e.nativeEvent.isComposing) return;
         const form = (e.target as HTMLElement).closest("form");
         if (!form) return;
@@ -941,7 +974,7 @@ export function App() {
         <div className="panel-header">
           <span className="eyebrow">
             {panel === "details"
-              ? selected && isSource(selected)
+              ? !detailDismissed && selected && isSource(selected)
                 ? "SOURCE SETTINGS"
                 : "TASK DETAILS"
               : panel === "new-source"
@@ -960,6 +993,8 @@ export function App() {
             </button>
           )}
         </div>
+        {panel === "details" && detailDismissed && <DetailPlaceholder />}
+        <div className="detail-content" hidden={panel === "details" && detailDismissed}>
         {panel === "details" && selected && detailError && (
           <div className="panel-body">
             <p role="alert" className="error-note">{detailError}</p>
@@ -1086,28 +1121,7 @@ export function App() {
             </div>
           </>
         ) : panel === "details" ? (
-          <div className="welcome">
-            <span className="welcome-icon">▤</span>
-            <h2>
-              A little space
-              <br />
-              for the next thing.
-            </h2>
-            <p>
-              Select a card to see its chat, launch requests and waiting
-              conditions.
-            </p>
-            <button onClick={() => open("new-task")}>
-              Create your first task
-            </button>
-            <div className="welcome-note">
-              <strong>One card, one cycle</strong>
-              <p>
-                A source creates tasks. A wait returns the same task to Inbox.
-                Done stays done until you move it.
-              </p>
-            </div>
-          </div>
+          !detailDismissed && <DetailPlaceholder />
         ) : panel === "new-task" ? (
           <NewTask
             busy={busy}
@@ -1137,6 +1151,7 @@ export function App() {
             }
           />
         ) : null}
+        </div>
       </aside>
     </div>
   );
