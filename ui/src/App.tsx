@@ -2,7 +2,7 @@ import { useCallback, useEffect, useId, useRef, useState } from "react";
 import type { FormEvent, ReactNode } from "react";
 import { api, APIError } from "./api";
 import { compareTasks, placeTask } from "./taskOrder";
-import type { Column, Polling, Priority, Task, TaskCard as Card, TaskEvent } from "./model";
+import type { Column, Polling, Priority, Task, TaskCard as Card, TaskEvent, SourceKind } from "./model";
 import {
   compactTask,
   codexURL,
@@ -17,9 +17,10 @@ import {
   safeExternalURL,
   parseThreadID,
   arcanumReviewLink,
+  taskSourceKind,
 } from "./model";
 import { Field, PromptFields, TaskChatForm } from "./forms";
-import { ServiceIcon } from "./ServiceIcons";
+import { EditIcon, ServiceIcon, SourceIcon } from "./ServiceIcons";
 
 type Panel = "details" | "new-task" | "new-source" | "add-chat";
 import { SourceEditor } from "./SourceEditor";
@@ -167,6 +168,7 @@ class OverviewDraft {
 }
 export function TaskCard({
   task,
+  sourceKind,
   selected,
   onSelect,
   onPriority,
@@ -180,6 +182,7 @@ export function TaskCard({
   onDragEnd,
 }: {
   task: Card;
+  sourceKind?: SourceKind;
   selected: boolean;
   onSelect: () => void;
   onPriority?: (priority: Priority) => Promise<void>;
@@ -225,6 +228,7 @@ export function TaskCard({
         </span>
       </span>
       <span className="card-title">
+        {sourceKind && <SourceIcon kind={sourceKind} />}
         <strong>{task.title}</strong>
       </span>
       {task.description && (
@@ -254,8 +258,8 @@ export function TaskCard({
     {onTicket && <TicketControl task={task} busy={controlsDisabled} onSave={onTicket} />}
       <CodexConnection task={task} linking={linking} disabled={controlsDisabled || !onLink} onToggle={() => setLinking(!linking)} />
     </div>
-    {linking && !task.thread_id && onLink && <div className="card-chat-form">
-      <TaskChatForm task={task} busy={controlsDisabled} onLink={onLink} inline onCancel={() => setLinking(false)} />
+    {linking && onLink && <div className="card-chat-form">
+      <TaskChatForm task={task} busy={controlsDisabled} onLink={onLink} inline submitLabel={task.thread_id ? "Save chat" : "Link chat"} onSaved={() => setLinking(false)} onCancel={() => setLinking(false)} />
     </div>}
     {controlError && <p role="alert" className="error-note">{controlError}</p>}
     </div>
@@ -739,7 +743,7 @@ export function App() {
                   <span
                     className={`source-symbol ${source.column === "polling" ? "active" : ""}`}
                   >
-                    {source.polling?.type === "cron" ? "◷" : "↗"}
+                    {taskSourceKind(source) ? <SourceIcon kind={taskSourceKind(source)!} /> : source.polling?.type === "cron" ? "◷" : "↗"}
                   </span>
                   <span>
                     <strong>{source.title}</strong>
@@ -874,6 +878,7 @@ export function App() {
                       {insertion?.beforeID === task.id && placeholder}
                       <TaskCard
                         task={task}
+                        sourceKind={taskSourceKind(task, sources.find(s => s.id === task.source_task_id))}
                         selected={visibleSelection === task.id}
                         grabbed={drag?.id === task.id}
                         saving={savingID === task.id}
@@ -1163,7 +1168,7 @@ function PRSourceLink({ url }: { url: string }) {
   const pr = arcanumReviewLink(url);
   return pr ? <a className="card-footer-link source-pr-link" aria-label={`Arcanum PR #${pr.id}`} href={pr.href} title={`Arcanum PR #${pr.id}`} target="_blank" rel="noreferrer" draggable={false}>
     <ServiceIcon service="arcanum" /><span>#{pr.id}</span>
-  </a> : null;
+  </a> : <span className="card-footer-link source-pr-placeholder" aria-label="No PR linked" title="No PR linked"><ServiceIcon service="arcanum" className="connection-empty-icon" /></span>;
 }
 function CodexConnection({ task, linking, disabled, onToggle }: { task: Pick<Task, "thread_id" | "execution">; linking: boolean; disabled?: boolean; onToggle: () => void }) {
   const running = !!task.thread_id && executionLabel(task) === "Running";
@@ -1172,29 +1177,32 @@ function CodexConnection({ task, linking, disabled, onToggle }: { task: Pick<Tas
     {running && <span className="codex-spinner" role="status" aria-label="Codex running" />}
     {!task.thread_id && <span className="codex-add" aria-hidden="true">＋</span>}
   </>;
-  return task.thread_id
-    ? <a className="card-codex-link card-footer-link" aria-label="Open in Codex ↗" title={running ? "Open in Codex · Running" : "Open in Codex"} href={codexURL(task.thread_id)} draggable={false}>{icon}</a>
+  return <span className="codex-connection">{task.thread_id
+    ? <><a className="card-codex-link card-footer-link" aria-label="Open in Codex ↗" title={running ? "Open in Codex · Running" : "Open in Codex"} href={codexURL(task.thread_id)} draggable={false}>{icon}</a>
+      <button className="codex-edit card-footer-link" type="button" aria-label="Edit Codex chat" title="Edit Codex chat" disabled={disabled} onClick={onToggle}><EditIcon /></button></>
     : <button className="card-codex-link card-footer-link codex-unlinked" type="button" aria-label="Link Codex: no chat linked" title="Link Codex" aria-expanded={linking} disabled={disabled}
-      onClick={onToggle}>{icon}</button>;
+      onClick={onToggle}>{icon}</button>}</span>;
 }
 function TaskConnections({ task, busy, onLink, onTicket }: { task: Task; busy: boolean; onLink: (threadID: string, version: number) => Promise<Task>; onTicket: (url: string, version: number) => Promise<Card> }) {
   const [linking, setLinking] = useState(false);
   return (
     <section className="overview-connections" aria-label="Connections">
       <div className="overview-links">
+        <PRSourceLink url={task.source_url} />
         <TicketControl task={task} busy={busy} onSave={onTicket} />
         <CodexConnection task={task} linking={linking} disabled={busy} onToggle={() => setLinking(!linking)} />
       </div>
-      {linking && !task.thread_id && <div className="card-chat-form">
-        <TaskChatForm task={task} busy={busy} onLink={onLink} inline onCancel={() => setLinking(false)} />
+      {linking && <div className="card-chat-form">
+        <TaskChatForm task={task} busy={busy} onLink={onLink} inline submitLabel={task.thread_id ? "Save chat" : "Link chat"} onSaved={() => setLinking(false)} onCancel={() => setLinking(false)} />
       </div>}
     </section>
   );
 }
 function TaskReferences({ task }: { task: Task }) {
-  if (!task.source_url && !task.source_task_id) return null;
+  const genericSource = task.source_url && !arcanumReviewLink(task.source_url);
+  if (!genericSource && !task.source_task_id) return null;
   return <ul className="overview-provenance" aria-label="Task references">
-    {task.source_url && <li>{arcanumReviewLink(task.source_url) ? <PRSourceLink url={task.source_url} /> : <ExternalLink url={task.source_url} label="Open source" />}</li>}
+    {genericSource && <li><ExternalLink url={task.source_url} label="Open source" /></li>}
     {task.source_task_id && <li><a className="detail-link" href={`?task=${encodeURIComponent(task.source_task_id)}`}>Created by source</a></li>}
   </ul>;
 }

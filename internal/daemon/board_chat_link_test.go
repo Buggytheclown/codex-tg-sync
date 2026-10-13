@@ -36,6 +36,37 @@ func TestBoardLinkChatPassivelyReadsWithSyncOff(t *testing.T) {
 	}
 }
 
+func TestBoardRelinkChatChecksOldAndNewAuthorityWithoutStartingWork(t *testing.T) {
+	for _, status := range []string{"completed", "inProgress"} {
+		t.Run(status, func(t *testing.T) {
+			s := newTestService(t)
+			s.cfg.AppServerMode = "websocket"
+			ctx := context.Background()
+			task, err := s.store.CreateTask(ctx, model.CreateTaskInput{Title: "linked", ThreadID: "old-chat"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			poll := &stubSession{threadReads: map[string]map[string]any{"old-chat": boardThreadPayload("old-chat", status, "old-turn", "old result"), "new-chat": boardThreadPayload("new-chat", "completed", "new-turn", "new result")}}
+			s.poll, s.pollConnected = poll, true
+			linked, err := s.LinkTaskChat(ctx, task.ID, model.LinkTaskChatInput{ExpectedVersion: task.Version, ThreadID: "new-chat"})
+			if status == "inProgress" {
+				if !errors.Is(err, tasks.ErrConflict) {
+					t.Fatalf("active chat rebound: %#v %v", linked, err)
+				}
+				got, _ := s.GetTask(ctx, task.ID)
+				if got.ThreadID != "old-chat" || got.Version != task.Version {
+					t.Fatal("rejected edit mutated task")
+				}
+			} else if err != nil || linked.ThreadID != "new-chat" || linked.Execution == nil {
+				t.Fatalf("rebind: %#v %v", linked, err)
+			}
+			if len(poll.threadResumeCalls)+len(poll.threadStartCalls)+len(poll.turnStartCalls) != 0 {
+				t.Fatal("rebind started model work")
+			}
+		})
+	}
+}
+
 func TestBoardLinkChatRejectsInvalidVersionBeforeAuthorityRead(t *testing.T) {
 	s := newTestService(t)
 	ctx := context.Background()
@@ -52,6 +83,25 @@ func TestBoardLinkChatRejectsInvalidVersionBeforeAuthorityRead(t *testing.T) {
 	got, err := s.GetTask(ctx, task.ID)
 	if err != nil || got.ThreadID != "" || got.Version != task.Version {
 		t.Fatalf("invalid command mutated task: %#v %v", got, err)
+	}
+}
+
+func TestBoardRelinkMissingTargetLeavesOldBinding(t *testing.T) {
+	s := newTestService(t)
+	s.cfg.AppServerMode = "websocket"
+	ctx := context.Background()
+	task, err := s.store.CreateTask(ctx, model.CreateTaskInput{Title: "linked", ThreadID: "old-chat"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	poll := &stubSession{threadReads: map[string]map[string]any{"old-chat": boardThreadPayload("old-chat", "completed", "old-turn", "result")}}
+	s.poll, s.pollConnected = poll, true
+	if _, err := s.LinkTaskChat(ctx, task.ID, model.LinkTaskChatInput{ExpectedVersion: task.Version, ThreadID: "missing"}); err == nil {
+		t.Fatal("missing target was linked")
+	}
+	got, _ := s.GetTask(ctx, task.ID)
+	if got.ThreadID != task.ThreadID || got.Version != task.Version {
+		t.Fatal("failed target read mutated binding")
 	}
 }
 

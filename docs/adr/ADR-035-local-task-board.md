@@ -103,6 +103,12 @@ The task title occupies the same inspector heading above badges and tabs in Over
 
 Ticket/Codex actions sit below Priority and Move without a visible Connections heading or autosave instruction. Optional Open source and Created by source links form a semantic list below Description, leaving room for further task references. The card footer and inspector share the Codex action renderer. Unlinked chats open an explicit inline attachment form with Cancel; its draft survives tab switches and inspector dismissal. Overview settings use flat surface-filled selectors, and the active tab uses a blue underline. The static empty inspector follows this same arrangement without active controls or animation.
 
+## Source identity and editable connections
+
+PR review sources and their children use a neutral eye icon; PR feedback uses a comment icon. Classification uses typed source settings, durable event-key namespaces and source_task_id relationships, never display titles. Overview's connection row now includes the PR link alongside ticket and Codex controls; only generic source URLs and Created by source remain in the reference list. Missing PR is a passive muted placeholder; missing ticket keeps a muted icon/text attachment action. Linked Codex controls expose a hover/focus pencil and explicit replacement form with Cancel. Replacement drafts survive tabs/dismissal and unrelated versions; changed bindings require reload, and input typed while saving is retained. Backend replacement observes both chat authorities, rejects unfinished old turns and pending/uncertain task launches, preserves frozen terminal requests and advances the existing version/generation fences. It never starts or interrupts a turn.
+
+This binding amendment requires a normal daemon rebuild/restart with Sync state preserved.
+
 ## Dismissed inspector amendment
 
 With no selected card, the inspector shows a muted, static outline of Overview rather than loading feedback. The decorative shape has no animation, form controls or accessibility-tree content; a readable caption invites selection. Escape or a primary click outside the inspector clears the visible selection and removes only the task query parameter. Clicks on another card/source or an editor action still perform that destination's action. Escape during a drag cancels the drag first; composing input and unrelated creation/linking editors are not dismissed.

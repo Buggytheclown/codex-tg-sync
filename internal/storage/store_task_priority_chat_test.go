@@ -5,6 +5,7 @@ import (
 	"errors"
 	"github.com/mideco-tech/codex-tg/internal/model"
 	"path/filepath"
+	"reflect"
 	"testing"
 )
 
@@ -175,5 +176,42 @@ func TestTaskSourceCannotLinkChat(t *testing.T) {
 	}
 	if _, err := s.LinkTaskChat(ctx, source.ID, model.LinkTaskChatInput{ExpectedVersion: source.Version, ThreadID: "chat"}); !errors.Is(err, ErrTaskInvalid) {
 		t.Fatalf("source linked: %v", err)
+	}
+}
+
+func TestTaskRelinkChatPreservesTerminalHistoryAndFencesPolling(t *testing.T) {
+	s := openTestStore(t)
+	ctx := context.Background()
+	task, err := s.CreateTask(ctx, model.CreateTaskInput{Title: "task", ThreadID: "old-chat", Polling: &model.TaskPolling{Type: "pr", Mode: model.PollingOnce, Config: []byte(`{}`), Action: model.TaskPollingAction{Type: model.PollingReturnTask}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := testExternalLaunchRequest("test:relink")
+	request.TaskID, request.TriggerEventID = task.ID, "event"
+	policy, reviewer, sandbox := "on-request", "auto_review", "workspace-write"
+	request.ApprovalPolicy, request.ApprovalsReviewer, request.SandboxMode = &policy, &reviewer, &sandbox
+	if _, err := s.EnqueueExternalLaunchRequests(ctx, "test", []model.ExternalLaunchRequest{request}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.LinkTaskChat(ctx, task.ID, model.LinkTaskChatInput{ExpectedVersion: task.Version, ThreadID: "new-chat"}); !errors.Is(err, ErrTaskConflict) {
+		t.Fatalf("pending request allowed rebinding: %v", err)
+	}
+	if _, err := s.db.ExecContext(ctx, `UPDATE external_launch_requests SET status=?,thread_id=? WHERE id=?`, model.ExternalLaunchSessionCompleted, "old-chat", request.ID); err != nil {
+		t.Fatal(err)
+	}
+	before, _ := s.GetExternalLaunchRequest(ctx, request.ID)
+	linked, err := s.LinkTaskChat(ctx, task.ID, model.LinkTaskChatInput{ExpectedVersion: task.Version, ThreadID: "new-chat"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if linked.ThreadID != "new-chat" || linked.Version != task.Version+1 || linked.Polling.Generation != task.Polling.Generation+1 || linked.Column != task.Column {
+		t.Fatalf("bad rebind: %#v", linked)
+	}
+	after, _ := s.GetExternalLaunchRequest(ctx, request.ID)
+	if !reflect.DeepEqual(before, after) {
+		t.Fatal("rebind rewrote frozen history")
+	}
+	if _, err := s.LinkTaskChat(ctx, task.ID, model.LinkTaskChatInput{ExpectedVersion: task.Version, ThreadID: "other-chat"}); !errors.Is(err, ErrTaskConflict) {
+		t.Fatalf("stale rebind: %v", err)
 	}
 }

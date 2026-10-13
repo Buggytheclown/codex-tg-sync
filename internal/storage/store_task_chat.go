@@ -36,9 +36,6 @@ func (s *Store) LinkTaskChat(ctx context.Context, id string, in model.LinkTaskCh
 		tx.Rollback()
 		return s.GetTask(ctx, id)
 	}
-	if task.ThreadID != "" {
-		return nil, fmt.Errorf("%w: task already has a chat", ErrTaskConflict)
-	}
 	var count int
 	if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM tasks WHERE thread_id=? AND id<>?`, in.ThreadID, id).Scan(&count); err != nil {
 		return nil, err
@@ -46,12 +43,15 @@ func (s *Store) LinkTaskChat(ctx context.Context, id string, in model.LinkTaskCh
 	if count != 0 {
 		return nil, fmt.Errorf("%w: chat already belongs to another task", ErrTaskConflict)
 	}
-	// A historical started request also establishes an immutable chat identity.
-	if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM external_launch_requests WHERE task_id=? AND coalesce(thread_id,'')<>'' AND thread_id<>?`, id, in.ThreadID).Scan(&count); err != nil {
-		return nil, err
-	}
-	if count != 0 {
-		return nil, fmt.Errorf("%w: task launch history belongs to a different chat", ErrTaskConflict)
+	// Initial attachment must agree with recovered launch history. A rebind
+	// preserves terminal requests on their original chat identities.
+	if task.ThreadID == "" {
+		if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM external_launch_requests WHERE task_id=? AND coalesce(thread_id,'')<>'' AND thread_id<>?`, id, in.ThreadID).Scan(&count); err != nil {
+			return nil, err
+		}
+		if count != 0 {
+			return nil, fmt.Errorf("%w: task launch history belongs to a different chat", ErrTaskConflict)
+		}
 	}
 	// Even failed/unknown requests may still create or recover a different chat.
 	if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM external_launch_requests WHERE task_id=? AND status NOT IN ('dismissed','rejected_sender','session_completed','session_interrupted','session_failed')`, id).Scan(&count); err != nil {
@@ -66,7 +66,7 @@ func (s *Store) LinkTaskChat(ctx context.Context, id string, in model.LinkTaskCh
 	if _, err := tx.ExecContext(ctx, `UPDATE task_polling SET generation=generation+1 WHERE task_id=?`, id); err != nil {
 		return nil, err
 	}
-	if err := addTaskEventTx(ctx, tx, id, "chat_linked", map[string]string{"thread_id": in.ThreadID}); err != nil {
+	if err := addTaskEventTx(ctx, tx, id, "chat_linked", map[string]string{"thread_id": in.ThreadID, "previous_thread_id": task.ThreadID}); err != nil {
 		return nil, err
 	}
 	if err := tx.Commit(); err != nil {

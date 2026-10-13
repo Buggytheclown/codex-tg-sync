@@ -24,7 +24,7 @@ export function TicketControl({ task, busy, onSave }: {
           <ServiceIcon service="tracker" className="ticket-brand" /><span>{ticketLabel(url)}</span>
         </a>
         <button className="card-footer-link ticket-edit" type="button" aria-label="Edit ticket" title="Edit ticket" disabled={busy} onClick={() => setEditing(true)}><EditIcon /></button>
-      </> : <button className="card-footer-link" type="button" disabled={busy} onClick={() => setEditing(true)}><ServiceIcon service="tracker" />{url ? "Edit ticket" : "Add ticket"}</button>}
+      </> : <button className="card-footer-link connection-empty" type="button" disabled={busy} onClick={() => setEditing(true)}><ServiceIcon service="tracker" className="connection-empty-icon" />{url ? "Edit ticket" : "Add ticket"}</button>}
     </div>
     {editing && <TicketForm task={task} busy={busy} onSave={onSave} onClose={() => setEditing(false)} />}
   </div>;

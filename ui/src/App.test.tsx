@@ -11,6 +11,7 @@ import {
 import { App, TaskCard } from "./App";
 import { WorkflowForm } from "./Workflow";
 import { TicketControl } from "./TicketControl";
+import { TaskChatForm } from "./forms";
 import { compactTask, defaultPolling, emptyConfig } from "./model";
 import type { Task, Polling } from "./model";
 const makeTask = (extra: Partial<Task> = {}): Task => ({
@@ -31,6 +32,80 @@ const makeTask = (extra: Partial<Task> = {}): Task => ({
   ...extra,
 });
 let rows: Task[], calls: { path: string; method: string; body: unknown }[];
+it("shows the same source icon on a renamed source and its generated card", async () => {
+  rows = [makeTask({ id: "source-review", title: "Renamed source", polling: { ...defaultPolling("pr_review_source"), action: { type: "create_task", child_definition: { title: "Child", description: "", config: emptyConfig() } } } }), makeTask({ id: "child", title: "Custom child", source_task_id: "source-review", source_key: "legacy-event" })];
+  render(<App />);
+  const source = await screen.findByRole("button", { name: /Renamed source/ });
+  expect(source.querySelector('[data-source-kind="review"]')).not.toBeNull();
+  const card = screen.getByRole("button", { name: /Custom child.*No polling/ });
+  expect(card.querySelector('.card-title [data-source-kind="review"]')).not.toBeNull();
+  expect(calls.every(c => c.method === "GET")).toBe(true);
+});
+it("fences changed chat bindings without losing the replacement draft", async () => {
+  const task = makeTask();
+  const link = vi.fn(async () => task);
+  const view = render(<TaskChatForm task={task} busy={false} onLink={link} inline />);
+  const input = screen.getByLabelText("Codex chat for Review the next revision");
+  fireEvent.change(input, { target: { value: "draft-chat" } });
+  view.rerender(<TaskChatForm task={{ ...task, version: 2, thread_id: "external-chat" }} busy={false} onLink={link} inline />);
+  fireEvent.click(screen.getByRole("button", { name: "Link chat" }));
+  expect(link).not.toHaveBeenCalled();
+  expect((input as HTMLInputElement).value).toBe("draft-chat");
+  fireEvent.click(screen.getByRole("button", { name: "Reload latest chat" }));
+  expect((input as HTMLInputElement).value).toBe("external-chat");
+});
+it("keeps chat input typed while a replacement save is pending", async () => {
+  const task = makeTask();
+  let resolve!: (value: Task) => void;
+  const held = new Promise<Task>(done => { resolve = done; });
+  const link = vi.fn(() => held), close = vi.fn();
+  const view = render(<TaskChatForm task={task} busy={false} onLink={link} inline onSaved={close} />);
+  const input = screen.getByLabelText("Codex chat for Review the next revision");
+  fireEvent.change(input, { target: { value: "submitted-chat" } });
+  fireEvent.click(screen.getByRole("button", { name: "Link chat" }));
+  fireEvent.change(input, { target: { value: "later-chat" } });
+  const saved = { ...task, version: 2, thread_id: "submitted-chat" };
+  view.rerender(<TaskChatForm task={saved} busy={false} onLink={link} inline onSaved={close} />);
+  resolve(saved);
+  await waitFor(() => expect(link).toHaveBeenCalledOnce());
+  expect(close).not.toHaveBeenCalled();
+  expect((input as HTMLInputElement).value).toBe("later-chat");
+});
+it("puts PR beside ticket/Codex in Overview and shows quiet missing connections", async () => {
+  rows = [makeTask({ source_url: "https://a.yandex-team.ru/review/123", thread_id: "", ticket_url: "" })];
+  window.history.replaceState(null, "", "/?task=task-1");
+  render(<App />);
+  await screen.findByLabelText("Title");
+  const panel = screen.getByRole("complementary", { name: "Task details and settings" });
+  const detail = within(panel);
+  const pr = detail.getByRole("link", { name: "Arcanum PR #123" });
+  expect(pr.closest(".overview-links")).not.toBeNull();
+  expect(detail.queryByRole("list", { name: "Task references" })).toBeNull();
+  expect(detail.getByRole("button", { name: "Add ticket" }).classList.contains("connection-empty")).toBe(true);
+});
+it("uses a passive PR placeholder when no Arcanum PR is linked", async () => {
+  render(<App />);
+  await screen.findByLabelText("Priority for Review the next revision");
+  expect(screen.getByLabelText("No PR linked").tagName).toBe("SPAN");
+  expect(calls.every(c => c.method === "GET")).toBe(true);
+});
+it("edits a linked Codex chat from Overview and retains the draft across tabs", async () => {
+  window.history.replaceState(null, "", "/?task=task-1");
+  render(<App />);
+  await screen.findByLabelText("Title");
+  const detail = within(screen.getByRole("complementary", { name: "Task details and settings" }));
+  fireEvent.click(detail.getByRole("button", { name: "Edit Codex chat" }));
+  const chat = detail.getByLabelText("Codex chat for Review the next revision") as HTMLInputElement;
+  expect(chat.value).toBe("thread-1");
+  fireEvent.change(chat, { target: { value: "codex://threads/replacement-chat" } });
+  fireEvent.click(detail.getByRole("tab", { name: "History" }));
+  fireEvent.click(detail.getByRole("tab", { name: "Overview" }));
+  expect(chat.value).toBe("codex://threads/replacement-chat");
+  fireEvent.keyDown(chat, { key: "Enter", metaKey: true });
+  await waitFor(() => expect(rows[0].thread_id).toBe("replacement-chat"));
+  expect(detail.getByRole("link", { name: "Open in Codex ↗" }).getAttribute("href")).toBe("codex://threads/replacement-chat");
+  expect(detail.queryByRole("textbox", { name: /Codex chat for/ })).toBeNull();
+});
 it("shows branded PR and ticket links in the compact footer without loading details", async () => {
   rows = [makeTask({ source_url: "https://a.yandex-team.ru/review/123", ticket_url: "https://st.yandex-team.ru/TASK-456" })];
   render(<App />);

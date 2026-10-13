@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"time"
 
@@ -156,7 +157,7 @@ func (s *Service) LinkTaskChat(ctx context.Context, id string, in model.LinkTask
 	if currentTask.Polling != nil && currentTask.Polling.Action.Type == model.PollingCreateTask {
 		return nil, tasks.ErrInvalid
 	}
-	if currentTask.ThreadID != "" {
+	if currentTask.ThreadID == in.ThreadID {
 		s.taskLaunchMu.Lock()
 		defer s.taskLaunchMu.Unlock()
 		return s.store.LinkTaskChat(ctx, id, in)
@@ -164,6 +165,15 @@ func (s *Service) LinkTaskChat(ctx context.Context, id string, in model.LinkTask
 	poll, err := s.controlReadSession(ctx)
 	if err != nil {
 		return nil, err
+	}
+	if currentTask.ThreadID != "" {
+		previous, err := readAuthoritativeSyncSnapshot(ctx, poll, currentTask.ThreadID)
+		if err != nil {
+			return nil, err
+		}
+		if threadLooksActiveForPolling(previous.Thread) || previous.WaitingOnApproval || previous.WaitingOnReply || (previous.LatestTurnID != "" && !isTerminalStatus(previous.LatestTurnStatus)) {
+			return nil, fmt.Errorf("%w: finish the current chat turn before changing its task binding", tasks.ErrConflict)
+		}
 	}
 	current, err := readAuthoritativeSyncSnapshot(ctx, poll, in.ThreadID)
 	if err != nil {

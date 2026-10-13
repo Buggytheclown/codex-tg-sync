@@ -49,9 +49,15 @@ func TestBoardPriorityAndChatCommands(t *testing.T) {
 		t.Fatalf("response: %#v", task)
 	}
 	command("POST", path+"/chat", `{"expected_version":1,"thread_id":"chat"}`, 409)
-	command("POST", path+"/chat", fmt.Sprintf(`{"expected_version":%d,"thread_id":"different"}`, task.Version), 409)
+	previousVersion := task.Version
+	task = command("POST", path+"/chat", fmt.Sprintf(`{"expected_version":%d,"thread_id":"different"}`, previousVersion), 200)
+	if task.ThreadID != "different" || task.Version != previousVersion+1 || task.Priority != "high" {
+		t.Fatalf("relink response: %#v", task)
+	}
+	command("POST", path+"/chat", fmt.Sprintf(`{"expected_version":%d,"thread_id":"chat"}`, previousVersion), 409)
+	task = command("POST", path+"/chat", fmt.Sprintf(`{"expected_version":%d,"thread_id":"different"}`, task.Version), 200)
 	got, _ := service.GetTask(context.Background(), task.ID)
-	if got.ThreadID != "chat" || got.Version != task.Version {
+	if got.ThreadID != "different" || got.Version != previousVersion+1 || got.Version != task.Version {
 		t.Fatalf("rejected command wrote: %#v", got)
 	}
 }

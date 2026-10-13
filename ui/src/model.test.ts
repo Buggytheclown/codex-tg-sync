@@ -9,6 +9,7 @@ import {
   safeExternalURL,
   parseThreadID,
   arcanumReviewLink,
+  taskSourceKind,
 } from "./model";
 import type { Task } from "./model";
 const task = (extra: Partial<Task> = {}): Task => ({
@@ -27,6 +28,14 @@ const task = (extra: Partial<Task> = {}): Task => ({
   updated_at: "",
   requests: [],
   ...extra,
+});
+it("identifies renamed source children by parent/type and durable keys, never title", () => {
+  const parent = task({ title: "PR feedback", polling: { ...defaultPolling("pr_review_source"), action: { type: "create_task" } } });
+  expect(taskSourceKind(parent)).toBe("review");
+  expect(taskSourceKind(task({ title: "Custom title" }), parent)).toBe("review");
+  expect(taskSourceKind(task({ source_key: "arcanum_changes:123" }))).toBe("feedback");
+  expect(taskSourceKind(task({ source_key: "arcanum_changes:123" }), parent)).toBe("feedback");
+  expect(taskSourceKind(task({ title: "PR review" }))).toBeUndefined();
 });
 
 it.each([

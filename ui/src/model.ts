@@ -171,6 +171,16 @@ export const defaultPolling = (type = "pr_wait"): Polling => ({
 });
 export const isSource = (task: Task | TaskCard) =>
   task.polling?.action.type === "create_task";
+export type SourceKind = "review" | "feedback";
+export function taskSourceKind(task: Task | TaskCard, source?: Task | TaskCard): SourceKind | undefined {
+  const type = task.polling?.type;
+  if (type === "pr_review_source") return "review";
+  if (type === "pr_changes_source") return "feedback";
+  if (task.source_key.startsWith("arcanum_review:")) return "review";
+  if (task.source_key.startsWith("arcanum_changes:")) return "feedback";
+  if (source?.polling?.type === "pr_review_source") return "review";
+  if (source?.polling?.type === "pr_changes_source") return "feedback";
+}
 export const executionLabel = (task: Pick<Task, "execution">): string => {
   const status = task.execution?.last_seen_turn_status?.toLowerCase();
   if (
