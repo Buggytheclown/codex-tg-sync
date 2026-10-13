@@ -301,6 +301,7 @@ For live Telegram QA, verify:
 - Hold saves to prove later blurred edits serialize and survive navigation; preserve failed/stale drafts on return with explicit retry/reload, never certify an unseen newer version or discard typing.
 - Verify the first destination click, same-task mutation coordination, separate Ticket/Codex forms and explicit Polling save/activation. Browser tests use isolated tasks, delayed/failing requests and the real local API; live installation readback is GET-only.
 - The title stays in one shared heading across Overview/Polling/History. UI integration covers the header textarea's native form association and blur/Enter/Cmd+Enter saves. Browser QA compares title, badges, Move and tab positions for short, multiline and unbroken long titles at desktop/narrow widths, and checks validation plus pending/failed draft text across switches.
+- Shared inspector acceptance covers Priority above Move, compact ticket/Codex actions above tabs, omitted Connections heading/autosave instruction, and priority blur/Cmd+Enter saving through its native form owner on every tab. Inline chat attachment opens on demand; Cancel discards only that draft, while tab switches/dismissal retain it. Browser QA checks native priority saves, attachment/ticket keyboard actions, visible failures, flat selectors, underline tabs and narrow wrapping with isolated fixture data.
 
 ## Dismissed inspector
 

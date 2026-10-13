@@ -31,6 +31,71 @@ const makeTask = (extra: Partial<Task> = {}): Task => ({
   ...extra,
 });
 let rows: Task[], calls: { path: string; method: string; body: unknown }[];
+it("keeps priority, movement and compact connections above every inspector tab", async () => {
+  rows = [makeTask({ thread_id: "", priority: "normal" })];
+  window.history.replaceState(null, "", "/?task=task-1");
+  render(<App />);
+  await screen.findByLabelText("Title");
+  const panel = screen.getByRole("complementary", { name: "Task details and settings" });
+  const detail = within(panel);
+  const priority = detail.getByLabelText("Priority");
+  const move = detail.getByLabelText("Move task");
+  const link = detail.getByRole("button", { name: "Link Codex: no chat linked" });
+  expect(priority.compareDocumentPosition(move) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  expect(move.compareDocumentPosition(link) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  expect(link.compareDocumentPosition(detail.getByRole("tablist")) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  expect(detail.queryByRole("heading", { name: "Connections" })).toBeNull();
+  expect(detail.queryByText("Changes save when a field loses focus.")).toBeNull();
+  expect(detail.queryByRole("textbox", { name: /Codex chat/ })).toBeNull();
+  for (const tab of ["Polling", "History", "Overview"]) {
+    fireEvent.click(detail.getByRole("tab", { name: tab }));
+    expect(detail.getByLabelText("Priority")).toBe(priority);
+    expect(detail.getByRole("button", { name: "Link Codex: no chat linked" })).toBe(link);
+  }
+  expect(calls.every(call => call.method === "GET")).toBe(true);
+});
+it.each(["Overview", "Polling", "History"])("saves header priority on blur and Cmd+Enter from %s", async tab => {
+  window.history.replaceState(null, "", "/?task=task-1");
+  render(<App />);
+  await screen.findByLabelText("Title");
+  const detail = within(screen.getByRole("complementary", { name: "Task details and settings" }));
+  fireEvent.click(detail.getByRole("tab", { name: tab }));
+  const priority = detail.getByLabelText("Priority") as HTMLSelectElement;
+  expect(priority.form).not.toBeNull();
+  fireEvent.change(priority, { target: { value: "high" } });
+  fireEvent.blur(priority);
+  await waitFor(() => expect(rows[0].priority).toBe("high"));
+  fireEvent.change(priority, { target: { value: "low" } });
+  fireEvent.keyDown(priority, { key: "Enter", metaKey: true });
+  await waitFor(() => expect(rows[0].priority).toBe("low"));
+  expect(calls.filter(call => call.method === "PATCH")).toHaveLength(2);
+  expect(rows[0].title).toBe("Review the next revision");
+});
+it("opens a compact inspector chat attachment and preserves its draft across tabs and dismissal", async () => {
+  rows = [makeTask({ thread_id: "" })];
+  window.history.replaceState(null, "", "/?task=task-1");
+  render(<App />);
+  await screen.findByLabelText("Title");
+  const detail = within(screen.getByRole("complementary", { name: "Task details and settings" }));
+  const open = () => fireEvent.click(detail.getByRole("button", { name: "Link Codex: no chat linked" }));
+  open();
+  fireEvent.change(detail.getByLabelText("Codex chat for Review the next revision"), { target: { value: "Discard this chat" } });
+  fireEvent.click(detail.getByRole("button", { name: "Cancel" }));
+  open();
+  const chat = detail.getByLabelText("Codex chat for Review the next revision") as HTMLInputElement;
+  expect(chat.value).toBe("");
+  fireEvent.change(chat, { target: { value: "codex://threads/header-chat" } });
+  fireEvent.click(detail.getByRole("tab", { name: "History" }));
+  expect(detail.getByLabelText("Codex chat for Review the next revision")).toBe(chat);
+  fireEvent.keyDown(chat, { key: "Escape" });
+  await screen.findByText("Select a card to see its details.");
+  fireEvent.click(screen.getByRole("button", { name: /TASK Review the next revision/ }));
+  expect((detail.getByLabelText("Codex chat for Review the next revision") as HTMLInputElement).value).toBe("codex://threads/header-chat");
+  fireEvent.keyDown(chat, { key: "Enter", metaKey: true });
+  await waitFor(() => expect(rows[0].thread_id).toBe("header-chat"));
+  expect(detail.getByRole("link", { name: "Open in Codex ↗" }).getAttribute("href")).toBe("codex://threads/header-chat");
+  expect(calls.filter(call => call.path.endsWith("/chat") && call.method === "POST")).toHaveLength(1);
+});
 it("places the editable title in the shared heading above all three tabs", async () => {
   window.history.replaceState(null, "", "/?task=task-1");
   render(<App />);
@@ -1194,8 +1259,10 @@ it("saves priority with Cmd+Enter and links an existing chat from Overview", asy
   await waitFor(() => expect(rows[0].priority).toBe("high"));
   expect(rows[0].title).toBe("Keyboard saved");
   expect((screen.getByLabelText("Priority for Keyboard saved") as HTMLSelectElement).value).toBe("high");
-  await waitFor(() => expect((screen.getByRole("button", { name: "Link chat" }) as HTMLButtonElement).disabled).toBe(false));
-  const chat = screen.getByLabelText("Codex chat");
+  const detail = within(screen.getByRole("complementary", { name: "Task details and settings" }));
+  await waitFor(() => expect((detail.getByRole("button", { name: "Link Codex: no chat linked" }) as HTMLButtonElement).disabled).toBe(false));
+  fireEvent.click(detail.getByRole("button", { name: "Link Codex: no chat linked" }));
+  const chat = detail.getByLabelText("Codex chat for Keyboard saved");
   fireEvent.change(chat, { target: { value: "codex://threads/existing-chat" } });
   fireEvent.keyDown(chat, { key: "Enter", metaKey: true });
   await waitFor(() => expect(rows[0].thread_id).toBe("existing-chat"));

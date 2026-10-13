@@ -256,10 +256,7 @@ export function TaskCard({
       </select>
     <div className="card-controls">
     {onTicket && <TicketControl task={task} busy={controlsDisabled} onSave={onTicket} />}
-      {task.thread_id
-        ? <a className="card-codex-link card-footer-link" href={codexURL(task.thread_id)} draggable={false}>Open in Codex ↗</a>
-        : <button className="card-codex-link card-footer-link" type="button" aria-label="Link Codex: no chat linked" aria-expanded={linking} disabled={controlsDisabled || !onLink}
-          onClick={() => setLinking(!linking)}>Link Codex ＋</button>}
+      <CodexConnection task={task} linking={linking} disabled={controlsDisabled || !onLink} onToggle={() => setLinking(!linking)} />
     </div>
     {linking && !task.thread_id && onLink && <div className="card-chat-form">
       <TaskChatForm task={task} busy={controlsDisabled} onLink={onLink} inline onCancel={() => setLinking(false)} />
@@ -959,7 +956,7 @@ export function App() {
       <aside ref={detailPanel} className={`detail-panel${panel === "details" && (detailDismissed || !selectedCard) ? " detail-panel-empty" : ""}`} aria-label="Task details and settings" onKeyDown={(e) => {
         if (e.key !== "Enter" || !(e.metaKey || e.ctrlKey) || e.repeat || e.nativeEvent.isComposing) return;
         const target = e.target as HTMLElement;
-        const form = target.closest("form") || (target instanceof HTMLTextAreaElement ? target.form : null);
+        const form = target.closest("form") || (target instanceof HTMLTextAreaElement || target instanceof HTMLSelectElement || target instanceof HTMLInputElement ? target.form : null);
         if (!form) return;
         if (form.matches(".overview-form")) {
           e.preventDefault();
@@ -1050,7 +1047,7 @@ export function App() {
               }
             }}
             onSave={input => mutate<Task>(`/v1/tasks/${selected.id}`, "PATCH", input, true)}>
-          {({ title, form, titleText }) => <>
+          {({ title, priority, form, feedback, titleText }) => <>
             <div className="detail-heading">
               <h2 className="detail-title" aria-label={titleText}>{tab === "overview" ? title : titleText}</h2>
               <div className="detail-badges">
@@ -1061,6 +1058,7 @@ export function App() {
               </div>
             </div>
             <div className="move-control">
+              {priority}
               <Field label="Move task">
                 <select
                   aria-label="Move task"
@@ -1078,6 +1076,9 @@ export function App() {
                 </select>
               </Field>
             </div>
+            <TaskConnections key={selected.id} task={selected} busy={busy}
+              onLink={(thread_id, expected_version) => mutate<Task>(`/v1/tasks/${selected.id}/chat`, "POST", { expected_version, thread_id })}
+              onTicket={(url, version) => saveTicket(selected, url, version)} />
             <div className="tabs" role="tablist">
               {(["overview", "polling", "history"] as Tab[]).map(
                 (t) => (
@@ -1102,11 +1103,9 @@ export function App() {
               </p>
             )}
             <div className="panel-body">
-              {tab === "overview" ? (
-                <Overview task={selected} busy={busy} form={form}
-                  onLink={(thread_id, expected_version) => mutate<Task>(`/v1/tasks/${selected.id}/chat`, "POST", { expected_version, thread_id })}
-                  onTicket={(url, version) => saveTicket(selected, url, version)} />
-              ) : tab === "polling" ? (
+              {feedback}
+              <div hidden={tab !== "overview"}><div className="overview">{form}</div></div>
+              {tab === "polling" ? (
                 <WorkflowForm key={`workflow-${selected.id}`} task={selected} busy={busy} configure={activationRequested}
                   onSave={input => mutate<Task>(`/v1/tasks/${selected.id}`, "PATCH", input)}
                   onActivate={async task => {
@@ -1117,9 +1116,9 @@ export function App() {
                     return moved;
                   }}
                   onLink={(thread_id, expected_version) => mutate<Task>(`/v1/tasks/${selected.id}/chat`, "POST", { expected_version, thread_id })} />
-              ) : (
+              ) : tab === "history" ? (
                 <History task={selected} />
-              )}
+              ) : null}
             </div>
           </>}
           </OverviewForm>
@@ -1172,39 +1171,41 @@ function ExternalLink({ url, label }: { url: string; label: string }) {
     </span>
   );
 }
-function Overview({ task, busy, form, onLink, onTicket }: { task: Task; busy: boolean; form: ReactNode; onLink: (threadID: string, version: number) => Promise<Task>; onTicket: (url: string, version: number) => Promise<Card> }) {
+function CodexConnection({ task, linking, disabled, onToggle }: { task: Pick<Task, "thread_id">; linking: boolean; disabled?: boolean; onToggle: () => void }) {
+  return task.thread_id
+    ? <a className="card-codex-link card-footer-link" href={codexURL(task.thread_id)} draggable={false}>Open in Codex ↗</a>
+    : <button className="card-codex-link card-footer-link" type="button" aria-label="Link Codex: no chat linked" aria-expanded={linking} disabled={disabled}
+      onClick={onToggle}>Link Codex ＋</button>;
+}
+function TaskConnections({ task, busy, onLink, onTicket }: { task: Task; busy: boolean; onLink: (threadID: string, version: number) => Promise<Task>; onTicket: (url: string, version: number) => Promise<Card> }) {
+  const [linking, setLinking] = useState(false);
   return (
-    <div className="overview">
-      {form}
-      <section className="overview-connections" aria-label="Connections">
-      <h3>Connections</h3>
+    <section className="overview-connections" aria-label="Connections">
       <div className="overview-links">
-      <TicketControl task={task} busy={busy} onSave={onTicket} />
-      {task.thread_id ? (
-        <a className="detail-link codex-link" href={codexURL(task.thread_id)}>
-          Open in Codex <span>↗</span>
-        </a>
-      ) : <TaskChatForm task={task} busy={busy} onLink={onLink} />}
+        <TicketControl task={task} busy={busy} onSave={onTicket} />
+        <CodexConnection task={task} linking={linking} disabled={busy} onToggle={() => setLinking(!linking)} />
       </div>
-      <div className="overview-provenance">
-      {task.source_url && (
-        <ExternalLink url={task.source_url} label="Open source" />
-      )}
-      {task.source_task_id && (
-        <a
-          className="detail-link"
-          href={`?task=${encodeURIComponent(task.source_task_id)}`}
-        >
-          Created by source
-        </a>
-      )}
-      </div>
-      </section>
-    </div>
+      {linking && !task.thread_id && <div className="card-chat-form">
+        <TaskChatForm task={task} busy={busy} onLink={onLink} inline onCancel={() => setLinking(false)} />
+      </div>}
+      {(task.source_url || task.source_task_id) && <div className="overview-provenance">
+        {task.source_url && (
+          <ExternalLink url={task.source_url} label="Open source" />
+        )}
+        {task.source_task_id && (
+          <a
+            className="detail-link"
+            href={`?task=${encodeURIComponent(task.source_task_id)}`}
+          >
+            Created by source
+          </a>
+        )}
+      </div>}
+    </section>
   );
 }
-function PriorityField({ value, onChange }: { value: Priority; onChange: (priority: Priority) => void }) {
-  return <Field label="Priority"><select value={value} onChange={(e) => onChange(e.target.value as Priority)}>
+function PriorityField({ value, onChange, form, onBlur }: { value: Priority; onChange: (priority: Priority) => void; form?: string; onBlur?: () => void }) {
+  return <Field label="Priority"><select value={value} form={form} onBlur={onBlur} onChange={(e) => onChange(e.target.value as Priority)}>
     <option value="low">↓ Low</option><option value="normal">— Normal</option><option value="high">↑ High</option>
   </select></Field>;
 }
@@ -1239,7 +1240,7 @@ function RequestHistory({ task }: { task: Task }) {
 function OverviewForm({ task, busy, onSave, drafts, onFailure, children }: {
   task: Task; busy: boolean; onSave: (input: unknown) => Promise<Task>;
   drafts: Map<string, OverviewDraft>; onFailure: (message: string) => void;
-  children: (editor: { title: ReactNode; form: ReactNode; titleText: string }) => ReactNode;
+  children: (editor: { title: ReactNode; priority: ReactNode; form: ReactNode; feedback: ReactNode; titleText: string }) => ReactNode;
 }) {
   const formID = useId();
   const [draft] = useState(() => {
@@ -1284,19 +1285,16 @@ function OverviewForm({ task, busy, onSave, drafts, onFailure, children }: {
     onBlur={e => { if (e.target.matches("input, textarea, select")) draft.enqueue(); }}
     onInvalid={() => draft.reject("Enter a title before saving Overview.")}
     {...composition}>
-    <div className="overview-priority">
-      <PriorityField value={priority} onChange={priority => change({ priority })} />
-    </div>
     <Field label="Description" className="overview-description"><textarea rows={3} value={description} onChange={e => change({ description: e.target.value })} /></Field>
-    <div className="overview-save">
-      {draft.stale && <p className="readiness-banner">This task changed. Reload latest settings before saving. Your draft has been preserved.</p>}
-      {draft.stale && <button type="button" disabled={busy || !!draft.pending} onClick={() => draft.reload()}>Reload latest overview</button>}
-      {draft.error ? <p role="alert" className="error-note">{draft.error}</p> : draft.message && <p role="status" className="overview-status">{draft.message}</p>}
-      {draft.failed && !draft.stale && <button type="button" disabled={busy || !!draft.pending} onClick={() => draft.enqueue(true)}>Retry overview save</button>}
-      <p className="note">Changes save when a field loses focus.</p>
-    </div>
   </form>;
-  return children({ title: titleEditor, form, titleText: title });
+  const feedback = (draft.stale || draft.error || draft.message || draft.failed) && <div className="overview-save">
+    {draft.stale && <p className="readiness-banner">This task changed. Reload latest settings before saving. Your draft has been preserved.</p>}
+    {draft.stale && <button type="button" disabled={busy || !!draft.pending} onClick={() => draft.reload()}>Reload latest overview</button>}
+    {draft.error ? <p role="alert" className="error-note">{draft.error}</p> : draft.message && <p role="status" className="overview-status">{draft.message}</p>}
+    {draft.failed && !draft.stale && <button type="button" disabled={busy || !!draft.pending} onClick={() => draft.enqueue(true)}>Retry overview save</button>}
+  </div>;
+  const priorityEditor = <PriorityField value={priority} form={formID} onBlur={() => draft.enqueue()} onChange={priority => change({ priority })} />;
+  return children({ title: titleEditor, priority: priorityEditor, form, feedback, titleText: title });
 }
 function History({ task }: { task: Task }) {
   const [events, setEvents] = useState<TaskEvent[]>([]),
