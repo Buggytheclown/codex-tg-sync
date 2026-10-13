@@ -284,6 +284,7 @@ func (s *Service) Start(ctx context.Context) error {
 	_ = s.store.DeleteState(runCtx, "appserver.live_connected")
 	_ = s.store.SetState(runCtx, "appserver.poll_connected", "false")
 	repairResetErr := s.resetRepairRequestOnStartup(runCtx)
+	pollHealthErr := s.migrateExternalPollHealth(runCtx)
 	_, deliveryRetirementErr := s.store.RetireUnsupportedTelegramDeliveries(runCtx, s.cfg.SyncGroupID)
 	_, recoveryErr := s.store.RecoverStartingExternalLaunchRequests(runCtx)
 	_, terminalRecoveryErr := s.reconcileStoredExternalLaunchTerminals(runCtx)
@@ -295,7 +296,7 @@ func (s *Service) Start(ctx context.Context) error {
 	s.syncValidatedSession = ""
 	resetErr := s.recoverSyncRuntimeLocked(runCtx)
 	s.syncMu.Unlock()
-	err := errors.Join(repairResetErr, deliveryRetirementErr, recoveryErr, terminalRecoveryErr, actionCardRecoveryErr, ackRecoveryErr, replyRecoveryErr, resetErr)
+	err := errors.Join(repairResetErr, pollHealthErr, deliveryRetirementErr, recoveryErr, terminalRecoveryErr, actionCardRecoveryErr, ackRecoveryErr, replyRecoveryErr, resetErr)
 	if err != nil {
 		cancel()
 		s.mu.Lock()
@@ -796,6 +797,18 @@ func (s *Service) processDeliveryBatch(ctx context.Context) {
 			_ = s.store.SupersedeDelivery(ctx, item.ID)
 			continue
 		}
+		if item.Kind == "health" && payload.HealthKey == externalPollHealthKey && payload.HealthState == "recovered" {
+			s.healthMu.Lock()
+			summary, err := s.loadExternalPollHealthSummary(ctx)
+			s.healthMu.Unlock()
+			if err != nil || summary.Blocked || summary.Enabled == 0 {
+				s.setError(ctx, err)
+				// Keep the same recovery receipt retryable; a transient source error
+				// is not a Telegram send failure and must not exhaust send attempts.
+				_ = s.store.FailDelivery(ctx, item.ID, item.RetryCount, time.Now().UTC().Add(max(s.cfg.DeliveryRetryBase, time.Second)), "Waiting for healthy external pollers", false)
+				continue
+			}
+		}
 		s.logTelegramRenderContainsNil(payload.ThreadID, payload.TurnID, "delivery", 0, payload.Text)
 		options := silentSendOptions()
 		if item.Kind == "health" {
@@ -846,7 +859,11 @@ func (s *Service) healthDeliveryIsCurrent(ctx context.Context, item model.Delive
 			return false
 		}
 		openEventID := "health:" + key + ":" + episodeID + ":open"
-		status, err := s.store.DeliveryStatusForEvent(ctx, openEventID, item.ChatKey)
+		chatKey := item.ChatKey
+		if episode.WarningEventID != "" {
+			openEventID, chatKey = episode.WarningEventID, episode.WarningChatKey
+		}
+		status, err := s.store.DeliveryStatusForEvent(ctx, openEventID, chatKey)
 		return err == nil && status == model.DeliveryStatusDelivered
 	default:
 		return false

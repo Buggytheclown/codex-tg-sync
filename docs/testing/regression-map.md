@@ -171,6 +171,7 @@ Primary tests:
 
 - poller status tests in `internal/daemon/external_requests_test.go`
 - health tests in `internal/daemon/health_test.go`
+- aggregate incident tests in `internal/daemon/external_poll_health_test.go`
 - source-specific poller tests under `internal/cronpoller`, `internal/ymessenger`, and `internal/arcanumreview`
 
 Required invariants:
@@ -179,6 +180,13 @@ Required invariants:
 - output distinguishes disabled, polling, healthy, degraded, and failed sources;
 - last attempt/success and consecutive failures are truthful;
 - sleep/resume gaps do not cause false flapping;
+- external pollers share one warning/recovery episode; additional failures and
+  partial recoveries stay silent, and unconfirmed errors or missing/stale
+  observations block recovery;
+- restart and legacy upgrade retain incidents and suppress per-source queued
+  notices without repeating already delivered warnings;
+- queued aggregate recovery waits for current health without exhausting send
+  attempts when a new error or unknown/stale source temporarily blocks it;
 - warning/recovery order is preserved;
 - health deliveries fall back to General only inside the configured Sync group.
 

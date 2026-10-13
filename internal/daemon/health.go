@@ -18,14 +18,18 @@ type healthEpisode struct {
 	OpenedAt  string `json:"opened_at"`
 	LastError string `json:"last_error,omitempty"`
 	Count     int    `json:"count"`
+	// An upgraded incident may already have a delivered per-source warning.
+	WarningEventID string `json:"warning_event_id,omitempty"`
+	WarningChatKey string `json:"warning_chat_key,omitempty"`
 }
 
 type externalPollHealthState struct {
-	LastObservedAt       string `json:"last_observed_at,omitempty"`
-	WarmupUntil          string `json:"warmup_until,omitempty"`
-	FailureSince         string `json:"failure_since,omitempty"`
-	RecoverySince        string `json:"recovery_since,omitempty"`
-	RecoveredAfterResume bool   `json:"recovered_after_resume,omitempty"`
+	LastObservedAt string `json:"last_observed_at,omitempty"`
+	WarmupUntil    string `json:"warmup_until,omitempty"`
+	FailureSince   string `json:"failure_since,omitempty"`
+	RecoverySince  string `json:"recovery_since,omitempty"`
+	Failed         bool   `json:"failed,omitempty"`
+	NeedsRecovery  bool   `json:"needs_recovery,omitempty"`
 }
 
 type externalPollerState struct {
@@ -42,6 +46,7 @@ type externalPollerState struct {
 }
 
 const (
+	externalPollHealthKey      = "external.pollers"
 	externalPollObservationGap = 2 * time.Minute
 	externalPollResumeGrace    = 4 * time.Minute
 	externalPollFailureDelay   = time.Minute
@@ -73,6 +78,7 @@ func (s *Service) reportHealthFailureLockedToTopic(ctx context.Context, key, tit
 	}
 	episode.Open = true
 	episode.EpisodeID = randomToken()
+	episode.WarningEventID, episode.WarningChatKey = "", ""
 	episode.OpenedAt = s.now().UTC().Format(time.RFC3339Nano)
 	s.saveHealthEpisode(ctx, stateKey, episode)
 	text := "⚠️ " + strings.TrimSpace(title)
@@ -208,6 +214,8 @@ func healthKey(value string) string {
 }
 
 func (s *Service) NoteExternalPollResult(ctx context.Context, source string, err error) {
+	s.healthMu.Lock()
+	defer s.healthMu.Unlock()
 	s.noteExternalPollerResult(ctx, source, err)
 	key := healthKey(source)
 	if key == "" {
@@ -215,36 +223,31 @@ func (s *Service) NoteExternalPollResult(ctx context.Context, source string, err
 	}
 	key += ".poll"
 	now := s.now().UTC()
-	s.healthMu.Lock()
-	defer s.healthMu.Unlock()
-
 	trackerKey := "health_tracker." + key
 	tracker := s.loadExternalPollHealthState(ctx, trackerKey)
-	episode := s.loadHealthEpisode(ctx, "health."+key)
 	lastObserved := parseHealthTime(tracker.LastObservedAt)
 	if lastObserved.IsZero() || now.Before(lastObserved) || now.Sub(lastObserved) > externalPollObservationGap {
 		tracker.WarmupUntil = now.Add(externalPollResumeGrace).Format(time.RFC3339Nano)
 		tracker.FailureSince = ""
 		tracker.RecoverySince = ""
-		tracker.RecoveredAfterResume = episode.Open
 	}
 	tracker.LastObservedAt = now.Format(time.RFC3339Nano)
 
 	if err != nil {
 		safeError := sanitizeDiagnosticString(err.Error())
 		_ = s.store.SetState(ctx, key+".last_error", safeError)
-		if now.Before(parseHealthTime(tracker.WarmupUntil)) {
-			s.saveExternalPollHealthState(ctx, trackerKey, tracker)
-			return
-		}
+		tracker.NeedsRecovery = true
 		tracker.RecoverySince = ""
-		failureSince := parseHealthTime(tracker.FailureSince)
-		if failureSince.IsZero() {
-			tracker.FailureSince = now.Format(time.RFC3339Nano)
-		} else if !episode.Open && now.Sub(failureSince) >= externalPollFailureDelay {
-			s.reportHealthFailureLockedToTopic(ctx, key, "External source polling failed: "+source, safeError, externalPollFailureAction(source, err), s.cfg.ExternalRequestsTopicID)
+		if !now.Before(parseHealthTime(tracker.WarmupUntil)) {
+			failureSince := parseHealthTime(tracker.FailureSince)
+			if failureSince.IsZero() {
+				tracker.FailureSince = now.Format(time.RFC3339Nano)
+			} else if now.Sub(failureSince) >= externalPollFailureDelay {
+				tracker.Failed = true
+			}
 		}
 		s.saveExternalPollHealthState(ctx, trackerKey, tracker)
+		s.reconcileExternalPollHealthLocked(ctx, true, false)
 		return
 	}
 
@@ -252,27 +255,169 @@ func (s *Service) NoteExternalPollResult(ctx context.Context, source string, err
 	_ = s.store.SetState(ctx, key+".last_error", "")
 	if now.Before(parseHealthTime(tracker.WarmupUntil)) {
 		s.saveExternalPollHealthState(ctx, trackerKey, tracker)
+		if !tracker.NeedsRecovery {
+			s.reconcileExternalPollHealthLocked(ctx, true, true)
+		}
 		return
 	}
 	tracker.FailureSince = ""
-	if episode.Open {
+	if tracker.NeedsRecovery {
 		recoverySince := parseHealthTime(tracker.RecoverySince)
 		if recoverySince.IsZero() {
 			tracker.RecoverySince = now.Format(time.RFC3339Nano)
 		} else if now.Sub(recoverySince) >= externalPollRecoveryDelay {
-			note := ""
-			if tracker.RecoveredAfterResume {
-				note = "Recovered after wake and stable connectivity."
-			}
-			s.reportHealthRecoveredLockedToTopic(ctx, key, "External source polling recovered: "+source, note, s.cfg.ExternalRequestsTopicID)
 			tracker.RecoverySince = ""
-			tracker.RecoveredAfterResume = false
+			tracker.NeedsRecovery = false
+			tracker.Failed = false
 		}
 	} else {
 		tracker.RecoverySince = ""
-		tracker.RecoveredAfterResume = false
 	}
 	s.saveExternalPollHealthState(ctx, trackerKey, tracker)
+	s.reconcileExternalPollHealthLocked(ctx, true, true)
+}
+
+type externalPollHealthSummary struct {
+	Enabled  int
+	Blocked  bool
+	Failures []string
+}
+
+// Read under healthMu, both for transitions and immediately before recovery delivery.
+func (s *Service) loadExternalPollHealthSummary(ctx context.Context) (externalPollHealthSummary, error) {
+	var summary externalPollHealthSummary
+	states, err := s.store.ListState(ctx)
+	if err != nil {
+		return summary, err
+	}
+	now := s.now().UTC()
+	for key, raw := range states {
+		if !strings.HasPrefix(key, "poller.") {
+			continue
+		}
+		var poller externalPollerState
+		if err := json.Unmarshal([]byte(raw), &poller); err != nil {
+			return summary, err
+		}
+		if !poller.Enabled {
+			continue
+		}
+		summary.Enabled++
+		var tracker externalPollHealthState
+		if raw := states["health_tracker."+healthKey(poller.Source)+".poll"]; raw != "" {
+			if err := json.Unmarshal([]byte(raw), &tracker); err != nil {
+				return summary, err
+			}
+		}
+		if tracker.Failed {
+			summary.Failures = append(summary.Failures, poller.Source)
+		}
+		staleAfter := max(2*time.Duration(poller.IntervalMillis)*time.Millisecond, 30*time.Second)
+		finished := parseHealthTime(poller.LastFinishedAt)
+		if tracker.NeedsRecovery || tracker.Failed || poller.LastError != "" || poller.LastSuccessAt == "" || finished.IsZero() || now.Before(finished) || now.Sub(finished) > staleAfter {
+			summary.Blocked = true
+		}
+	}
+	sort.Strings(summary.Failures)
+	return summary, nil
+}
+
+// Caller holds healthMu so a new source error cannot race aggregate recovery.
+func (s *Service) reconcileExternalPollHealthLocked(ctx context.Context, allowWarning, allowRecovery bool) {
+	summary, err := s.loadExternalPollHealthSummary(ctx)
+	if err != nil {
+		s.setError(ctx, err)
+		return // Unknown state must never be treated as healthy.
+	}
+	if len(summary.Failures) > 0 {
+		if allowWarning {
+			first := s.loadExternalPollerState(ctx, summary.Failures[0])
+			s.reportHealthFailureLockedToTopic(ctx, externalPollHealthKey, "External source polling failed", strings.Join(summary.Failures, ", ")+": "+first.LastError, "Check /pollers. "+externalPollFailureAction(first.Source, fmt.Errorf("%s", first.LastError)), s.cfg.ExternalRequestsTopicID)
+		}
+		return
+	}
+	if summary.Enabled == 0 {
+		// Stopping monitoring is not proof of recovery. Invalidate pending notices.
+		episode := s.loadHealthEpisode(ctx, "health."+externalPollHealthKey)
+		if episode.EpisodeID != "" {
+			episode.Open, episode.EpisodeID = false, ""
+			s.saveHealthEpisode(ctx, "health."+externalPollHealthKey, episode)
+		}
+		return
+	}
+	if allowRecovery && !summary.Blocked {
+		s.reportHealthRecoveredLockedToTopic(ctx, externalPollHealthKey, "All external source polling recovered", "", s.cfg.ExternalRequestsTopicID)
+	}
+}
+
+// Upgrade before the delivery loop starts; only tracked external sources qualify.
+func (s *Service) migrateExternalPollHealth(ctx context.Context) error {
+	s.healthMu.Lock()
+	defer s.healthMu.Unlock()
+	states, err := s.store.ListState(ctx)
+	if err != nil {
+		return err
+	}
+	aggregate := s.loadHealthEpisode(ctx, "health."+externalPollHealthKey)
+	for key, raw := range states {
+		if !strings.HasPrefix(key, "health_tracker.") {
+			continue
+		}
+		legacyKey := "health." + strings.TrimPrefix(key, "health_tracker.")
+		var tracker externalPollHealthState
+		if err := json.Unmarshal([]byte(raw), &tracker); err != nil {
+			return err
+		}
+		var poller externalPollerState
+		source := strings.TrimSuffix(strings.TrimPrefix(key, "health_tracker."), ".poll")
+		if rawPoller := states["poller."+source]; rawPoller != "" {
+			if err := json.Unmarshal([]byte(rawPoller), &poller); err != nil {
+				return err
+			}
+		}
+		if poller.LastError != "" || tracker.FailureSince != "" {
+			tracker.NeedsRecovery = true
+		}
+		var episode healthEpisode
+		if rawEpisode := states[legacyKey]; rawEpisode != "" {
+			if err := json.Unmarshal([]byte(rawEpisode), &episode); err != nil {
+				return err
+			}
+		}
+		if episode.Open {
+			tracker.Failed, tracker.NeedsRecovery, tracker.RecoverySince = true, true, ""
+		}
+		payload, _ := json.Marshal(tracker)
+		if err := s.store.SetState(ctx, key, string(payload)); err != nil {
+			return err
+		}
+		if episode.Open {
+			// Reuse a delivered warning instead of notifying again during upgrade.
+			if aggregate.EpisodeID == "" {
+				eventID := "health:" + strings.TrimPrefix(legacyKey, "health.") + ":" + episode.EpisodeID + ":open"
+				chatKey := model.ChatKey(s.cfg.SyncGroupID, s.cfg.ExternalRequestsTopicID)
+				status, err := s.store.DeliveryStatusForEvent(ctx, eventID, chatKey)
+				if err != nil {
+					return err
+				}
+				if status == model.DeliveryStatusDelivered {
+					aggregate = episode
+					aggregate.WarningEventID, aggregate.WarningChatKey = eventID, chatKey
+					payload, _ := json.Marshal(aggregate)
+					if err := s.store.SetState(ctx, "health."+externalPollHealthKey, string(payload)); err != nil {
+						return err
+					}
+				}
+			}
+		}
+		// Clearing identity supersedes both old warnings and queued recoveries.
+		if err := s.store.DeleteState(ctx, legacyKey); err != nil {
+			return err
+		}
+	}
+	// Current configuration is registered after startup. Defer any new warning
+	// until a live poller observation, rather than trusting old enabled flags.
+	return nil
 }
 
 func (s *Service) RegisterExternalPoller(ctx context.Context, source string, interval time.Duration, enabled bool) error {
@@ -283,12 +428,31 @@ func (s *Service) RegisterExternalPoller(ctx context.Context, source string, int
 	if interval <= 0 {
 		return fmt.Errorf("poller interval must be positive")
 	}
+	s.healthMu.Lock()
+	defer s.healthMu.Unlock()
 	state := s.loadExternalPollerState(ctx, source)
+	enabledChanged := state.Enabled != enabled
+	if enabledChanged {
+		trackerKey := "health_tracker." + source + ".poll"
+		tracker := s.loadExternalPollHealthState(ctx, trackerKey)
+		tracker.Failed = false
+		if enabled && state.Source != "" {
+			tracker.NeedsRecovery = true
+		}
+		tracker.FailureSince, tracker.RecoverySince = "", ""
+		s.saveExternalPollHealthState(ctx, trackerKey, tracker)
+	}
 	state.Source, state.Enabled, state.IntervalMillis = source, enabled, interval.Milliseconds()
 	if state.RegisteredAt == "" {
 		state.RegisteredAt = s.now().UTC().Format(time.RFC3339Nano)
 	}
-	return s.saveExternalPollerState(ctx, state)
+	if err := s.saveExternalPollerState(ctx, state); err != nil {
+		return err
+	}
+	if enabledChanged {
+		s.reconcileExternalPollHealthLocked(ctx, false, false)
+	}
+	return nil
 }
 
 // Task identity remains stable across edits to its polling type and title.
@@ -297,12 +461,16 @@ func (s *Service) RegisterTaskPoller(ctx context.Context, taskID, title string, 
 	if err := s.RegisterExternalPoller(ctx, source, interval, enabled); err != nil {
 		return err
 	}
+	s.healthMu.Lock()
+	defer s.healthMu.Unlock()
 	state := s.loadExternalPollerState(ctx, source)
 	state.Label = strings.Join(strings.Fields(sanitizeDiagnosticString(title)), " ")
 	return s.saveExternalPollerState(ctx, state)
 }
 
 func (s *Service) NoteExternalPollStarted(ctx context.Context, source string) {
+	s.healthMu.Lock()
+	defer s.healthMu.Unlock()
 	state := s.loadExternalPollerState(ctx, source)
 	if state.Source == "" {
 		state.Source = healthKey(source)
