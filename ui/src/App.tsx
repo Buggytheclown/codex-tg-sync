@@ -1057,28 +1057,6 @@ export function App() {
                 )}
               </div>
             </div>
-            <div className="move-control">
-              {priority}
-              <Field label="Move task">
-                <select
-                  aria-label="Move task"
-                  value={selected.column}
-                  disabled={busy}
-                  onChange={(e) =>
-                    void move(compactTask(selected), e.target.value as Column)
-                  }
-                >
-                  {columns.map((c) => (
-                    <option key={c} value={c}>
-                      {labels[c]}
-                    </option>
-                  ))}
-                </select>
-              </Field>
-            </div>
-            <TaskConnections key={selected.id} task={selected} busy={busy}
-              onLink={(thread_id, expected_version) => mutate<Task>(`/v1/tasks/${selected.id}/chat`, "POST", { expected_version, thread_id })}
-              onTicket={(url, version) => saveTicket(selected, url, version)} />
             <div className="tabs" role="tablist">
               {(["overview", "polling", "history"] as Tab[]).map(
                 (t) => (
@@ -1104,7 +1082,21 @@ export function App() {
             )}
             <div className="panel-body">
               {feedback}
-              <div hidden={tab !== "overview"}><div className="overview">{form}</div></div>
+              <div hidden={tab !== "overview"}>
+                <div className="move-control">
+                  {priority}
+                  <Field label="Move task">
+                    <select aria-label="Move task" value={selected.column} disabled={busy}
+                      onChange={e => void move(compactTask(selected), e.target.value as Column)}>
+                      {columns.map(c => <option key={c} value={c}>{labels[c]}</option>)}
+                    </select>
+                  </Field>
+                </div>
+                <TaskConnections key={selected.id} task={selected} busy={busy}
+                  onLink={(thread_id, expected_version) => mutate<Task>(`/v1/tasks/${selected.id}/chat`, "POST", { expected_version, thread_id })}
+                  onTicket={(url, version) => saveTicket(selected, url, version)} />
+                <div className="overview">{form}<TaskReferences task={selected} /></div>
+              </div>
               {tab === "polling" ? (
                 <WorkflowForm key={`workflow-${selected.id}`} task={selected} busy={busy} configure={activationRequested}
                   onSave={input => mutate<Task>(`/v1/tasks/${selected.id}`, "PATCH", input)}
@@ -1188,21 +1180,15 @@ function TaskConnections({ task, busy, onLink, onTicket }: { task: Task; busy: b
       {linking && !task.thread_id && <div className="card-chat-form">
         <TaskChatForm task={task} busy={busy} onLink={onLink} inline onCancel={() => setLinking(false)} />
       </div>}
-      {(task.source_url || task.source_task_id) && <div className="overview-provenance">
-        {task.source_url && (
-          <ExternalLink url={task.source_url} label="Open source" />
-        )}
-        {task.source_task_id && (
-          <a
-            className="detail-link"
-            href={`?task=${encodeURIComponent(task.source_task_id)}`}
-          >
-            Created by source
-          </a>
-        )}
-      </div>}
     </section>
   );
+}
+function TaskReferences({ task }: { task: Task }) {
+  if (!task.source_url && !task.source_task_id) return null;
+  return <ul className="overview-provenance" aria-label="Task references">
+    {task.source_url && <li><ExternalLink url={task.source_url} label="Open source" /></li>}
+    {task.source_task_id && <li><a className="detail-link" href={`?task=${encodeURIComponent(task.source_task_id)}`}>Created by source</a></li>}
+  </ul>;
 }
 function PriorityField({ value, onChange, form, onBlur }: { value: Priority; onChange: (priority: Priority) => void; form?: string; onBlur?: () => void }) {
   return <Field label="Priority"><select value={value} form={form} onBlur={onBlur} onChange={(e) => onChange(e.target.value as Priority)}>

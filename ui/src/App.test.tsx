@@ -31,7 +31,7 @@ const makeTask = (extra: Partial<Task> = {}): Task => ({
   ...extra,
 });
 let rows: Task[], calls: { path: string; method: string; body: unknown }[];
-it("keeps priority, movement and compact connections above every inspector tab", async () => {
+it("places tabs below badges and switches the Overview controls with their content", async () => {
   rows = [makeTask({ thread_id: "", priority: "normal" })];
   window.history.replaceState(null, "", "/?task=task-1");
   render(<App />);
@@ -41,25 +41,32 @@ it("keeps priority, movement and compact connections above every inspector tab",
   const priority = detail.getByLabelText("Priority");
   const move = detail.getByLabelText("Move task");
   const link = detail.getByRole("button", { name: "Link Codex: no chat linked" });
+  const tabs = detail.getByRole("tablist");
+  expect(panel.querySelector(".detail-badges")!.compareDocumentPosition(tabs) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  expect(tabs.compareDocumentPosition(priority) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   expect(priority.compareDocumentPosition(move) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   expect(move.compareDocumentPosition(link) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-  expect(link.compareDocumentPosition(detail.getByRole("tablist")) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   expect(detail.queryByRole("heading", { name: "Connections" })).toBeNull();
   expect(detail.queryByText("Changes save when a field loses focus.")).toBeNull();
   expect(detail.queryByRole("textbox", { name: /Codex chat/ })).toBeNull();
-  for (const tab of ["Polling", "History", "Overview"]) {
+  for (const tab of ["Polling", "History"]) {
     fireEvent.click(detail.getByRole("tab", { name: tab }));
-    expect(detail.getByLabelText("Priority")).toBe(priority);
-    expect(detail.getByRole("button", { name: "Link Codex: no chat linked" })).toBe(link);
+    expect(detail.getByRole("tablist")).toBe(tabs);
+    expect(detail.queryByRole("combobox", { name: "Priority" })).toBeNull();
+    expect(detail.queryByRole("combobox", { name: "Move task" })).toBeNull();
+    expect(detail.queryByRole("button", { name: "Link Codex: no chat linked" })).toBeNull();
+    expect(detail.queryByRole("textbox", { name: "Description" })).toBeNull();
   }
+  fireEvent.click(detail.getByRole("tab", { name: "Overview" }));
+  expect(detail.getByLabelText("Priority")).toBe(priority);
+  expect(detail.getByRole("button", { name: "Link Codex: no chat linked" })).toBe(link);
   expect(calls.every(call => call.method === "GET")).toBe(true);
 });
-it.each(["Overview", "Polling", "History"])("saves header priority on blur and Cmd+Enter from %s", async tab => {
+it("saves Overview priority on blur and Cmd+Enter below the tabs", async () => {
   window.history.replaceState(null, "", "/?task=task-1");
   render(<App />);
   await screen.findByLabelText("Title");
   const detail = within(screen.getByRole("complementary", { name: "Task details and settings" }));
-  fireEvent.click(detail.getByRole("tab", { name: tab }));
   const priority = detail.getByLabelText("Priority") as HTMLSelectElement;
   expect(priority.form).not.toBeNull();
   fireEvent.change(priority, { target: { value: "high" } });
@@ -86,6 +93,8 @@ it("opens a compact inspector chat attachment and preserves its draft across tab
   expect(chat.value).toBe("");
   fireEvent.change(chat, { target: { value: "codex://threads/header-chat" } });
   fireEvent.click(detail.getByRole("tab", { name: "History" }));
+  expect(detail.queryByRole("textbox", { name: "Codex chat for Review the next revision" })).toBeNull();
+  fireEvent.click(detail.getByRole("tab", { name: "Overview" }));
   expect(detail.getByLabelText("Codex chat for Review the next revision")).toBe(chat);
   fireEvent.keyDown(chat, { key: "Escape" });
   await screen.findByText("Select a card to see its details.");
@@ -95,6 +104,26 @@ it("opens a compact inspector chat attachment and preserves its draft across tab
   await waitFor(() => expect(rows[0].thread_id).toBe("header-chat"));
   expect(detail.getByRole("link", { name: "Open in Codex ↗" }).getAttribute("href")).toBe("codex://threads/header-chat");
   expect(calls.filter(call => call.path.endsWith("/chat") && call.method === "POST")).toHaveLength(1);
+});
+it("shows provenance as a list below Description only in Overview", async () => {
+  rows = [makeTask({ source_url: "https://review.example/123", source_task_id: "source-1" })];
+  window.history.replaceState(null, "", "/?task=task-1");
+  render(<App />);
+  await screen.findByLabelText("Title");
+  const detail = within(screen.getByRole("complementary", { name: "Task details and settings" }));
+  const references = detail.getByRole("list", { name: "Task references" });
+  expect(within(references).getAllByRole("listitem")).toHaveLength(2);
+  expect(detail.getByLabelText("Description").compareDocumentPosition(references) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  expect(within(references).getByRole("link", { name: "Open source ↗" }).getAttribute("href")).toBe("https://review.example/123");
+  expect(within(references).getByRole("link", { name: "Created by source" }).getAttribute("href")).toBe("?task=source-1");
+  for (const tab of ["Polling", "History"]) {
+    fireEvent.click(detail.getByRole("tab", { name: tab }));
+    expect(detail.queryByRole("list", { name: "Task references" })).toBeNull();
+    expect(detail.queryByRole("link", { name: "Created by source" })).toBeNull();
+  }
+  fireEvent.click(detail.getByRole("tab", { name: "Overview" }));
+  expect(detail.getByRole("list", { name: "Task references" })).toBe(references);
+  expect(calls.every(call => call.method === "GET")).toBe(true);
 });
 it("places the editable title in the shared heading above all three tabs", async () => {
   window.history.replaceState(null, "", "/?task=task-1");
