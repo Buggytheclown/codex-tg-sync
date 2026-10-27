@@ -82,3 +82,11 @@ func TestSyncTurnStartIgnoresRetiredTelegramSettings(t *testing.T) {
 		t.Fatalf("permissions = %#v, want safe Telegram permissions", options)
 	}
 }
+
+func TestOrdinarySyncTurnInheritsThreadModel(t *testing.T) {
+	service := activeSyncService(t)
+	options := service.turnStartOptions(context.Background(), "", &model.Thread{PreferredModel: "cached-model"})
+	if options.Model != "" || options.ReasoningEffort != "" || options.CollaborationMode != "" {
+		t.Fatalf("ordinary input must let App Server inherit current settings: %#v", options)
+	}
+}

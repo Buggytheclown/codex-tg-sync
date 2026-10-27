@@ -890,7 +890,8 @@ func (s *Service) turnStartOptions(_ context.Context, collaborationMode string, 
 		ApprovalsReviewer: telegramApprovalsReviewer,
 		SandboxMode:       telegramSandboxMode,
 	}
-	if thread != nil {
+	// Ordinary input inherits App Server's current settings, not cached metadata.
+	if thread != nil && options.CollaborationMode != "" {
 		options.Model = strings.TrimSpace(thread.PreferredModel)
 	}
 	return options

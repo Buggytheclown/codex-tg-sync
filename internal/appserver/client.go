@@ -563,7 +563,16 @@ func turnStartParams(threadID, message, cwd string, options TurnStartOptions) (m
 		return nil, err
 	}
 	mode := normalizeCollaborationMode(options.CollaborationMode)
-	if mode != "" {
+	if mode == "" {
+		// Native turn overrides preserve every setting that is omitted. Sending
+		// a collaboration preset instead would reset unspecified reasoning.
+		if model := strings.TrimSpace(options.Model); model != "" {
+			params["model"] = model
+		}
+		if effort := normalizeReasoningEffort(options.ReasoningEffort); effort != "" {
+			params["effort"] = effort
+		}
+	} else {
 		model := strings.TrimSpace(options.Model)
 		if model == "" {
 			return nil, fmt.Errorf("codex model is required for collaboration mode %q", mode)

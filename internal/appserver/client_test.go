@@ -455,6 +455,32 @@ func TestHandlePayloadIgnoresStaleGeneration(t *testing.T) {
 	}
 }
 
+func TestTurnStartParamsInheritsUnspecifiedExecutionSettings(t *testing.T) {
+	for _, tc := range []struct{ name, model, effort string }{
+		{"inherit", "", ""}, {"model only", "explicit-model", ""},
+		{"effort only", "", "x-high"}, {"both", "explicit-model", "high"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			params, err := turnStartParams("thread-1", "continue", "", TurnStartOptions{Model: tc.model, ReasoningEffort: tc.effort})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, ok := params["collaborationMode"]; ok {
+				t.Fatalf("unexpected mode reset: %#v", params)
+			}
+			for key, want := range map[string]string{"model": tc.model, "effort": normalizeReasoningEffort(tc.effort)} {
+				got, present := params[key]
+				if want == "" && present {
+					t.Fatalf("%s must be omitted for inheritance: %#v", key, params)
+				}
+				if want != "" && got != want {
+					t.Fatalf("%s = %v, want %q", key, got, want)
+				}
+			}
+		})
+	}
+}
+
 func TestTurnStartParamsIncludesCollaborationMode(t *testing.T) {
 	params, err := turnStartParams("thread-1", "Draft a plan", "/tmp/project", TurnStartOptions{
 		CollaborationMode: "plan",

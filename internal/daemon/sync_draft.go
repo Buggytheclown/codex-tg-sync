@@ -91,11 +91,8 @@ func (s *Service) startClaimedSyncDraftLocked(ctx context.Context, draft model.S
 	turnOptions.ApprovalPolicy = permissions.ApprovalPolicy
 	turnOptions.ApprovalsReviewer = permissions.ApprovalsReviewer
 	turnOptions.SandboxMode = permissions.SandboxMode
-	if strings.TrimSpace(execution.Model) != "" || strings.TrimSpace(execution.ReasoningEffort) != "" {
-		turnOptions.CollaborationMode = collaborationModeDefault
-		turnOptions.Model = strings.TrimSpace(execution.Model)
-		turnOptions.ReasoningEffort = strings.TrimSpace(execution.ReasoningEffort)
-	}
+	turnOptions.Model = strings.TrimSpace(execution.Model)
+	turnOptions.ReasoningEffort = strings.TrimSpace(execution.ReasoningEffort)
 	result, turnErr := lease.Process.TurnStart(ctx, thread.ID, text, thread.CWD, turnOptions)
 	turnID := appserverThreadTurnID(result)
 	if turnErr != nil || strings.TrimSpace(turnID) == "" {

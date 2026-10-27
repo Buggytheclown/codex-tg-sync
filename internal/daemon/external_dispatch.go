@@ -257,8 +257,8 @@ func (s *Service) dispatchExternalContinuationLocked(ctx context.Context, reques
 		}
 	}
 	options := s.turnStartOptions(ctx, "", &current.Thread)
-	options.CollaborationMode = collaborationModeDefault
-	options.Model, options.ReasoningEffort = request.Model, request.ReasoningEffort
+	options.Model = strings.TrimSpace(request.Model)
+	options.ReasoningEffort = strings.TrimSpace(request.ReasoningEffort)
 	options.ApprovalPolicy = frozenExternalSetting(request.ApprovalPolicy, s.cfg.ExternalApprovalPolicy)
 	options.ApprovalsReviewer = frozenExternalSetting(request.ApprovalsReviewer, s.cfg.ExternalApprovalsReviewer)
 	options.SandboxMode = frozenExternalSetting(request.SandboxMode, s.cfg.ExternalSandboxMode)

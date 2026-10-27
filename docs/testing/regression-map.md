@@ -309,3 +309,13 @@ For live Telegram QA, verify:
 
 - UI tests cover the noninteractive empty inspector, Escape/outside dismissal, unrelated URL parameters, inside clicks, card/editor destination actions, IME input, preserved Polling drafts/tab, pending Overview autosave, failed draft recovery and late detail replies. Drag tests prove the first Escape cancels a gesture without closing details and the next Escape clears selection without writes.
 - Browser QA checks the static decorative outline, no active/accessible placeholder controls or animations, Escape and outside click on real read-only cards, same-card reopen, another-card selection and narrow-screen layout. Use isolated fixtures for edited drafts; never change real PR tasks for mutation QA.
+
+## Continuation execution inheritance
+
+- `internal/daemon/board_launch_test.go`: Default/Default, model-only, effort-only
+  and explicit model/effort continuations preserve unspecified chat settings and
+  dispatch only to the linked thread.
+- `internal/appserver/client_test.go`: native overrides omit unspecified keys and
+  do not emit collaboration presets; explicit mode serialization stays covered.
+- `internal/daemon/retirement_test.go`: ordinary input never reasserts cached model
+  metadata. Initial external launch coverage checks the same native override path.

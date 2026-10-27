@@ -134,3 +134,14 @@ Source-derived eye/comment icons are inline
 prefixes of card titles, rather than a separate flex column, and also prefix the
 inspector title. Existing typed source/provenance classification is unchanged;
 ordinary tasks acquire no icon. This is a static UI update without daemon changes.
+
+## Continuation execution inheritance
+
+Task continuations use native `turn/start` model/effort overrides. Empty execution
+fields are omitted, so App Server keeps the original chat's current settings;
+explicit model and reasoning values override independently. Continuations do not
+install a default collaboration preset, which could clear an unspecified effort.
+Initial launches use the same native override path. Ordinary Sync input omits
+model/effort rather than reasserting cached thread metadata. Explicit collaboration
+mode requests retain their existing preset behavior. Frozen requests, prompts,
+permissions, thread identity, writer ownership and no-replay fences are unchanged.

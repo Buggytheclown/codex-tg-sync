@@ -43,6 +43,34 @@ func TestBoardContinuationStartsOnlyTargetThread(t *testing.T) {
 	}
 }
 
+func TestBoardContinuationInheritsUnspecifiedExecutionSettings(t *testing.T) {
+	for _, tc := range []struct{ name, model, effort string }{
+		{"inherit", "", ""}, {"model only", "explicit-model", ""},
+		{"effort only", "", "high"}, {"both", "explicit-model", "high"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := activeSyncService(t)
+			payload := boardThreadPayload("board-thread", "completed", "old-turn", "answer")
+			payload["thread"].(map[string]any)["model"] = "chat-model"
+			payload["thread"].(map[string]any)["reasoningEffort"] = "xhigh"
+			s.poll, s.pollConnected = &stubSession{threadReads: map[string]map[string]any{"board-thread": payload}}, true
+			writer := &stubSession{threadReads: map[string]map[string]any{"board-thread": payload}}
+			s.liveFactory = func() Session { return writer }
+			request := daemonExternalRequest("test:inherit", "continue")
+			request.TargetThreadID, request.Model, request.ReasoningEffort = "board-thread", tc.model, tc.effort
+			request = prepareStartingExternalRequestRecord(t, s, request)
+			s.dispatchExternalLaunchRequest(context.Background(), request.ID)
+			if len(writer.turnStartCalls) != 1 {
+				t.Fatalf("starts = %#v", writer.turnStartCalls)
+			}
+			call := writer.turnStartCalls[0]
+			if call.collaborationMode != "" || call.model != tc.model || call.reasoningEffort != tc.effort {
+				t.Fatalf("continuation reset unspecified chat settings: %#v", call)
+			}
+		})
+	}
+}
+
 func TestBoardContinuationBusyOrMissingNeverSteersOrCreates(t *testing.T) {
 	for _, kind := range []string{"busy", "missing", "resume_missing"} {
 		t.Run(kind, func(t *testing.T) {
