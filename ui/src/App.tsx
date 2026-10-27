@@ -28,6 +28,7 @@ import { WorkflowForm } from "./Workflow";
 import { TicketControl } from "./TicketControl";
 import { PRControl } from "./PRControl";
 import { DetailPlaceholder } from "./DetailPlaceholder";
+import { DescriptionField } from "./DescriptionField";
 type Tab = "overview" | "polling" | "history";
 type OverviewValues = { title: string; description: string; priority: Priority };
 const overviewValues = (task: Task): OverviewValues => ({ title: task.title, description: task.description, priority: task.priority || "normal" });
@@ -231,8 +232,7 @@ export function TaskCard({
         </span>
       </span>
       <span className="card-title">
-        {sourceKind && <SourceIcon kind={sourceKind} />}
-        <strong>{task.title}</strong>
+        <strong>{sourceKind && <><SourceIcon kind={sourceKind} />{" "}</>}{task.title}</strong>
       </span>
       {task.description && (
         <span className="card-description">{task.description}</span>
@@ -717,6 +717,7 @@ export function App() {
           .toLowerCase()
           .includes(query.toLowerCase()),
     );
+  const selectedSourceKind = selected ? taskSourceKind(selected, sources.find(source => source.id === selected.source_task_id)) : undefined;
   return (
     <div className={`app ${collapsed ? "sources-collapsed" : ""}`}>
       <header className="app-header">
@@ -1002,12 +1003,10 @@ export function App() {
         e.preventDefault();
         form.requestSubmit(submitter);
       }}>
-        <div className="panel-header">
+        {(panel !== "details" || (!detailDismissed && selected && isSource(selected))) && <div className="panel-header">
           <span className="eyebrow">
             {panel === "details"
-              ? !detailDismissed && selected && isSource(selected)
-                ? "SOURCE SETTINGS"
-                : "TASK DETAILS"
+              ? "SOURCE SETTINGS"
               : panel === "new-source"
                 ? "NEW SOURCE"
                 : panel === "add-chat"
@@ -1023,7 +1022,7 @@ export function App() {
               ×
             </button>
           )}
-        </div>
+        </div>}
         {panel === "details" && detailDismissed && <DetailPlaceholder />}
         <div className="detail-content" hidden={panel === "details" && detailDismissed}>
         {panel === "details" && selected && detailError && (
@@ -1082,12 +1081,19 @@ export function App() {
             onSave={input => mutate<Task>(`/v1/tasks/${selected.id}`, "PATCH", input, true)}>
           {({ title, priority, form, feedback, titleText }) => <>
             <div className="detail-heading">
-              <h2 className="detail-title" aria-label={titleText}>{tab === "overview" ? title : titleText}</h2>
+              <h2 className={`detail-title${selectedSourceKind ? " has-origin" : ""}`} aria-label={titleText}>
+                {selectedSourceKind && <SourceIcon kind={selectedSourceKind} />}
+                {tab === "overview" ? title : <span className="detail-title-text">{titleText}</span>}
+              </h2>
               <div className="detail-badges">
-                <span className="pill">{labels[selected.column]}</span>
+                <select className="pill column-select" aria-label="Move task" value={selected.column} disabled={busy}
+                  onChange={e => void move(compactTask(selected), e.target.value as Column)}>
+                  {columns.map(c => <option key={c} value={c}>{labels[c]}</option>)}
+                </select>
                 {executionLabel(selected) && (
                   <span className={`pill execution ${executionLabel(selected).toLowerCase()}`}>{executionLabel(selected)}</span>
                 )}
+                {priority}
               </div>
             </div>
             <div className="tabs" role="tablist">
@@ -1116,19 +1122,6 @@ export function App() {
             <div className="panel-body">
               {feedback}
               <div hidden={tab !== "overview"}>
-                <div className="move-control">
-                  {priority}
-                  <Field label="Move task">
-                    <select aria-label="Move task" value={selected.column} disabled={busy}
-                      onChange={e => void move(compactTask(selected), e.target.value as Column)}>
-                      {columns.map(c => <option key={c} value={c}>{labels[c]}</option>)}
-                    </select>
-                  </Field>
-                </div>
-                <TaskConnections key={selected.id} task={selected} busy={busy}
-                  onLink={(thread_id, expected_version) => mutate<Task>(`/v1/tasks/${selected.id}/chat`, "POST", { expected_version, thread_id })}
-                  onTicket={(url, version) => saveTicket(selected, url, version)}
-                  onPR={(url, version) => savePR(selected, url, version)} />
                 <div className="overview">{form}<TaskReferences task={selected} /></div>
               </div>
               {tab === "polling" ? (
@@ -1209,21 +1202,6 @@ function CodexConnection({ task, linking, disabled, onToggle }: { task: Pick<Tas
       <button className="codex-edit card-footer-link" type="button" aria-label="Edit Codex chat" title="Edit Codex chat" disabled={disabled} onClick={onToggle}><EditIcon /></button></>
     : <button className="card-codex-link card-footer-link codex-unlinked" type="button" aria-label="Link Codex: no chat linked" title="Link Codex" aria-expanded={linking} disabled={disabled}
       onClick={onToggle}>{icon}</button>}</span>;
-}
-function TaskConnections({ task, busy, onLink, onTicket, onPR }: { task: Task; busy: boolean; onLink: (threadID: string, version: number) => Promise<Task>; onTicket: (url: string, version: number) => Promise<Card>; onPR: (url: string, version: number) => Promise<Task> }) {
-  const [linking, setLinking] = useState(false);
-  return (
-    <section className="overview-connections" aria-label="Connections">
-      <div className="overview-links">
-        <PRControl task={task} busy={busy} onSave={onPR} />
-        <TicketControl task={task} busy={busy} onSave={onTicket} />
-        <CodexConnection task={task} linking={linking} disabled={busy} onToggle={() => setLinking(!linking)} />
-      </div>
-      {linking && <div className="card-chat-form">
-        <TaskChatForm task={task} busy={busy} onLink={onLink} inline submitLabel={task.thread_id ? "Save chat" : "Link chat"} onSaved={() => setLinking(false)} onCancel={() => setLinking(false)} />
-      </div>}
-    </section>
-  );
 }
 function TaskReferences({ task }: { task: Task }) {
   const genericSource = task.source_url && !arcanumReviewLink(task.source_url);
@@ -1314,7 +1292,7 @@ function OverviewForm({ task, busy, onSave, drafts, onFailure, children }: {
     onBlur={e => { if (e.target.matches("input, textarea, select")) draft.enqueue(); }}
     onInvalid={() => draft.reject("Enter a title before saving Overview.")}
     {...composition}>
-    <Field label="Description" className="overview-description"><textarea rows={3} value={description} onChange={e => change({ description: e.target.value })} /></Field>
+    <DescriptionField value={description} onChange={description => change({ description })} />
   </form>;
   const feedback = (draft.stale || draft.error || draft.message || draft.failed) && <div className="overview-save">
     {draft.stale && <p className="readiness-banner">This task changed. Reload latest settings before saving. Your draft has been preserved.</p>}

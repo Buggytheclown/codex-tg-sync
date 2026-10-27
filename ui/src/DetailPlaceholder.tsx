@@ -7,23 +7,12 @@ export function DetailPlaceholder() {
     <div className="placeholder-layout" aria-hidden="true">
       <div className="detail-heading">
         <div className="placeholder-title"><Bar width="94%" height={20} /><Bar width="64%" height={20} /></div>
-        <div className="detail-badges"><Bar width="48px" height={22} /></div>
+        <div className="detail-badges"><Bar width="60px" height={26} /><Bar width="68px" height={26} /><span className="placeholder-priority"><Bar width="112px" height={26} /></span></div>
       </div>
       <div className="placeholder-tabs">
         <span>Overview</span><span>Polling</span><span>History</span>
       </div>
       <div className="panel-body">
-        <div className="placeholder-settings">
-          <div className="placeholder-move">
-            <span className="placeholder-label">Priority</span>
-            <div className="placeholder-control placeholder-select"><Bar width="46px" height={9} /><span className="placeholder-chevron" /></div>
-          </div>
-          <div className="placeholder-move">
-            <span className="placeholder-label">Move task</span>
-            <div className="placeholder-control placeholder-select"><Bar width="65px" height={9} /><span className="placeholder-chevron" /></div>
-          </div>
-        </div>
-        <div className="placeholder-links"><Bar width="104px" height={12} /><Bar width="30px" height={24} /></div>
         <div className="placeholder-description">
           <span className="placeholder-label">Description</span>
           <div className="placeholder-lines">

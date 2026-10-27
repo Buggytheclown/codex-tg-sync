@@ -33,14 +33,68 @@ const makeTask = (extra: Partial<Task> = {}): Task => ({
   ...extra,
 });
 let rows: Task[], calls: { path: string; method: string; body: unknown }[];
+it("keeps compact task controls above the tabs without an inspector connection footer", async () => {
+  rows = [makeTask({ source_key: "arcanum_changes:123" })];
+  window.history.replaceState(null, "", "/?task=task-1");
+  render(<App />);
+  await screen.findByLabelText("Title");
+  const panel = screen.getByRole("complementary", { name: "Task details and settings" });
+  const detail = within(panel);
+  expect(detail.queryByText("TASK DETAILS")).toBeNull();
+  expect(panel.querySelector('.detail-title [data-source-kind="feedback"]')).not.toBeNull();
+  const column = detail.getByRole("combobox", { name: "Move task" });
+  const priority = detail.getByRole("combobox", { name: "Priority" });
+  expect(panel.querySelector(".detail-badges")?.contains(column)).toBe(true);
+  expect(panel.querySelector(".detail-badges")?.contains(priority)).toBe(true);
+  expect(detail.queryByText("Move task")).toBeNull();
+  expect(panel.querySelector(".overview-connections")).toBeNull();
+  expect(detail.queryByRole("button", { name: "Add PR" })).toBeNull();
+  expect(detail.queryByRole("button", { name: "Add ticket" })).toBeNull();
+  for (const tab of ["Polling", "History", "Overview"]) {
+    fireEvent.click(detail.getByRole("tab", { name: tab }));
+    expect(detail.getByRole("combobox", { name: "Move task" })).toBe(column);
+    expect(detail.getByRole("combobox", { name: "Priority" })).toBe(priority);
+  }
+  fireEvent.change(column, { target: { value: "inbox" } });
+  await waitFor(() => expect(rows[0].column).toBe("inbox"));
+});
+it("shows long descriptions without collapse controls and preserves editing and autosave", async () => {
+  rows = [makeTask({ description: "A long description\n".repeat(40) })];
+  window.history.replaceState(null, "", "/?task=task-1");
+  render(<App />);
+  const description = await screen.findByLabelText("Description");
+  expect((description as HTMLTextAreaElement).value).toBe(rows[0].description);
+  expect(screen.queryByRole("button", { name: /Развернуть описание|Свернуть описание/ })).toBeNull();
+  expect(screen.queryByText(/Ниже есть продолжение/)).toBeNull();
+  expect(calls.every(call => call.method === "GET")).toBe(true);
+  fireEvent.change(description, { target: { value: "Edited long description" } });
+  fireEvent.blur(description);
+  await waitFor(() => expect(rows[0].description).toBe("Edited long description"));
+  expect(description).toBe(screen.getByLabelText("Description"));
+});
 it("shows the same source icon on a renamed source and its generated card", async () => {
   rows = [makeTask({ id: "source-review", title: "Renamed source", polling: { ...defaultPolling("pr_review_source"), action: { type: "create_task", child_definition: { title: "Child", description: "", config: emptyConfig() } } } }), makeTask({ id: "child", title: "Custom child", source_task_id: "source-review", source_key: "legacy-event" })];
   render(<App />);
   const source = await screen.findByRole("button", { name: /Renamed source/ });
   expect(source.querySelector('[data-source-kind="review"]')).not.toBeNull();
   const card = screen.getByRole("button", { name: /Custom child.*No polling/ });
-  expect(card.querySelector('.card-title [data-source-kind="review"]')).not.toBeNull();
+  expect(card.querySelector('.card-title strong > [data-source-kind="review"]')).not.toBeNull();
   expect(calls.every(c => c.method === "GET")).toBe(true);
+});
+it("prefixes only source-derived review and feedback titles, leaving ordinary tasks unmarked", async () => {
+  rows = [makeTask({ id: "review", source_key: "arcanum_review:123" }),
+    makeTask({ id: "feedback", title: "Feedback", source_key: "arcanum_changes:456" }),
+    makeTask({ id: "ordinary", title: "PR review with comments", source_url: "https://a.yandex-team.ru/review/789" })];
+  render(<App />);
+  const ordinary = await screen.findByRole("button", { name: /PR review with comments.*No polling/ });
+  expect(ordinary.querySelector(".origin-icon")).toBeNull();
+  for (const [id, kind] of [["review", "review"], ["feedback", "feedback"]]) {
+    const card = document.querySelector(`[data-task-id="${id}"]`)!;
+    expect(card.querySelector(`.card-title strong > [data-source-kind="${kind}"]`)).not.toBeNull();
+  }
+  fireEvent.click(ordinary);
+  await screen.findByLabelText("Title");
+  expect(document.querySelector(".detail-title .origin-icon")).toBeNull();
 });
 it("fences changed chat bindings without losing the replacement draft", async () => {
   const task = makeTask();
@@ -72,17 +126,18 @@ it("keeps chat input typed while a replacement save is pending", async () => {
   expect(close).not.toHaveBeenCalled();
   expect((input as HTMLInputElement).value).toBe("later-chat");
 });
-it("puts PR beside ticket/Codex in Overview and shows quiet missing connections", async () => {
+it("keeps PR and ticket controls on the card without duplicating them in Overview", async () => {
   rows = [makeTask({ source_url: "https://a.yandex-team.ru/review/123", thread_id: "", ticket_url: "" })];
   window.history.replaceState(null, "", "/?task=task-1");
   render(<App />);
   await screen.findByLabelText("Title");
   const panel = screen.getByRole("complementary", { name: "Task details and settings" });
   const detail = within(panel);
-  const pr = detail.getByRole("link", { name: "Arcanum PR #123" });
-  expect(pr.closest(".overview-links")).not.toBeNull();
+  const pr = screen.getByRole("link", { name: "Arcanum PR #123" });
+  expect(pr.closest(".card-controls")).not.toBeNull();
+  expect(detail.queryByRole("link", { name: "Arcanum PR #123" })).toBeNull();
   expect(detail.queryByRole("list", { name: "Task references" })).toBeNull();
-  expect(detail.getByRole("button", { name: "Add ticket" }).classList.contains("connection-empty")).toBe(true);
+  expect(screen.getByRole("button", { name: "Add ticket" }).classList.contains("connection-empty")).toBe(true);
 });
 it("offers a quiet Add PR action when no Arcanum PR is linked", async () => {
   render(<App />);
@@ -132,9 +187,9 @@ it("serializes a PR change after a pending owned Overview save", async () => {
   fireEvent.change(title, { target: { value: "Saved Overview title" } });
   fireEvent.blur(title);
   await waitFor(() => expect(calls.filter(c => c.method === "PATCH")).toHaveLength(1));
-  fireEvent.click(detail.getByRole("button", { name: "Edit PR" }));
-  fireEvent.change(detail.getByLabelText("PR ID or URL"), { target: { value: "124" } });
-  fireEvent.click(detail.getByRole("button", { name: "Save PR" }));
+  fireEvent.click(screen.getByRole("button", { name: "Edit PR" }));
+  fireEvent.change(screen.getByLabelText("PR ID or URL"), { target: { value: "124" } });
+  fireEvent.click(screen.getByRole("button", { name: "Save PR" }));
   rows = [{ ...task, title: "Saved Overview title", version: 2 }];
   resolve({ ok: true, status: 200, json: async () => rows[0] } as Response);
   await waitFor(() => expect(rows[0].source_url).toBe("https://a.yandex-team.ru/review/124"));
@@ -146,12 +201,13 @@ it("keeps the PR draft across Overview tabs and cancels without saving", async (
   render(<App />);
   await screen.findByLabelText("Title");
   const detail = within(screen.getByRole("complementary", { name: "Task details and settings" }));
-  fireEvent.click(detail.getByRole("button", { name: "Add PR" }));
-  fireEvent.change(detail.getByLabelText("PR ID or URL"), { target: { value: "456" } });
+  fireEvent.click(screen.getByRole("button", { name: "Add PR" }));
+  fireEvent.change(screen.getByLabelText("PR ID or URL"), { target: { value: "456" } });
+  fireEvent.click(document.querySelector(".task-card")!);
   fireEvent.click(detail.getByRole("tab", { name: "History" }));
   fireEvent.click(detail.getByRole("tab", { name: "Overview" }));
-  expect((detail.getByLabelText("PR ID or URL") as HTMLInputElement).value).toBe("456");
-  fireEvent.click(detail.getByRole("button", { name: "Cancel" }));
+  expect((screen.getByLabelText("PR ID or URL") as HTMLInputElement).value).toBe("456");
+  fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
   expect(calls.every(c => c.method === "GET")).toBe(true);
 });
 it("refuses a PR save if the server changed before the full task read", async () => {
@@ -196,21 +252,22 @@ it("retains PR typing during a pending save and fences concurrent link changes",
   expect(save).toHaveBeenCalledOnce();
   expect((input as HTMLInputElement).value).toBe("125");
 });
-it("edits a linked Codex chat from Overview and retains the draft across tabs", async () => {
+it("edits a linked Codex chat from its card and retains the draft across tabs", async () => {
   window.history.replaceState(null, "", "/?task=task-1");
   render(<App />);
   await screen.findByLabelText("Title");
   const detail = within(screen.getByRole("complementary", { name: "Task details and settings" }));
-  fireEvent.click(detail.getByRole("button", { name: "Edit Codex chat" }));
-  const chat = detail.getByLabelText("Codex chat for Review the next revision") as HTMLInputElement;
+  fireEvent.click(screen.getByRole("button", { name: "Edit Codex chat" }));
+  const chat = screen.getByLabelText("Codex chat for Review the next revision") as HTMLInputElement;
   expect(chat.value).toBe("thread-1");
   fireEvent.change(chat, { target: { value: "codex://threads/replacement-chat" } });
+  fireEvent.click(document.querySelector(".task-card")!);
   fireEvent.click(detail.getByRole("tab", { name: "History" }));
   fireEvent.click(detail.getByRole("tab", { name: "Overview" }));
   expect(chat.value).toBe("codex://threads/replacement-chat");
-  fireEvent.keyDown(chat, { key: "Enter", metaKey: true });
+  fireEvent.click(screen.getByRole("button", { name: rows[0].thread_id ? "Save chat" : "Link chat" }));
   await waitFor(() => expect(rows[0].thread_id).toBe("replacement-chat"));
-  expect(detail.getByRole("link", { name: "Open in Codex ↗" }).getAttribute("href")).toBe("codex://threads/replacement-chat");
+  expect(screen.getByRole("link", { name: "Open in Codex ↗" }).getAttribute("href")).toBe("codex://threads/replacement-chat");
   expect(detail.queryByRole("textbox", { name: /Codex chat for/ })).toBeNull();
 });
 it("shows branded PR and ticket links in the compact footer without loading details", async () => {
@@ -259,38 +316,7 @@ it("renders an unlinked Codex icon as an accessible attachment action", () => {
   expect(open).toHaveBeenCalledOnce();
   expect(screen.getByLabelText("Codex chat for Review the next revision")).toBeTruthy();
 });
-it("places tabs below badges and switches the Overview controls with their content", async () => {
-  rows = [makeTask({ thread_id: "", priority: "normal" })];
-  window.history.replaceState(null, "", "/?task=task-1");
-  render(<App />);
-  await screen.findByLabelText("Title");
-  const panel = screen.getByRole("complementary", { name: "Task details and settings" });
-  const detail = within(panel);
-  const priority = detail.getByLabelText("Priority");
-  const move = detail.getByLabelText("Move task");
-  const link = detail.getByRole("button", { name: "Link Codex: no chat linked" });
-  const tabs = detail.getByRole("tablist");
-  expect(panel.querySelector(".detail-badges")!.compareDocumentPosition(tabs) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-  expect(tabs.compareDocumentPosition(priority) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-  expect(priority.compareDocumentPosition(move) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-  expect(move.compareDocumentPosition(link) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-  expect(detail.queryByRole("heading", { name: "Connections" })).toBeNull();
-  expect(detail.queryByText("Changes save when a field loses focus.")).toBeNull();
-  expect(detail.queryByRole("textbox", { name: /Codex chat/ })).toBeNull();
-  for (const tab of ["Polling", "History"]) {
-    fireEvent.click(detail.getByRole("tab", { name: tab }));
-    expect(detail.getByRole("tablist")).toBe(tabs);
-    expect(detail.queryByRole("combobox", { name: "Priority" })).toBeNull();
-    expect(detail.queryByRole("combobox", { name: "Move task" })).toBeNull();
-    expect(detail.queryByRole("button", { name: "Link Codex: no chat linked" })).toBeNull();
-    expect(detail.queryByRole("textbox", { name: "Description" })).toBeNull();
-  }
-  fireEvent.click(detail.getByRole("tab", { name: "Overview" }));
-  expect(detail.getByLabelText("Priority")).toBe(priority);
-  expect(detail.getByRole("button", { name: "Link Codex: no chat linked" })).toBe(link);
-  expect(calls.every(call => call.method === "GET")).toBe(true);
-});
-it("saves Overview priority on blur and Cmd+Enter below the tabs", async () => {
+it("saves header priority on blur and Cmd+Enter", async () => {
   window.history.replaceState(null, "", "/?task=task-1");
   render(<App />);
   await screen.findByLabelText("Title");
@@ -306,31 +332,32 @@ it("saves Overview priority on blur and Cmd+Enter below the tabs", async () => {
   expect(calls.filter(call => call.method === "PATCH")).toHaveLength(2);
   expect(rows[0].title).toBe("Review the next revision");
 });
-it("opens a compact inspector chat attachment and preserves its draft across tabs and dismissal", async () => {
+it("opens a card chat attachment and preserves its draft across inspector tabs and dismissal", async () => {
   rows = [makeTask({ thread_id: "" })];
   window.history.replaceState(null, "", "/?task=task-1");
   render(<App />);
   await screen.findByLabelText("Title");
   const detail = within(screen.getByRole("complementary", { name: "Task details and settings" }));
-  const open = () => fireEvent.click(detail.getByRole("button", { name: "Link Codex: no chat linked" }));
+  const open = () => fireEvent.click(screen.getByRole("button", { name: "Link Codex: no chat linked" }));
   open();
-  fireEvent.change(detail.getByLabelText("Codex chat for Review the next revision"), { target: { value: "Discard this chat" } });
-  fireEvent.click(detail.getByRole("button", { name: "Cancel" }));
+  fireEvent.change(screen.getByLabelText("Codex chat for Review the next revision"), { target: { value: "Discard this chat" } });
+  fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
   open();
-  const chat = detail.getByLabelText("Codex chat for Review the next revision") as HTMLInputElement;
+  const chat = screen.getByLabelText("Codex chat for Review the next revision") as HTMLInputElement;
   expect(chat.value).toBe("");
   fireEvent.change(chat, { target: { value: "codex://threads/header-chat" } });
+  fireEvent.click(document.querySelector(".task-card")!);
   fireEvent.click(detail.getByRole("tab", { name: "History" }));
   expect(detail.queryByRole("textbox", { name: "Codex chat for Review the next revision" })).toBeNull();
   fireEvent.click(detail.getByRole("tab", { name: "Overview" }));
-  expect(detail.getByLabelText("Codex chat for Review the next revision")).toBe(chat);
+  expect(screen.getByLabelText("Codex chat for Review the next revision")).toBe(chat);
   fireEvent.keyDown(chat, { key: "Escape" });
   await screen.findByText("Select a card to see its details.");
   fireEvent.click(screen.getByRole("button", { name: /TASK Review the next revision/ }));
-  expect((detail.getByLabelText("Codex chat for Review the next revision") as HTMLInputElement).value).toBe("codex://threads/header-chat");
-  fireEvent.keyDown(chat, { key: "Enter", metaKey: true });
+  expect((screen.getByLabelText("Codex chat for Review the next revision") as HTMLInputElement).value).toBe("codex://threads/header-chat");
+  fireEvent.click(screen.getByRole("button", { name: rows[0].thread_id ? "Save chat" : "Link chat" }));
   await waitFor(() => expect(rows[0].thread_id).toBe("header-chat"));
-  expect(detail.getByRole("link", { name: "Open in Codex ↗" }).getAttribute("href")).toBe("codex://threads/header-chat");
+  expect(screen.getByRole("link", { name: "Open in Codex ↗" }).getAttribute("href")).toBe("codex://threads/header-chat");
   expect(calls.filter(call => call.path.endsWith("/chat") && call.method === "POST")).toHaveLength(1);
 });
 it("shows provenance as a list below Description only in Overview", async () => {
@@ -612,11 +639,11 @@ it("keeps the first ticket click available during a blur save and serializes its
   const detail = within(screen.getByRole("complementary", { name: "Task details and settings" }));
   fireEvent.change(title, { target: { value: "Blurred before ticket" } });
   fireEvent.blur(title);
-  const add = detail.getByRole("button", { name: "Add ticket" });
+  const add = screen.getByRole("button", { name: "Add ticket" });
   expect((add as HTMLButtonElement).disabled).toBe(false);
   fireEvent.click(add);
-  fireEvent.change(detail.getByLabelText("Ticket URL"), { target: { value: "TASK-123" } });
-  fireEvent.click(detail.getByRole("button", { name: "Save ticket" }));
+  fireEvent.change(screen.getByLabelText("Ticket URL"), { target: { value: "TASK-123" } });
+  fireEvent.click(screen.getByRole("button", { name: "Save ticket" }));
   expect(calls.some(call => call.path.endsWith("/ticket") && call.method === "POST")).toBe(false);
   release();
   await waitFor(() => expect(rows[0].ticket_url).toBe("https://st.yandex-team.ru/TASK-123"));
@@ -707,13 +734,14 @@ it("does not run a waiting ticket command when autosave fails", async () => {
   fireEvent.change(await screen.findByLabelText("Title"), { target: { value: "Unsaved failed title" } });
   fireEvent.blur(screen.getByLabelText("Title"));
   const detail = within(screen.getByRole("complementary", { name: "Task details and settings" }));
-  fireEvent.click(detail.getByRole("button", { name: "Add ticket" }));
-  fireEvent.change(detail.getByLabelText("Ticket URL"), { target: { value: "TASK-123" } });
-  fireEvent.click(detail.getByRole("button", { name: "Save ticket" }));
+  fireEvent.click(screen.getByRole("button", { name: "Add ticket" }));
+  fireEvent.change(screen.getByLabelText("Ticket URL"), { target: { value: "TASK-123" } });
+  fireEvent.click(screen.getByRole("button", { name: "Save ticket" }));
   release();
+  fireEvent.click(document.querySelector(".task-card")!);
   await detail.findByRole("button", { name: "Retry overview save" });
   expect(calls.some(call => call.path.endsWith("/ticket") && call.method === "POST")).toBe(false);
-  expect((detail.getByLabelText("Ticket URL") as HTMLInputElement).value).toBe("TASK-123");
+  expect((screen.getByLabelText("Ticket URL") as HTMLInputElement).value).toBe("TASK-123");
 });
 it("coalesces a repeated blur of a server-normalized title and advances a waiting ticket", async () => {
   window.history.replaceState(null, "", "/?task=task-1");
@@ -735,9 +763,9 @@ it("coalesces a repeated blur of a server-normalized title and advances a waitin
   fireEvent.blur(title);
   fireEvent.blur(title);
   const detail = within(screen.getByRole("complementary", { name: "Task details and settings" }));
-  fireEvent.click(detail.getByRole("button", { name: "Add ticket" }));
-  fireEvent.change(detail.getByLabelText("Ticket URL"), { target: { value: "TASK-123" } });
-  fireEvent.click(detail.getByRole("button", { name: "Save ticket" }));
+  fireEvent.click(screen.getByRole("button", { name: "Add ticket" }));
+  fireEvent.change(screen.getByLabelText("Ticket URL"), { target: { value: "TASK-123" } });
+  fireEvent.click(screen.getByRole("button", { name: "Save ticket" }));
   release();
   await waitFor(() => expect(rows[0].ticket_url).toBe("https://st.yandex-team.ru/TASK-123"));
   expect(rows[0].title).toBe("Normalized title");
@@ -1502,7 +1530,7 @@ it("does not bless a concurrent unified workflow save reply", async () => {
   expect(save).toHaveBeenCalledTimes(1);
   expect((screen.getByLabelText("PR ID") as HTMLInputElement).value).toBe("43");
 });
-it("saves priority with Cmd+Enter and links an existing chat from Overview", async () => {
+it("saves header priority with Cmd+Enter and links an existing chat from its card", async () => {
   rows = [makeTask({ thread_id: "", priority: "normal" })];
   window.history.replaceState(null, "", "/?task=task-1");
   render(<App />);
@@ -1516,16 +1544,15 @@ it("saves priority with Cmd+Enter and links an existing chat from Overview", asy
   await waitFor(() => expect(rows[0].priority).toBe("high"));
   expect(rows[0].title).toBe("Keyboard saved");
   expect((screen.getByLabelText("Priority for Keyboard saved") as HTMLSelectElement).value).toBe("high");
-  const detail = within(screen.getByRole("complementary", { name: "Task details and settings" }));
-  await waitFor(() => expect((detail.getByRole("button", { name: "Link Codex: no chat linked" }) as HTMLButtonElement).disabled).toBe(false));
-  fireEvent.click(detail.getByRole("button", { name: "Link Codex: no chat linked" }));
-  const chat = detail.getByLabelText("Codex chat for Keyboard saved");
+  await waitFor(() => expect((screen.getByRole("button", { name: "Link Codex: no chat linked" }) as HTMLButtonElement).disabled).toBe(false));
+  fireEvent.click(screen.getByRole("button", { name: "Link Codex: no chat linked" }));
+  const chat = screen.getByLabelText("Codex chat for Keyboard saved");
   fireEvent.change(chat, { target: { value: "codex://threads/existing-chat" } });
-  fireEvent.keyDown(chat, { key: "Enter", metaKey: true });
+  fireEvent.click(screen.getByRole("button", { name: rows[0].thread_id ? "Save chat" : "Link chat" }));
   await waitFor(() => expect(rows[0].thread_id).toBe("existing-chat"));
   expect(calls.find(c => c.path.endsWith("/chat") && c.method === "POST")?.body).toEqual({ expected_version: 2, thread_id: "existing-chat" });
   const links = screen.getAllByRole("link", { name: /Open in Codex/ });
-  expect(links).toHaveLength(2);
+  expect(links).toHaveLength(1);
   expect(links.every(link => link.getAttribute("href") === "codex://threads/existing-chat")).toBe(true);
   const boardLink = links.find(link => link.closest(".card-slot"))!;
   expect(boardLink.closest("button")).toBeNull();
@@ -1696,15 +1723,15 @@ it("adds, opens, edits and removes a ticket without navigating or changing task 
   await screen.findByRole("button", { name: "Add ticket" });
   expect(rows[0].ticket_url).toBe("");
 });
-it("saves an Overview ticket with Cmd+Enter while keeping its title draft", async () => {
+it("saves a card ticket while keeping the inspector title draft", async () => {
   window.history.replaceState(null, "", "/?task=task-1");
   render(<App />);
   fireEvent.change(await screen.findByLabelText("Title"), { target: { value: "Draft title" } });
   const detail = within(screen.getByRole("complementary", { name: "Task details and settings" }));
-  fireEvent.click(detail.getByRole("button", { name: "Add ticket" }));
-  const input = detail.getByLabelText("Ticket URL");
+  fireEvent.click(screen.getByRole("button", { name: "Add ticket" }));
+  const input = screen.getByLabelText("Ticket URL");
   fireEvent.change(input, { target: { value: " task-123 " } });
-  fireEvent.keyDown(input, { key: "Enter", metaKey: true });
+  fireEvent.click(screen.getByRole("button", { name: "Save ticket" }));
   await waitFor(() => expect(rows[0].ticket_url).toBe("https://st.yandex-team.ru/TASK-123"));
   expect((detail.getByLabelText("Title") as HTMLInputElement).value).toBe("Draft title");
   await waitFor(() => expect(detail.queryByText("Saving overview…")).toBeNull());
@@ -1790,12 +1817,13 @@ it("does not advance unseen full settings from a newer compact ticket reply", as
   render(<App />);
   fireEvent.change(await screen.findByLabelText("Title"), { target: { value: "Keep title draft" } });
   const detail = within(screen.getByRole("complementary", { name: "Task details and settings" }));
-  fireEvent.click(detail.getByRole("button", { name: "Add ticket" }));
-  fireEvent.change(detail.getByLabelText("Ticket URL"), { target: { value: "https://tracker.example/TASK-123" } });
-  fireEvent.click(detail.getByRole("button", { name: "Save ticket" }));
+  fireEvent.click(screen.getByRole("button", { name: "Add ticket" }));
+  fireEvent.change(screen.getByLabelText("Ticket URL"), { target: { value: "https://tracker.example/TASK-123" } });
+  fireEvent.click(screen.getByRole("button", { name: "Save ticket" }));
   await screen.findByRole("link", { name: "TASK-123" });
   await waitFor(() => expect(detail.queryByText("Saving overview…")).toBeNull());
   fireEvent.blur(detail.getByLabelText("Title"));
+  fireEvent.click(document.querySelector(".task-card")!);
   await detail.findByText("Stale detail version");
   expect(calls.find(c => c.method === "PATCH")?.body).toMatchObject({ expected_version: 1 });
   waiting = false;

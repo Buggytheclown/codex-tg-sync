@@ -116,3 +116,21 @@ The PR placeholder is now a muted Add PR action in both footer and Overview. An 
 With no selected card, the inspector shows a muted, static outline of Overview rather than loading feedback. The decorative shape has no animation, form controls or accessibility-tree content; a readable caption invites selection. Escape or a primary click outside the inspector clears the visible selection and removes only the task query parameter. Clicks on another card/source or an editor action still perform that destination's action. Escape during a drag cancels the drag first; composing input and unrelated creation/linking editors are not dismissed.
 
 Dismissal blurs the active Overview field so its existing autosave rules run. The last editor remains mounted and hidden to preserve explicit-save drafts; reopening that same card restores its tab. Detail reads pause while dismissed and late replies cannot reopen the inspector. Failed Overview drafts remain reachable from the board. Dismissal itself adds no storage command or task-state transition.
+
+## Compact task inspector amendment
+
+Ordinary tasks no longer have a Task details strip or an Overview connection row.
+The shared header puts the editable column badge, independent execution projection
+and priority on one row above the tabs. Column selection still uses the existing
+MoveTask command and preserves autosave/version guards; priority retains its
+Overview form association and blur/keyboard saving on every tab. PR, ticket and
+Codex controls remain on kanban cards. Generic source/provenance references remain
+below Description. The static empty inspector follows the compact layout.
+
+Description grows to its full editable content height without a preview cap or
+expand/collapse actions. Content longer than the window scrolls with the inspector,
+so available vertical space is used without nested description scrolling.
+Source-derived eye/comment icons are inline
+prefixes of card titles, rather than a separate flex column, and also prefix the
+inspector title. Existing typed source/provenance classification is unchanged;
+ordinary tasks acquire no icon. This is a static UI update without daemon changes.

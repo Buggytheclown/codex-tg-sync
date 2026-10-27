@@ -55,7 +55,7 @@ Open the dev server using that exact origin. No wildcard CORS is used.
   and working directory, plus model/reasoning and optional repeat-work settings.
   Saving the trigger and child definition uses one version-guarded command.
   Sources create new Inbox tasks and require Telegram launch approval.
-- Move cards by dragging them or using the accessible **Move task** dropdown.
+- Move cards by dragging them or using the editable column badge in the task header (accessible as **Move task**).
   Reading a card never moves it. An invalid move to Polling opens its form.
 - **No polling**, **Configured · paused**, and **Waiting** are separate labels.
   Settings are active only while the card is in Polling. Diagnostics show next
@@ -89,3 +89,11 @@ links and purple primary actions. Shared color tokens in `src/style.css` cover
 the board, inspector, forms, diagnostics and workflow states. YS Text loads from
 `yastatic.net`; if the font CDN is unavailable, the system sans-serif fallback
 keeps the board usable. Native controls also follow the dark color scheme.
+
+Task details use a compact shared header: editable column, independent execution
+state and priority on one row above the tabs. Overview starts with Description;
+PR, ticket and Codex shortcuts remain on the card. Descriptions grow to their full
+content height while staying editable; the
+inspector scrolls when the content exceeds the window.
+Review/feedback icons follow the existing source classification and appear inline
+at the beginning of the task title, including wrapped card titles.
