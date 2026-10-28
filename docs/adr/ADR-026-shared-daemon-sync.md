@@ -49,8 +49,9 @@ Desktop sees without maintaining a second App Server runtime.
   also bounds attempts per discovery pass and defaults to five.
   Expired passive topics can be deleted and materialized again on fresh
   activity; Codex history is retained. Pending old Finals do not extend topic
-  retention. First catch-up absorbs a completed pre-activation Final and shows
-  User/current Status, while subsequent results deliver normally.
+  retention. First catch-up shows User/current Status and the latest completed
+  Final, including results from before activation. Subsequent results use the
+  same delivery and deduplication path.
 - Durable `threadId` mapping makes topic creation idempotent. New Telegram chats
   retain the draft-first `thread/start + turn/start` contract from ADR-025.
 - Local writer leases continue to guard Telegram dispatch, receipts, callbacks,

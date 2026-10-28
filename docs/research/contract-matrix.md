@@ -39,8 +39,8 @@ The Bot API chat-scoped menu contains exactly:
   last 24 hours. The configured initial limit also bounds creation attempts per
   pass; later passes connect the rest without an overall topic-count cap. Failed
   candidates do not starve later candidates. Start/status events reduce latency.
-- First catch-up shows User/current Status and absorbs a completed Final whose
-  source update predates activation. Later results deliver normally.
+- First catch-up shows User/current Status and the latest completed Final,
+  including results from before activation. Confirmed deliveries are not repeated.
 - A durable marker written before remote creation prevents automatic retries
   after an ambiguous outcome, including continuation after partial activation.
   Control/status report the ambiguous operation; existing bound topics keep updating. Resolve its marker manually after inspection.

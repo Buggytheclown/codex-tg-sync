@@ -33,12 +33,11 @@ gaps, and missed subscriptions. It probes tracked topics with the summary view,
 skips fully delivered stable terminal turns, and loads a full latest turn for
 every other topic. Discovery remains part of this infrequent pass.
 
-First catch-up shows the current User and Status but does not notify a completed
-Final whose authoritative thread update predates activation. Its fingerprint is
-absorbed and its Status turn reserved so the compact terminal card can still be
-created and retried if its send fails. Missing timestamps and same-second
-boundaries use normal delivery.
-A previously observed active turn and later results still deliver Final normally.
+First catch-up shows the current User, Status, and latest completed Final,
+regardless of whether the result predates activation. The initial terminal
+Status turn is reserved so its creation can retry even when Final succeeds
+first. Final uses normal delivery: its fingerprint advances only after every
+chunk is accepted. Later results follow the same path.
 This initial catch-up policy does not change source replies or Codex history.
 
 The persisted per-thread projection is monotonic within a turn. Terminal state
@@ -57,8 +56,9 @@ message is already visible. This semantic barrier runs before transport priority
 so the visible order starts with User even when `turn/started` is readable before
 the user item. For an existing Status anchor, Final is sent before the terminal
 Status edit; the edit does not change topic ordering. When a terminal Status must
-be created, it is attempted before Final, and a failed creation is not appended
-after an already delivered Final.
+be created, it is attempted before Final. A reserved initial Status is retried
+even if Final has already succeeded; other unreserved completed-turn Status
+creations are not appended after a delivered Final.
 
 Status keeps commentary-block duration and renders only the authoritative tool
 count in each owning commentary-block header. Individual tool labels and tool

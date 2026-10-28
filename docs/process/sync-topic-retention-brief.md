@@ -29,10 +29,9 @@ the complete history.
   forgets their rows only after confirmation; `TOPIC_ID_INVALID` means absent.
   Failed deletions remain durable and are retried across historical sessions.
 - New-topic cleanup never delays the ready response or rolls back its creation.
-- On first catch-up, a completed result whose source `updatedAt` predates Sync
-  activation is absorbed without replaying its Final. User/current Status remain
-  visible. Results observed after activation are delivered normally. Missing or
-  same-second timestamps are handled conservatively by normal delivery.
+- First catch-up shows User/current Status and the latest completed Final,
+  including results from before activation. All Finals use the same delivery,
+  retry, and deduplication path; timestamps do not suppress results.
 - Persist a session-local creation marker before Telegram I/O. Unknown create
   outcomes stop automatic creation until the operator inspects untracked topics
   and explicitly cycles Sync off/on. Status and one durable Control warning
@@ -53,7 +52,8 @@ per-turn result guarantees across topic expiration are outside this contract.
 - Existing local writer-state retention protection stays covered.
 - An ambiguous activation/discovery create is not retried on later passes or
   after reopening the durable store within the same Sync session.
-- First catch-up omits a pre-activation Final; later new results deliver once.
-- A failed catch-up Status retries without replaying the absorbed Final; queued
-  snapshots from an earlier Sync session cannot populate a new presentation.
+- First catch-up delivers a pre-activation Final; later new results deliver once.
+- A failed catch-up Status retries without repeating a delivered Final, including
+  after restart. Multipart Final retries resume at the first unconfirmed chunk.
+  Queued snapshots from an earlier Sync session cannot populate a new presentation.
 - Ready-draft deletion remains asynchronous; failed cleanup stays durable.

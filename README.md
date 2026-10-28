@@ -101,7 +101,7 @@ For the first activation, send these commands in the forum's built-in `General` 
 /projects
 ```
 
-`/sync on` validates the private two-member forum and connects Codex chats active in the last 24 hours. The initial limit (default five) also controls creation attempts per discovery pass; all fresh chats eventually connect, with no overall count cap. Sync stays on when no chat is fresh. Passive topics expire after 24 hours without activity and return when the chat becomes active again; history stays in Codex. Local unfinished Telegram dispatch stays protected. First catch-up shows the latest prompt/status without notifying a completed pre-activation Final. Send text in a task topic to start or steer its turn; use `/stop` to interrupt it.
+`/sync on` validates the private two-member forum and connects Codex chats active in the last 24 hours. The initial limit (default five) also controls creation attempts per discovery pass; all fresh chats eventually connect, with no overall count cap. Sync stays on when no chat is fresh. Passive topics expire after 24 hours without activity and return when the chat becomes active again; history stays in Codex. Local unfinished Telegram dispatch stays protected. First catch-up shows the latest prompt, current Status, and completed Final, even when the result predates activation. Send text in a task topic to start or steer its turn; use `/stop` to interrupt it.
 
 If topic creation has an unknown outcome, automatic creation pauses. Control and `/status` identify the ambiguous operation. Existing topics continue updating; inspect the operation before manually clearing its creation marker.
 

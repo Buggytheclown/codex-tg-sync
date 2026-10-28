@@ -1444,17 +1444,7 @@ func (s *Service) processSyncSnapshotLocked(ctx context.Context, state model.Syn
 		}
 	}
 	current = monotonicSyncSnapshot(previous, current)
-	// First catch-up shows current context, but absorbs a result from before activation.
-	// Reserving StatusTurnID lets delivery create its compact card without that old Final.
-	if topic.StatusMessageID == 0 && topic.LastUserFP == "" && topic.LastFinalFP == "" &&
-		topic.PendingTelegramUserFP == "" && isTerminalStatus(current.LatestTurnStatus) &&
-		current.LatestFinalFP != "" && current.Thread.UpdatedAt > 0 &&
-		current.Thread.UpdatedAt < parseTime(state.SnapshotAt).Unix() {
-		if err := s.store.UpdateSyncTopicDelivery(ctx, topic.SessionID, topic.TopicID, 0, current.LatestTurnID, "", current.LatestFinalFP); err != nil {
-			return
-		}
-		topic.StatusTurnID, topic.LastFinalFP = current.LatestTurnID, current.LatestFinalFP
-	}
+
 	s.queueExternalReplyFromSnapshot(ctx, current)
 	if forum == nil {
 		s.persistSyncSnapshot(ctx, topic, current)
@@ -1704,6 +1694,13 @@ func (s *Service) deliverSyncStatus(ctx context.Context, forum SyncForum, topic 
 	}
 	var deliveryErr error
 	if statusID == 0 || newObservedTurn {
+		// Reserve initial Status for retry even if Final succeeds after this send fails.
+		if statusID == 0 && statusTurnID == "" && isTerminalStatus(current.LatestTurnStatus) && current.LatestFinalFP != "" {
+			if err := s.store.UpdateSyncTopicStatusDelivery(ctx, topic.SessionID, topic.TopicID, 0, currentTurnID, ""); err != nil {
+				return topic, false
+			}
+			topic.StatusTurnID = currentTurnID
+		}
 		statusID, deliveryErr = forum.SendSyncMessage(ctx, topic.TopicID, statusMessage, model.SendOptions{Silent: true, Background: true})
 	} else if renderFP != topic.LastRenderFP {
 		deliveryErr = forum.EditSyncMessage(ctx, topic.TopicID, statusID, statusMessage, model.SendOptions{Background: true})

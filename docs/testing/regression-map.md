@@ -38,8 +38,9 @@ Coverage includes:
 - paginated, importance-first `/sync on` topic selection (including `notLoaded` threads with running or terminal last turns), initial topic limit, empty active Sync, and continuous discovery of chats created or updated in the last 24 hours;
 - bounded discovery batches over every page, with failed-candidate progress;
 - `sync_fresh_window_test.go`: 100 chats, expiration/recreation, durable unknown
-  create pause, omission of pre-activation Finals with normal later delivery,
-  catch-up Status retry, and rejection of queued previous-session snapshots;
+  create pause, delivery of pre-activation Finals with normal later delivery,
+  catch-up Status retry without repeating Final, restart-safe multipart retry,
+  and rejection of queued previous-session snapshots;
 - one topic per thread and receipt idempotency;
 - shared daemon/WebSocket reconnection without prompt replay;
 - startup/reconnect preserve session, topics, ready drafts, anchors, activation boundary, and delivery fingerprints; unknown operations are never replayed;

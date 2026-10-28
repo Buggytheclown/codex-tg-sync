@@ -56,30 +56,53 @@ func TestSyncFreshWindowDiscoversAllPagesInSmallBatches(t *testing.T) {
 	}
 }
 
-func TestSyncFreshWindowRetriesStatusAfterSkippingOldFinal(t *testing.T) {
-	service := activeSyncService(t)
-	ctx := context.Background()
-	topic, _ := service.store.GetActiveSyncTopic(ctx, -1001, 11)
-	topic.LastUserFP = ""
-	if err := service.store.UpsertSyncTopic(ctx, *topic); err != nil {
-		t.Fatal(err)
-	}
-	payload := syncCompletedPayload("thread-1", "turn-1", "old result")
-	payload["thread"].(map[string]any)["updatedAt"] = time.Now().Add(-time.Hour).Unix()
-	poll := &stubSession{threadListResult: map[string]any{"data": []any{}},
-		threadReads: map[string]map[string]any{"thread-1": payload}}
-	service.poll, service.pollConnected = poll, true
-	forum := &fakeSyncForum{sendErrAt: 2, sendErr: errors.New("temporary Status failure")}
-	service.SetSyncForum(forum)
-	service.reconcileSync(ctx)
-	forum.sendErrAt, forum.sendErr = 0, nil
-	service.reconcileSync(ctx)
-	topic, err := service.store.GetActiveSyncTopic(ctx, -1001, 11)
-	if err != nil || topic == nil || topic.StatusMessageID == 0 {
-		t.Fatalf("topic=%#v err=%v, want retried compact Status", topic, err)
-	}
-	if len(forum.sends) != 3 || !strings.HasPrefix(forum.sends[2].text, syncStatusHeader) {
-		t.Fatalf("sends=%#v, want User, failed Status, retried Status without old Final", forum.sends)
+func TestSyncFreshWindowRetriesStatusWithoutRepeatingFinal(t *testing.T) {
+	for name, updatedAt := range map[string]int64{
+		"before-activation": time.Now().Add(-time.Hour).Unix(),
+		"after-activation":  time.Now().Add(time.Hour).Unix(),
+		"missing-timestamp": 0,
+	} {
+		t.Run(name, func(t *testing.T) {
+			service := activeSyncService(t)
+			ctx := context.Background()
+			topic, _ := service.store.GetActiveSyncTopic(ctx, -1001, 11)
+			topic.LastUserFP = ""
+			if err := service.store.UpsertSyncTopic(ctx, *topic); err != nil {
+				t.Fatal(err)
+			}
+			payload := syncCompletedPayload("thread-1", "turn-1", "old result")
+			payload["thread"].(map[string]any)["updatedAt"] = updatedAt
+			poll := &stubSession{threadListResult: map[string]any{"data": []any{}},
+				threadReads: map[string]map[string]any{"thread-1": payload}}
+			service.poll, service.pollConnected = poll, true
+			forum := &fakeSyncForum{sendErrAt: 2, sendErr: errors.New("temporary Status failure")}
+			service.SetSyncForum(forum)
+			service.reconcileSync(ctx)
+			if err := service.Close(); err != nil {
+				t.Fatal(err)
+			}
+			reloaded, err := New(service.cfg)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer reloaded.Close()
+			service = reloaded
+			service.poll, service.pollConnected = poll, true
+			service.SetSyncForum(forum)
+			if err := service.recoverSyncRuntimeLocked(ctx); err != nil {
+				t.Fatal(err)
+			}
+			forum.sendErrAt, forum.sendErr = 0, nil
+			service.reconcileSync(ctx)
+			topic, err = service.store.GetActiveSyncTopic(ctx, -1001, 11)
+			if err != nil || topic == nil || topic.StatusMessageID == 0 {
+				t.Fatalf("topic=%#v err=%v, want retried compact Status", topic, err)
+			}
+			if len(forum.sends) != 4 || forum.sends[2].text != syncFinalHeader+"\nold result" ||
+				!strings.HasPrefix(forum.sends[3].text, syncStatusHeader) {
+				t.Fatalf("sends=%#v, want User, failed Status, Final, retried Status without repeating Final", forum.sends)
+			}
+		})
 	}
 }
 
@@ -228,7 +251,7 @@ func TestSyncFreshWindowDefinitiveFailuresDoNotStarveLaterChats(t *testing.T) {
 	}
 }
 
-func TestSyncFreshWindowSkipsPreActivationFinalButDeliversNewResult(t *testing.T) {
+func TestSyncFreshWindowDeliversPreActivationFinalAndNewResult(t *testing.T) {
 	service := newTestService(t)
 	ctx := context.Background()
 	if err := service.store.BeginSyncActivation(ctx, "s", -1001); err != nil {
@@ -250,25 +273,76 @@ func TestSyncFreshWindowSkipsPreActivationFinalButDeliversNewResult(t *testing.T
 	service.SetSyncForum(forum)
 	service.reconcileSync(ctx)
 	service.reconcileSync(ctx)
-	if len(forum.sends) != 2 || !strings.HasPrefix(forum.sends[0].text, syncUserHeader) ||
-		!strings.HasPrefix(forum.sends[1].text, syncStatusHeader) {
-		t.Fatalf("sends=%#v, want User and compact Status without old Final", forum.sends)
+	if len(forum.sends) != 3 || !strings.HasPrefix(forum.sends[0].text, syncUserHeader) ||
+		!strings.HasPrefix(forum.sends[1].text, syncStatusHeader) ||
+		forum.sends[2].text != syncFinalHeader+"\nold result" {
+		t.Fatalf("sends=%#v, want User, Status, and pre-activation Final exactly once", forum.sends)
+	}
+	if err := service.Close(); err != nil {
+		t.Fatal(err)
+	}
+	reloaded, err := New(service.cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reloaded.Close()
+	service = reloaded
+	service.poll, service.pollConnected = poll, true
+	service.SetSyncForum(forum)
+	if err := service.recoverSyncRuntimeLocked(ctx); err != nil {
+		t.Fatal(err)
+	}
+	service.reconcileSync(ctx)
+	if len(forum.sends) != 3 {
+		t.Fatalf("sends=%#v, want no duplicate after restart", forum.sends)
 	}
 	payload = syncCompletedPayload("thread-1", "turn-2", "new result")
 	payload["thread"].(map[string]any)["updatedAt"] = time.Now().Add(time.Second).Unix()
 	poll.threadReads["thread-1"] = payload
 	service.reconcileSync(ctx)
 	service.reconcileSync(ctx)
-	finals := 0
+	var finals []string
 	for _, message := range forum.sends {
 		if strings.HasPrefix(message.text, syncFinalHeader) {
-			finals++
-			if !strings.Contains(message.text, "new result") {
-				t.Fatalf("unexpected historical Final: %q", message.text)
-			}
+			finals = append(finals, message.text)
 		}
 	}
-	if finals != 1 {
-		t.Fatalf("finals=%d, want new result delivered once", finals)
+	if want := []string{syncFinalHeader + "\nold result", syncFinalHeader + "\nnew result"}; !reflect.DeepEqual(finals, want) {
+		t.Fatalf("finals=%q, want pre-activation and new result delivered once each", finals)
+	}
+}
+
+func TestSyncTerminalReadPreservesStatusDeliveredAfterTopicRead(t *testing.T) {
+	service := activeSyncService(t)
+	ctx := context.Background()
+	stale, err := service.store.GetActiveSyncTopic(ctx, -1001, 11)
+	if err != nil || stale == nil {
+		t.Fatalf("topic=%#v err=%v", stale, err)
+	}
+	forum := &fakeSyncForum{}
+	service.SetSyncForum(forum)
+	running := appserver.SnapshotFromThreadRead(syncRunningPayload("thread-1", "turn-1"))
+	delivered, ok := service.deliverSyncStatus(ctx, forum, *stale, running, time.Now(), syncStatusFreshness{})
+	if !ok || delivered.StatusMessageID == 0 {
+		t.Fatal("initial active Status was not delivered")
+	}
+	// Reconciliation finishes its terminal read using the topic loaded before delivery.
+	service.started = true
+	defer func() { service.started = false }()
+	state, err := service.store.GetSyncState(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	service.syncBotReady = true
+	service.syncValidatedSession = state.SessionID
+	terminal := appserver.SnapshotFromThreadRead(syncCompletedPayload("thread-1", "turn-1", "done"))
+	service.processSyncSnapshotLocked(ctx, state, forum, *stale, terminal, "sync_poll")
+	topic, err := service.store.GetActiveSyncTopic(ctx, -1001, 11)
+	if err != nil || topic == nil || topic.StatusMessageID != delivered.StatusMessageID {
+		t.Fatalf("topic=%#v err=%v, want confirmed Status anchor %d preserved", topic, err, delivered.StatusMessageID)
+	}
+	service.runSyncDelivery(ctx, "thread-1")
+	if len(forum.sends) != 2 || forum.sends[1].text != syncFinalHeader+"\ndone" {
+		t.Fatalf("sends=%#v, want original Status and Final without duplicate Status", forum.sends)
 	}
 }

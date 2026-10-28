@@ -774,8 +774,10 @@ func TestSyncLongFinalFailureKeepsFingerprintPending(t *testing.T) {
 	service := activeSyncService(t)
 	ctx := context.Background()
 	finalText := strings.Repeat("x", tgformat.TelegramMessageLimit+1200)
+	payload := syncCompletedPayload("thread-1", "turn-1", finalText)
+	payload["thread"].(map[string]any)["updatedAt"] = time.Now().Add(-time.Hour).Unix()
 	poll := &stubSession{threadReads: map[string]map[string]any{
-		"thread-1": syncCompletedPayload("thread-1", "turn-1", finalText),
+		"thread-1": payload,
 	}}
 	service.mu.Lock()
 	service.poll, service.pollConnected = poll, true
@@ -795,6 +797,20 @@ func TestSyncLongFinalFailureKeepsFingerprintPending(t *testing.T) {
 	}
 	if got := logs.String(); !strings.Contains(got, "sync_final_delivery_failed") || !strings.Contains(got, `"chunk_index":2`) {
 		t.Fatalf("logs=%q, want chunk delivery diagnostic", got)
+	}
+	if err := service.Close(); err != nil {
+		t.Fatal(err)
+	}
+	reloaded, err := New(service.cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reloaded.Close()
+	service = reloaded
+	service.poll, service.pollConnected = poll, true
+	service.SetSyncForum(forum)
+	if err := service.recoverSyncRuntimeLocked(ctx); err != nil {
+		t.Fatal(err)
 	}
 	forum.sendErrAt = 0
 	forum.sendErr = nil
