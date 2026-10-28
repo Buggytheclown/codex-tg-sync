@@ -958,10 +958,8 @@ func TestSyncSnapshotInvalidationIgnoresStreamingUpdates(t *testing.T) {
 	}
 }
 
-func TestSyncStreamingEventRecordsActivityWithoutDirtyRead(t *testing.T) {
+func TestSyncStreamingEventDoesNotQueueDirtyRead(t *testing.T) {
 	service := activeSyncService(t)
-	fixedNow := time.Date(2026, time.August, 17, 12, 0, 0, 0, time.UTC)
-	service.now = func() time.Time { return fixedNow }
 	process := &stubSession{}
 	service.syncMu.Lock()
 	service.syncPollEventProcess = process
@@ -971,9 +969,7 @@ func TestSyncStreamingEventRecordsActivityWithoutDirtyRead(t *testing.T) {
 	service.handleSyncPollEvent(context.Background(), process, appserver.Event{
 		Channel: "notification", Method: "item/updated", Params: map[string]any{"threadId": "thread-1"},
 	}, 7)
-	if got := service.lastSyncAppServerEvent("thread-1"); !got.Equal(fixedNow) {
-		t.Fatalf("last event = %s, want %s", got, fixedNow)
-	}
+
 	service.syncDirtyMu.Lock()
 	dirtyCount := len(service.syncDirtyThreads)
 	service.syncDirtyMu.Unlock()
@@ -1449,7 +1445,7 @@ func TestSyncPresentationIgnoresStalePollTurnWhileSyncWriterIsActive(t *testing.
 	}
 }
 
-func TestSyncStatusUsesCompactTimingInHeader(t *testing.T) {
+func TestSyncStatusUsesFixedActiveTimesAndTerminalDuration(t *testing.T) {
 	t.Parallel()
 
 	startedAt := time.Date(2026, time.August, 15, 12, 0, 0, 0, time.UTC)
@@ -1459,11 +1455,12 @@ func TestSyncStatusUsesCompactTimingInHeader(t *testing.T) {
 		LatestTurnStatus:    "inProgress",
 		LatestTurnStartedAt: startedAt.Format(time.RFC3339Nano),
 	}
-	if got := renderSyncStatusAt(active, startedAt.Add(8*time.Second)).Text; got != "⏱ [Status] inProgress · 0s" {
-		t.Fatalf("active status = %q, want elapsed timer held in its 10-second bucket", got)
-	}
-	if got := renderSyncStatusAt(active, startedAt.Add(10*time.Second)).Text; got != "⏱ [Status] inProgress · 10s" {
-		t.Fatalf("active status = %q, want elapsed timer advanced at 10 seconds", got)
+	for _, elapsed := range []time.Duration{8 * time.Second, 10 * time.Second} {
+		observed := startedAt.Add(elapsed)
+		want := "⏱ [Status] inProgress\nНачат " + startedAt.Local().Format("15:04:05") + " · Статус на " + observed.Local().Format("15:04:05")
+		if got := renderSyncStatusAt(active, observed).Text; got != want {
+			t.Fatalf("active status = %q, want fixed start/observation times %q", got, want)
+		}
 	}
 
 	active.LatestTurnStatus = "completed"
@@ -1527,7 +1524,7 @@ func TestSyncStatusUpdatesSameBlockAndCountsTools(t *testing.T) {
 	if strings.Count(message.Text, "Блок 1 · 7s · tools 1") != 1 || strings.Count(message.Text, "Expanded reasoning") != 1 {
 		t.Fatalf("status duplicated updated block: %q", message.Text)
 	}
-	if !strings.Contains(message.Text, "Блок 2 · 3s · tools 1\nUpdated plan") ||
+	if !strings.Contains(message.Text, "Блок 2 · в работе · tools 1\nUpdated plan") ||
 		strings.Contains(message.Text, "go test ./...") || strings.Contains(message.Text, "read sync.go") ||
 		strings.Contains(message.Text, "tool output") || strings.Contains(message.Text, "stale preview") {
 		t.Fatalf("status included wrong detail kinds: %q", message.Text)
@@ -1554,7 +1551,7 @@ func TestSyncStatusCountsAllToolsWithoutRenderingLabels(t *testing.T) {
 	}
 
 	message := renderSyncStatusAt(snapshot, startedAt.Add(time.Minute))
-	if !strings.Contains(message.Text, "Блок 1 · 1m · tools 7\nWorking") {
+	if !strings.Contains(message.Text, "Блок 1 · в работе · tools 7\nWorking") {
 		t.Fatalf("status %q does not contain the complete tool count", message.Text)
 	}
 	for _, hidden := range []string{"tool 1", "tool 2", "tool 3", "tool 4", "tool 5", "tool 6", "tool 7"} {
@@ -1564,7 +1561,7 @@ func TestSyncStatusCountsAllToolsWithoutRenderingLabels(t *testing.T) {
 	}
 }
 
-func TestSyncStatusShowsFreshnessOnlyWhileActive(t *testing.T) {
+func TestSyncStatusShowsObservationTimeWithoutHeartbeat(t *testing.T) {
 	t.Parallel()
 
 	now := time.Date(2026, time.August, 17, 12, 0, 10, 0, time.UTC)
@@ -1576,17 +1573,15 @@ func TestSyncStatusShowsFreshnessOnlyWhileActive(t *testing.T) {
 			StartedAt: model.TimeString(now.Add(-time.Minute).Format(time.RFC3339Nano)), CommentaryIndex: 1,
 		}},
 	}
-	freshness := syncStatusFreshness{SnapshotAt: now.Add(-2 * time.Second), EventAt: now.Add(-time.Second)}
-	message := renderSyncStatusWithFreshnessAt(snapshot, freshness, now)
-	wantFreshness := "↻ snapshot " + freshness.SnapshotAt.Local().Truncate(syncStatusTimerTick).Format("15:04:05") +
-		" · event " + freshness.EventAt.Local().Truncate(syncStatusTimerTick).Format("15:04:05")
-	want := "⏱ [Status] inProgress · 1m\n\n" + wantFreshness + "\n\nБлок 1 · 1m\nWorking"
+	message := renderSyncStatusAt(snapshot, now)
+	want := "⏱ [Status] inProgress\nНачат " + now.Add(-time.Minute).Local().Format("15:04:05") +
+		" · Статус на " + now.Local().Format("15:04:05") + "\n\nБлок 1 · в работе\nWorking"
 	if message.Text != want {
 		t.Fatalf("active status = %q, want %q", message.Text, want)
 	}
 
 	snapshot.LatestTurnStatus = "completed"
-	if terminal := renderSyncStatusWithFreshnessAt(snapshot, freshness, now); strings.Contains(terminal.Text, "↻ snapshot") {
+	if terminal := renderSyncStatusAt(snapshot, now); strings.Contains(terminal.Text, "Статус на") {
 		t.Fatalf("terminal status contains freshness: %q", terminal.Text)
 	}
 }
@@ -1653,9 +1648,11 @@ func TestSyncStatusBlockDurationsPartitionOverallDuration(t *testing.T) {
 		},
 	}
 
+	snapshot.Thread.Status, snapshot.LatestTurnStatus = "completed", "completed"
+	snapshot.LatestTurnUpdatedAt = startedAt.Add(30 * time.Second).Format(time.RFC3339Nano)
 	message := renderSyncStatusAt(snapshot, startedAt.Add(30*time.Second))
 	for _, want := range []string{
-		"⏱ [Status] inProgress · 30s",
+		"⏱ [Status] completed · 30s",
 		"Блок 1 · 10s\none",
 		"Блок 2 · 15s\ntwo",
 		"Блок 3 · 5s\nthree",
@@ -1666,27 +1663,23 @@ func TestSyncStatusBlockDurationsPartitionOverallDuration(t *testing.T) {
 	}
 }
 
-func TestSyncStatusOpenBlockTimerUsesSameTenSecondBucketAsHeader(t *testing.T) {
+func TestSyncStatusOpenBlockHasNoElapsedTimer(t *testing.T) {
 	t.Parallel()
-
 	startedAt := time.Date(2026, time.August, 17, 12, 0, 0, 0, time.UTC)
 	snapshot := appserver.ThreadReadSnapshot{
-		Thread:              model.Thread{Status: "inProgress"},
-		LatestTurnID:        "turn-1",
-		LatestTurnStatus:    "inProgress",
+		Thread: model.Thread{Status: "inProgress"}, LatestTurnID: "turn-1", LatestTurnStatus: "inProgress",
 		LatestTurnStartedAt: startedAt.Format(time.RFC3339Nano),
-		DetailItems: []model.DetailItem{
-			{ID: "block-1", Kind: model.DetailItemCommentary, Text: "working", StartedAt: model.TimeString(startedAt.Format(time.RFC3339Nano))},
-		},
+		DetailItems:         []model.DetailItem{{Kind: model.DetailItemCommentary, Text: "working", StartedAt: model.TimeString(startedAt.Format(time.RFC3339Nano))}},
 	}
-
-	insideBucket := renderSyncStatusAt(snapshot, startedAt.Add(5*time.Second)).Text
-	if laterInsideBucket := renderSyncStatusAt(snapshot, startedAt.Add(9*time.Second)).Text; laterInsideBucket != insideBucket {
-		t.Fatalf("status changed inside one timer bucket:\n5s: %q\n9s: %q", insideBucket, laterInsideBucket)
+	first := renderSyncStatusAt(snapshot, startedAt.Add(5*time.Second))
+	later := renderSyncStatusAt(snapshot, startedAt.Add(time.Minute))
+	for _, message := range []model.RenderedMessage{first, later} {
+		if !strings.Contains(message.Text, "Блок 1 · в работе\nworking") {
+			t.Fatalf("open block has a misleading frozen timer: %q", message.Text)
+		}
 	}
-	atBoundary := renderSyncStatusAt(snapshot, startedAt.Add(10*time.Second)).Text
-	if atBoundary == insideBucket || !strings.Contains(atBoundary, "inProgress · 10s") || !strings.Contains(atBoundary, "Блок 1 · 10s") {
-		t.Fatalf("status did not advance both timers at boundary: %q", atBoundary)
+	if syncStatusDeliveryFingerprint(snapshot, first) != syncStatusDeliveryFingerprint(snapshot, later) {
+		t.Fatal("time alone changed the delivery fingerprint")
 	}
 }
 
@@ -1732,13 +1725,13 @@ func TestSyncStatusTrimsOldLinesAndPreservesLatestTail(t *testing.T) {
 	}
 
 	message := renderSyncStatusAt(snapshot, startedAt.Add(2*time.Second))
-	if syncUTF16Len(message.Text) > 4096 || !strings.HasPrefix(message.Text, "⏱ [Status] inProgress · 0s\n") ||
+	if syncUTF16Len(message.Text) > 4096 || !strings.HasPrefix(message.Text, "⏱ [Status] inProgress\nНачат ") ||
 		!strings.Contains(message.Text, "… удалено строк:") || !strings.HasSuffix(message.Text, "LATEST STATUS TAIL") {
 		t.Fatalf("trimmed status length=%d text tail=%q", syncUTF16Len(message.Text), syncUTF16Suffix(message.Text, 200))
 	}
 }
 
-func TestSyncPassiveSyncTicksElapsedFromStableTurnStart(t *testing.T) {
+func TestSyncPassiveSyncDoesNotEditForElapsedTime(t *testing.T) {
 	service := activeSyncService(t)
 	ctx := context.Background()
 	now := time.Date(2026, time.August, 15, 12, 0, 0, 0, time.UTC)
@@ -1753,20 +1746,20 @@ func TestSyncPassiveSyncTicksElapsedFromStableTurnStart(t *testing.T) {
 	service.SetSyncForum(forum)
 
 	service.reconcileSync(ctx)
-	if len(forum.sends) != 1 || !strings.HasPrefix(forum.sends[0].text, syncStatusHeader+" inProgress · 0s") {
-		t.Fatalf("initial status=%#v, want observed start in compact header", forum.sends)
+	if len(forum.sends) != 1 || !strings.HasPrefix(forum.sends[0].text, syncStatusHeader+" inProgress\nНачат ") {
+		t.Fatalf("initial status=%#v, want fixed observed start time", forum.sends)
 	}
 
 	now = now.Add(5 * time.Second)
 	service.reconcileSync(ctx)
 	if len(forum.edits) != 0 {
-		t.Fatalf("elapsed edits=%#v, want no edit inside the same 10-second bucket", forum.edits)
+		t.Fatalf("elapsed edits=%#v, want no time-only edit", forum.edits)
 	}
 
 	now = now.Add(5 * time.Second)
 	service.reconcileSync(ctx)
-	if len(forum.edits) != 1 || !strings.HasPrefix(forum.edits[0].text, syncStatusHeader+" inProgress · 10s") {
-		t.Fatalf("elapsed edits=%#v, want elapsed-only edit at the 10-second boundary", forum.edits)
+	if len(forum.edits) != 0 {
+		t.Fatalf("elapsed edits=%#v, want no time-only edit across any timer boundary", forum.edits)
 	}
 }
 

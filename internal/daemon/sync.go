@@ -43,12 +43,11 @@ type SyncForum interface {
 }
 
 const (
-	syncUserHeader      = "👤 [User]"
-	syncStatusHeader    = "⏱ [Status]"
-	syncFinalHeader     = "✅ [Final]"
-	syncApprovalHeader  = "🔐 [Approval]"
-	syncInputHeader     = "❓ [Input]"
-	syncStatusTimerTick = 10 * time.Second
+	syncUserHeader     = "👤 [User]"
+	syncStatusHeader   = "⏱ [Status]"
+	syncFinalHeader    = "✅ [Final]"
+	syncApprovalHeader = "🔐 [Approval]"
+	syncInputHeader    = "❓ [Input]"
 )
 
 type SyncForumFailureKind string
@@ -530,7 +529,6 @@ func (s *Service) activateSync(ctx context.Context, userID int64) (*DirectRespon
 		return nil, fmt.Errorf("prepare Sync Control: %w", err)
 	}
 	s.cleanupSyncTopics(ctx)
-	s.clearSyncEventActivity()
 
 	poll, err := s.controlReadSession(ctx)
 	if err != nil {
@@ -826,7 +824,7 @@ func syncStoredTerminalPresentationDelivered(previous *model.ThreadSnapshotState
 	if topic.StatusMessageID == 0 || strings.TrimSpace(topic.StatusTurnID) != turnID {
 		return strings.TrimSpace(snapshot.LatestFinalFP) != "" && snapshot.LatestFinalFP == topic.LastFinalFP
 	}
-	desired := syncFingerprint(tgformat.HashRendered(renderSyncStatusAt(snapshot, time.Time{})))
+	desired := syncStatusDeliveryFingerprint(snapshot, renderSyncStatusAt(snapshot, time.Time{}))
 	return desired != "" && desired == topic.LastRenderFP
 }
 
@@ -1190,7 +1188,6 @@ func (s *Service) handleSyncPollEvent(ctx context.Context, process Session, even
 		}
 		return
 	}
-	s.recordSyncAppServerEvent(threadID, s.now().UTC())
 	if approval, ok := appserver.PendingApprovalFromServerRequest(event); ok {
 		s.handleSyncPendingRequestLocked(ctx, *topic, *approval)
 		s.syncMu.Unlock()
@@ -1249,7 +1246,6 @@ func (s *Service) handleSyncWriterEvent(ctx context.Context, process Session, ev
 		s.syncMu.Unlock()
 		return
 	}
-	s.recordSyncAppServerEvent(threadID, s.now().UTC())
 	if approval, ok := appserver.PendingApprovalFromServerRequest(event); ok {
 		s.handleSyncPendingRequestLocked(ctx, *topic, *approval)
 		s.syncMu.Unlock()
@@ -1305,33 +1301,6 @@ func (s *Service) markSyncThreadDirty(threadID string) {
 	case s.syncDirtyWake <- struct{}{}:
 	default:
 	}
-}
-
-func (s *Service) recordSyncAppServerEvent(threadID string, observedAt time.Time) {
-	threadID = strings.TrimSpace(threadID)
-	if threadID == "" {
-		return
-	}
-	if observedAt.IsZero() {
-		observedAt = time.Now().UTC()
-	} else {
-		observedAt = observedAt.UTC()
-	}
-	s.syncDirtyMu.Lock()
-	s.syncLastEventAt[threadID] = observedAt
-	s.syncDirtyMu.Unlock()
-}
-
-func (s *Service) lastSyncAppServerEvent(threadID string) time.Time {
-	s.syncDirtyMu.Lock()
-	defer s.syncDirtyMu.Unlock()
-	return s.syncLastEventAt[strings.TrimSpace(threadID)]
-}
-
-func (s *Service) clearSyncEventActivity() {
-	s.syncDirtyMu.Lock()
-	s.syncLastEventAt = map[string]time.Time{}
-	s.syncDirtyMu.Unlock()
 }
 
 func (s *Service) syncDirtyLoop(ctx context.Context) {
@@ -1494,8 +1463,7 @@ func (s *Service) releaseSyncTurnLeaseLocked(ctx context.Context, state model.Sy
 
 func (s *Service) persistAndDeliverSyncSnapshotLocked(ctx context.Context, forum SyncForum, topic model.SyncTopic, current appserver.ThreadReadSnapshot) {
 	observed, observedAt := s.persistSyncSnapshot(ctx, topic, current)
-	freshness := syncStatusFreshness{SnapshotAt: observedAt, EventAt: s.lastSyncAppServerEvent(topic.ThreadID)}
-	s.deliverSyncSnapshot(ctx, forum, topic, observed, observedAt, freshness)
+	s.deliverSyncSnapshot(ctx, forum, topic, observed, observedAt)
 }
 
 func (s *Service) persistSyncSnapshot(ctx context.Context, topic model.SyncTopic, current appserver.ThreadReadSnapshot) (appserver.ThreadReadSnapshot, time.Time) {
@@ -1632,7 +1600,7 @@ func syncDetailItemKey(item model.DetailItem, index int) string {
 	return fmt.Sprintf("%s:%d:%d", item.Kind, item.CommentaryIndex, index)
 }
 
-func (s *Service) deliverSyncSnapshot(ctx context.Context, forum SyncForum, topic model.SyncTopic, current appserver.ThreadReadSnapshot, observedAt time.Time, freshness syncStatusFreshness) {
+func (s *Service) deliverSyncSnapshot(ctx context.Context, forum SyncForum, topic model.SyncTopic, current appserver.ThreadReadSnapshot, observedAt time.Time) {
 	currentTurnID := strings.TrimSpace(current.LatestTurnID)
 	desiredTitle := strings.TrimSpace(current.Thread.Title)
 	if desiredTitle != "" && desiredTitle != current.Thread.ID {
@@ -1653,7 +1621,7 @@ func (s *Service) deliverSyncSnapshot(ctx context.Context, forum SyncForum, topi
 		return
 	}
 	if terminal && statusNeedsCreate {
-		topic, _ = s.deliverSyncStatus(ctx, forum, topic, current, observedAt, freshness)
+		topic, _ = s.deliverSyncStatus(ctx, forum, topic, current, observedAt)
 		finalFP, _ := s.deliverSyncFinal(ctx, forum, topic, current)
 		topic.LastFinalFP = finalFP
 		return
@@ -1661,10 +1629,10 @@ func (s *Service) deliverSyncSnapshot(ctx context.Context, forum SyncForum, topi
 	if terminal {
 		finalFP, _ := s.deliverSyncFinal(ctx, forum, topic, current)
 		topic.LastFinalFP = finalFP
-		s.deliverSyncStatus(ctx, forum, topic, current, observedAt, freshness)
+		s.deliverSyncStatus(ctx, forum, topic, current, observedAt)
 		return
 	}
-	topic, _ = s.deliverSyncStatus(ctx, forum, topic, current, observedAt, freshness)
+	topic, _ = s.deliverSyncStatus(ctx, forum, topic, current, observedAt)
 }
 
 func syncTurnUserPresentationReady(topic model.SyncTopic, current appserver.ThreadReadSnapshot) bool {
@@ -1681,15 +1649,18 @@ func syncTurnUserPresentationReady(topic model.SyncTopic, current appserver.Thre
 	return strings.TrimSpace(topic.PendingTelegramTurnID) == turnID && strings.TrimSpace(topic.PendingTelegramUserFP) != ""
 }
 
-func (s *Service) deliverSyncStatus(ctx context.Context, forum SyncForum, topic model.SyncTopic, current appserver.ThreadReadSnapshot, observedAt time.Time, freshness syncStatusFreshness) (model.SyncTopic, bool) {
+func (s *Service) deliverSyncStatus(ctx context.Context, forum SyncForum, topic model.SyncTopic, current appserver.ThreadReadSnapshot, observedAt time.Time) (model.SyncTopic, bool) {
 	currentTurnID := strings.TrimSpace(current.LatestTurnID)
-	statusMessage := renderSyncStatusWithFreshnessAt(current, freshness, observedAt)
-	renderFP := syncFingerprint(tgformat.HashRendered(statusMessage))
+	statusMessage := renderSyncStatusAt(current, observedAt)
+	renderFP := syncStatusDeliveryFingerprint(current, statusMessage)
 	statusID := topic.StatusMessageID
 	statusTurnID := strings.TrimSpace(topic.StatusTurnID)
 	newObservedTurn := statusTurnID != "" && currentTurnID != "" && statusTurnID != currentTurnID
 	if (statusID == 0 || newObservedTurn) && statusTurnID != currentTurnID && isTerminalStatus(current.LatestTurnStatus) &&
 		strings.TrimSpace(current.LatestFinalFP) != "" && current.LatestFinalFP == topic.LastFinalFP {
+		return topic, true
+	}
+	if statusID != 0 && !newObservedTurn && renderFP == topic.LastRenderFP {
 		return topic, true
 	}
 	var deliveryErr error
@@ -1854,12 +1825,11 @@ func (s *Service) runSyncDelivery(ctx context.Context, threadID string) {
 	if forum == nil {
 		return
 	}
-	now := s.now().UTC()
-	freshness := syncStatusFreshness{
-		SnapshotAt: parseTime(stored.LastPollAt),
-		EventAt:    s.lastSyncAppServerEvent(threadID),
+	snapshotAt := parseTime(stored.LastPollAt)
+	if snapshotAt.IsZero() {
+		snapshotAt = s.now().UTC()
 	}
-	s.deliverSyncSnapshot(ctx, forum, *topic, current, now, freshness)
+	s.deliverSyncSnapshot(ctx, forum, *topic, current, snapshotAt)
 }
 
 func renderSyncFinal(finalText string) []model.RenderedMessage {
@@ -2216,35 +2186,20 @@ func syncActivationThreadPriority(thread model.Thread) int {
 	}
 }
 
-type syncStatusFreshness struct {
-	SnapshotAt time.Time
-	EventAt    time.Time
-}
-
 func renderSyncStatusAt(snapshot appserver.ThreadReadSnapshot, now time.Time) model.RenderedMessage {
-	return renderSyncStatusWithFreshnessAt(snapshot, syncStatusFreshness{}, now)
-}
-
-func renderSyncStatusWithFreshnessAt(snapshot appserver.ThreadReadSnapshot, freshness syncStatusFreshness, now time.Time) model.RenderedMessage {
-	now = syncStatusRenderTime(snapshot, now)
-	status := strings.TrimSpace(snapshot.LatestTurnStatus)
-	if snapshot.WaitingOnApproval || snapshot.WaitingOnReply {
-		status = "waiting"
+	if now.IsZero() {
+		now = time.Now().UTC()
 	}
-	if status == "" {
-		status = strings.TrimSpace(snapshot.Thread.Status)
-	}
-	if status == "" {
-		status = "unknown"
-	}
+	status := syncStatusState(snapshot)
 	header := syncStatusHeader + " " + status
 	bodySeparator := "\n"
-	if duration, _ := runTimingValue(&snapshot, now); duration != "" {
-		header += " · " + duration
-	}
-	if !isTerminalStatus(snapshot.LatestTurnStatus) && (!freshness.SnapshotAt.IsZero() || !freshness.EventAt.IsZero()) {
-		header += "\n\n↻ snapshot " + formatSyncFreshnessTime(freshness.SnapshotAt, now) +
-			" · event " + formatSyncFreshnessTime(freshness.EventAt, now)
+	if isTerminalStatus(snapshot.LatestTurnStatus) {
+		if duration, _ := runTimingValue(&snapshot, now); duration != "" {
+			header += " · " + duration
+		}
+	} else {
+		header += "\nНачат " + formatSyncStatusTime(parseTime(model.TimeString(snapshot.LatestTurnStartedAt)), now) +
+			" · Статус на " + formatSyncStatusTime(now, now)
 		bodySeparator = "\n\n"
 	}
 
@@ -2265,36 +2220,49 @@ func renderSyncStatusWithFreshnessAt(snapshot appserver.ThreadReadSnapshot, fres
 	return message
 }
 
-func formatSyncFreshnessTime(value, now time.Time) string {
+func syncStatusState(snapshot appserver.ThreadReadSnapshot) string {
+	if snapshot.WaitingOnApproval || snapshot.WaitingOnReply {
+		return "waiting"
+	}
+	if status := strings.TrimSpace(snapshot.LatestTurnStatus); status != "" {
+		return status
+	}
+	if status := strings.TrimSpace(snapshot.Thread.Status); status != "" {
+		return status
+	}
+	return "unknown"
+}
+
+func syncStatusDeliveryFingerprint(snapshot appserver.ThreadReadSnapshot, message model.RenderedMessage) string {
+	// Keep completed cards compatible; active delivery ignores clocks and counters.
+	if isTerminalStatus(snapshot.LatestTurnStatus) {
+		return syncFingerprint(tgformat.HashRendered(message))
+	}
+	var blocks []model.DetailItem
+	for index, block := range syncStatusBlocks(snapshot.DetailItems) {
+		number := block.CommentaryIndex
+		if number <= 0 {
+			number = index + 1
+		}
+		blocks = append(blocks, model.DetailItem{Kind: block.Kind, CommentaryIndex: number, Text: strings.TrimSpace(block.Text)})
+	}
+	content, _ := json.Marshal(struct {
+		TurnID string
+		State  string
+		Blocks []model.DetailItem
+	}{snapshot.LatestTurnID, syncStatusState(snapshot), blocks})
+	return "content-v1:" + syncFingerprint(string(content))
+}
+
+func formatSyncStatusTime(value, now time.Time) string {
 	if value.IsZero() {
 		return "—"
 	}
-	value = value.Local().Truncate(syncStatusTimerTick)
-	now = now.Local()
+	value, now = value.Local(), now.Local()
 	if value.Year() == now.Year() && value.YearDay() == now.YearDay() {
 		return value.Format("15:04:05")
 	}
 	return value.Format("2006-01-02 15:04")
-}
-
-func syncStatusRenderTime(snapshot appserver.ThreadReadSnapshot, now time.Time) time.Time {
-	if now.IsZero() {
-		now = time.Now().UTC()
-	} else {
-		now = now.UTC()
-	}
-	if isTerminalStatus(snapshot.LatestTurnStatus) {
-		return now
-	}
-	startedAt := parseTime(model.TimeString(snapshot.LatestTurnStartedAt))
-	if startedAt.IsZero() {
-		return now.Truncate(syncStatusTimerTick)
-	}
-	elapsed := now.Sub(startedAt)
-	if elapsed <= 0 {
-		return startedAt
-	}
-	return startedAt.Add(elapsed.Truncate(syncStatusTimerTick))
 }
 
 func syncStatusBlocks(items []model.DetailItem) []model.DetailItem {
@@ -2358,7 +2326,12 @@ func renderSyncStatusBlocks(snapshot appserver.ThreadReadSnapshot, blocks []mode
 		if blockNumber <= 0 {
 			blockNumber = index + 1
 		}
-		blockHeader := fmt.Sprintf("Блок %d · %s", blockNumber, formatToolDuration(endedAt.Sub(starts[index])))
+		blockHeader := fmt.Sprintf("Блок %d", blockNumber)
+		if isTerminalStatus(snapshot.LatestTurnStatus) || index+1 < len(blocks) {
+			blockHeader += " · " + formatToolDuration(endedAt.Sub(starts[index]))
+		} else {
+			blockHeader += " · в работе"
+		}
 		if toolCount := syncStatusBlockToolCount(snapshot, block, index); toolCount > 0 {
 			blockHeader += fmt.Sprintf(" · tools %d", toolCount)
 		}

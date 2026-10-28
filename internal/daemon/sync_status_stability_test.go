@@ -92,12 +92,12 @@ func TestSyncLongStatusSurvivesRepeatedSnapshots(t *testing.T) {
 		t.Fatalf("retained %d commentary blocks, want 8", len(firstBlocks))
 	}
 	var delivered bool
-	topic, delivered = service.deliverSyncStatus(ctx, forum, topic, first, now, syncStatusFreshness{})
+	topic, delivered = service.deliverSyncStatus(ctx, forum, topic, first, now)
 	if !delivered {
 		t.Fatal("initial Status delivery failed")
 	}
 	anchor := topic.StatusMessageID
-	topic, _ = service.deliverSyncStatus(ctx, forum, topic, first, now.Add(time.Second), syncStatusFreshness{})
+	topic, _ = service.deliverSyncStatus(ctx, forum, topic, first, now.Add(time.Second))
 	if len(forum.edits) != 0 {
 		t.Fatal("unchanged content within a timer bucket caused another edit")
 	}
@@ -116,7 +116,7 @@ func TestSyncLongStatusSurvivesRepeatedSnapshots(t *testing.T) {
 		if strings.Contains(message.Text, "hidden command") {
 			t.Fatal("tool labels leaked into Status")
 		}
-		topic, delivered = service.deliverSyncStatus(ctx, forum, topic, observed, now, syncStatusFreshness{})
+		topic, delivered = service.deliverSyncStatus(ctx, forum, topic, observed, now)
 		if !delivered || topic.StatusMessageID != anchor || len(forum.sends) != 1 {
 			t.Fatal("poll replaced the existing Status anchor")
 		}

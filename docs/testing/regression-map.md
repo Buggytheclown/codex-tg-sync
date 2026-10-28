@@ -74,9 +74,9 @@ Required scenarios:
 - authoritative newer turns release stale local ownership;
 - Stop checks current topic/thread/turn/generation;
 - terminal events and terminal poll evidence close writer leases;
-- active status timers and open-block durations advance in ten-second buckets,
-  while content/state changes can still edit immediately and terminal duration
-  stays exact and stable;
+- active Status edits only on turn/state/commentary/plan changes; clocks,
+  freshness and tool-counter changes alone produce no edits; start/observation
+  times are fixed in the displayed card and terminal duration stays exact;
 - one status message is created per turn and then edited in place across title
   changes, mirrored user messages, and direct-delivery refreshes;
 - Telegram delivery is late-bound to the newest persisted projection, terminal
@@ -92,8 +92,10 @@ Required scenarios:
 - legacy scrambled projections recover their order and inferred timing once
   on the next full read, while healthy retained timing anchors survive prefix
   restoration; regression fixtures live in `sync_status_stability_test.go`;
-- active Status shows latest successful snapshot-read and valid App Server-event
-  times, while streaming events update only ephemeral activity and stay read-free;
+- `sync_status_delivery_test.go`: accumulated tool counts accompany the next
+  content update, failed edits retry after reopening the store without new events,
+  legacy active cards refresh once and completed cards do not mass-refresh;
+- streaming events remain read-free without per-thread heartbeat-clock bookkeeping;
 - restart/reconnect does not duplicate user receipts or finals;
 - long finals preserve UTF-16 limits and number every Final chunk (`1/N` through `N/N`).
 

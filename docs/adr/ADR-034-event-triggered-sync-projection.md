@@ -60,8 +60,8 @@ be created, it is attempted before Final. A reserved initial Status is retried
 even if Final has already succeeded; other unreserved completed-turn Status
 creations are not appended after a delivered Final.
 
-Status keeps commentary-block duration and renders only the authoritative tool
-count in each owning commentary-block header. Individual tool labels and tool
+Status keeps completed-block durations and renders only the authoritative tool
+count in each owning commentary-block header when content is delivered. Individual tool labels and tool
 output remain excluded. Counts are computed before compact detail truncation and
 merged monotonically within a turn.
 
@@ -85,12 +85,23 @@ partial wire histories that locally renumber commentary are not supported.
 If an incomplete read still leaves decreasing block indices, timing recovery
 waits for a read that restores the order instead of repeating on every poll.
 
-Active and waiting Status cards also show the local time of the latest successful
-bounded snapshot read and the latest valid per-thread App Server event. Event
-activity is ephemeral in-memory diagnostic state: streaming events update that
-timestamp without triggering a read or SQLite write, and the value resets on a
-new Sync activation. Terminal cards omit freshness because their projection is
-frozen.
+Active and waiting Status delivery compares turn identity, normalized state,
+and ordered commentary/plan text and block numbers. Clock values, snapshot/event
+freshness, tool counters and timing corrections do not trigger edits. Accumulated
+counters are included when meaningful content next changes. Active cards show a
+fixed start time and the time of the displayed snapshot; the open block says it
+is in progress instead of showing a frozen elapsed timer. Terminal rendering
+retains exact durations and its existing full-render fingerprint.
+
+The existing last-render field stores a versioned content fingerprint for active
+cards, acknowledged only after Telegram accepts the operation. An old active
+card refreshes in place once; completed cards retain their existing fingerprints
+and are not mass-refreshed on upgrade. Delivery errors leave the content pending
+for the normal periodic reconciliation, even without a new event. No heartbeat,
+additional queue, frequency setting, or database migration is introduced.
+Source reads and transport health notifications continue independently of
+Status presentation. Per-thread event-clock bookkeeping used only by the former
+heartbeat display is removed.
 
 ## Consequences
 
@@ -122,6 +133,7 @@ frozen.
   global numbering, inferred starts, and the same Status message anchor across
   repeated reads. Legacy scrambled snapshots recover once without losing
   healthy timing anchors when only a prefix was omitted.
-- Active freshness distinguishes the latest successful snapshot read from the
-  latest valid App Server event without turning streaming deltas into reads or
-  durable writes.
+- Clock/freshness/counter-only changes produce no Status edits; a new comment,
+  plan, or state delivers the latest accumulated metadata. Failed edits retry
+  after reopening the store, and unchanged confirmed content stays deduplicated.
+- Legacy active cards refresh once; completed cards keep their delivery state.

@@ -322,7 +322,7 @@ func TestSyncTerminalReadPreservesStatusDeliveredAfterTopicRead(t *testing.T) {
 	forum := &fakeSyncForum{}
 	service.SetSyncForum(forum)
 	running := appserver.SnapshotFromThreadRead(syncRunningPayload("thread-1", "turn-1"))
-	delivered, ok := service.deliverSyncStatus(ctx, forum, *stale, running, time.Now(), syncStatusFreshness{})
+	delivered, ok := service.deliverSyncStatus(ctx, forum, *stale, running, time.Now())
 	if !ok || delivered.StatusMessageID == 0 {
 		t.Fatal("initial active Status was not delivered")
 	}

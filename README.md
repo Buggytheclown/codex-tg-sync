@@ -10,7 +10,7 @@ The repository is named `codex-tg-sync`; the command-line binary and local data 
 
 - Synchronizes Codex Desktop chats into Telegram topics with `/sync on`.
 - Starts or steers the correct Codex turn from plain text in its topic.
-- Renders compact `[User]`, `[Status]`, `[Approval]`, `[Input]`, and `[Final]` cards.
+- Renders compact `[User]`, `[Status]`, `[Approval]`, `[Input]`, and `[Final]` cards. Status edits follow state or commentary/plan changes; clocks and tool counters alone do not cause writes.
 - Edits resolved approval/input cards in place and removes their buttons.
 - Creates project-backed topic drafts with `/projects` and dated chats with `/newchat`.
 - Collects durable launch requests from cron, Yandex Messenger, assigned Arcanum reviews, and feedback on the operator's PRs.
