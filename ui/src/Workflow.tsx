@@ -1,14 +1,11 @@
 import { useEffect, useRef, useState } from 'react';
-import type { FormEvent, ReactNode } from 'react';
+import type { FormEvent } from 'react';
 import type { Polling, Task } from './model';
 import { pollingProblem, asRules, promptRules, newRules } from './model';
 import { ExecutionFields, Field, TaskChatForm } from './forms';
 import { PollingDiagnostics } from './PollingDiagnostics';
 import { PollingRules } from './PollingRules';
 
-export function WorkflowStep({ number, title, tone = '', children }: { number: number | string; title: string; tone?: string; children: ReactNode }) {
-  return <section className={`workflow-step ${tone}`}><span className="workflow-number" aria-hidden="true">{number}</span><h3>{title}</h3><div className="workflow-content">{children}</div></section>;
-}
 const editable = (task: Task) => JSON.stringify({ source_url: task.source_url, config: task.config, polling: task.polling ? { type: task.polling.type, mode: task.polling.mode, config: task.polling.config, action: task.polling.action } : undefined });
 const owned = (task: Task, config: Task['config'], source_url: string, polling?: Polling): Task => ({ ...task, config, source_url, polling });
 export function WorkflowForm({ task, busy, onSave, onActivate, onLink, configure = false }: {

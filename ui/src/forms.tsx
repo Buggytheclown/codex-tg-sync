@@ -2,6 +2,7 @@ import { cloneElement, useEffect, useId, useRef, useState } from "react";
 import type { FormEvent, ReactElement } from "react";
 import type { Polling, TaskConfig, ExecutionSettings, Task, TaskCard } from "./model";
 import { defaultPolling, parseThreadID } from "./model";
+import { ChipSelect } from './ChipSelect';
 export function Field({
   label,
   children,
@@ -65,7 +66,7 @@ export function PromptFields({
     </>
   );
 }
-export function PollingFields({ value, onChange }: { value: Polling; onChange: (p: Polling) => void }) {
+export function SourceFields({ value, onChange }: { value: Polling; onChange: (p: Polling) => void }) {
   const cfg = (key: string, v: unknown) => onChange({ ...value, config: { ...value.config, [key]: v } });
   const changeType = (type: string) => {
     const next = defaultPolling(type);
@@ -76,10 +77,9 @@ export function PollingFields({ value, onChange }: { value: Polling; onChange: (
         ? { mode: "manual" } : value.action.initial_launch,
     } });
   };
-  return <div className="polling-fields">
-    <Field label="Polling type" className="polling-type"><select value={value.type} onChange={e => changeType(e.target.value)}>
-      <option value="pr_review_source">PR review</option><option value="pr_changes_source">PR feedback</option><option value="cron">Cron schedule</option>
-    </select></Field>
+  return <div className="source-fields">
+    <ChipSelect label="Event source" value={value.type === 'cron' ? 'cron' : 'pr'} options={[{ value: 'pr', label: 'Arcanum PR' }, { value: 'cron', label: 'Cron schedule' }]} onChange={source => changeType(source === 'cron' ? 'cron' : 'pr_changes_source')} />
+    {value.type !== 'cron' && <><ChipSelect label="PR selection" value={value.type} options={[{ value: 'pr_changes_source', label: 'PRs I authored' }, { value: 'pr_review_source', label: 'Assigned reviews' }]} onChange={changeType} /><p className="note">{value.type === 'pr_changes_source' ? 'Open PRs where you are the author.' : 'PRs where you are assigned as reviewer.'}</p></>}
     {value.type === "cron" ? <>
       <Field label="Cron schedule" className="polling-cron" hint="Daily or one weekday (0–6), for example 0 9 * * 1."><input required value={value.config.cron || ""} onChange={e => cfg("cron", e.target.value)} placeholder="0 9 * * 1" /></Field>
       <Field label="Timezone" className="polling-timezone"><input required value={value.config.timezone || ""} onChange={e => cfg("timezone", e.target.value)} placeholder="Europe/Paris" /></Field>

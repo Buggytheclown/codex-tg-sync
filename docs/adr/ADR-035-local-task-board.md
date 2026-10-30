@@ -265,3 +265,20 @@ task configuration, also used by initial launch; the UI states this scope.
 Without waiting, initial-launch settings retain these fields. Permission controls
 are omitted from all board forms; existing permission values and server defaults
 are preserved when editing visible execution fields.
+
+## Source cards amendment
+
+Sources use the same compact When/Then grammar as task rules. Arcanum PR is the
+source; authored versus assigned-review scope and frequency live in its settings.
+Authored PRs retain `pr_changes_source` and expose Request changes / required
+failed-check groups separately. Assigned reviews retain `pr_review_source` and
+its Assigned as reviewer event. Cron retains its scheduled event. Feedback
+summaries translate legacy check flags without modifying their configuration
+until an explicit event edit. The event summary/editor is shared with task rules.
+
+Then opens the child template, destination and initial-launch settings separately.
+Prompt modes require TODO; no-launch sources create Inbox or Done tasks. Prompt,
+variables, trusted authors and execution settings live in the launch panel; the
+configuration stays shared with child continuation prompts. Child waiting rules
+remain an independent copied definition and require manual activation. The source
+keeps discovering events after creating a task. No backend contracts change.

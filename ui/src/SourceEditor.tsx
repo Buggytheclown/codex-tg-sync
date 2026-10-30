@@ -1,12 +1,15 @@
-import { useEffect, useRef, useState } from "react";
-import type { FormEvent } from "react";
+import { useEffect, useId, useRef, useState } from "react";
+import type { FormEvent, MouseEvent } from "react";
 import type { Definition, Polling, Task } from "./model";
 import { defaultPolling, emptyConfig, pollingProblem, asRules } from "./model";
-import { ExecutionFields, Field, PollingFields } from "./forms";
+import { ExecutionFields, Field, SourceFields } from "./forms";
 import { PollingDiagnostics } from "./PollingDiagnostics";
-import { WorkflowStep } from "./Workflow";
 import { PollingRules } from "./PollingRules";
-import { EventGroups } from "./EventGroups";
+import { EventGroups, EventSummary } from "./EventGroups";
+import { ChipSelect } from "./ChipSelect";
+
+type Panel = 'source' | 'events' | 'template' | 'run';
+const launchLabels = { none: 'No launch', manual: 'ТГ аппрув + промпт', trusted_authors: 'Automatic · trusted PR authors', auto: 'Автозапуск + промпт' };
 
 function childWaiting(type: string): Polling {
   return {
@@ -37,6 +40,14 @@ export function SourceEditor({
   ) => Promise<Task>;
   onToggle?: (enabled: boolean, version: number) => Promise<Task>;
 }) {
+  const [panel, setPanel] = useState<Panel | null>(task ? null : 'template');
+  const trigger = useRef<HTMLButtonElement | null>(null);
+  const editorID = useId();
+  const toggle = (next: Panel, event: MouseEvent<HTMLButtonElement>) => {
+    trigger.current = event.currentTarget;
+    setPanel(current => current === next ? null : next);
+  };
+  const close = () => { setPanel(null); trigger.current?.focus(); };
   const initial = task?.polling || defaultPolling("pr_review_source");
   const [polling, setPolling] = useState<Polling>({ ...initial, action: { ...initial.action, column: initial.action.column || (initial.action.initial_launch?.mode === "none" ? "inbox" : "todo") } });
   const [definition, setDefinition] = useState<Definition>(
@@ -100,6 +111,8 @@ export function SourceEditor({
     };
     const problem = pollingProblem(next);
     if (problem) {
+      if (!definition.title.trim()) setPanel('template');
+      else if (polling.action.initial_launch?.mode !== 'none' && !config.initial_prompt.trim()) setPanel('run');
       setMessage(problem);
       return;
     }
@@ -140,186 +153,85 @@ export function SourceEditor({
     <p className="note">Shared by the new task’s initial and continuation prompts.</p>
     <ExecutionFields value={config.execution} onChange={execution => setDefinition({ ...definition, config: { ...config, execution } })} />
   </details>;
+  const launch = polling.action.initial_launch?.mode || 'manual';
+  const column = launch === 'none' ? polling.action.column === 'done' ? 'done' : 'inbox' : 'todo';
+  const setLaunch = (mode: keyof typeof launchLabels) => setPolling({ ...polling, action: {
+    ...polling.action, column: mode === 'none' ? column === 'done' ? 'done' : 'inbox' : 'todo',
+    initial_launch: { mode, authors: polling.action.initial_launch?.authors || [] },
+  } });
+  const setColumn = (next: 'inbox' | 'todo' | 'done') => setPolling({ ...polling, action: {
+    ...polling.action, column: next, initial_launch: { ...polling.action.initial_launch,
+      mode: next === 'todo' ? launch === 'none' ? 'manual' : launch : 'none',
+    },
+  } });
+  const eventConfig = { ...polling.config, condition_groups: polling.config.condition_groups || (polling.config.check_merge_failures ? [['request_changes'], ['merge_checks_failed']] : [['request_changes']]) };
+  const panelTitles = { source: 'Source and check frequency', events: 'Source events', template: 'Task template', run: 'Initial prompt action' };
   return (
     <form className="source-editor workflow-editor" onSubmit={(e) => void submit(e)}>
-      <h2>Workflow steps</h2>
-      {!task && (
-        <Field label="Source name">
-          <input
-            required
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            placeholder="PR review"
-          />
-        </Field>
-      )}
-      <WorkflowStep number={1} title="Wait">
-        {task ? (
-          <div className="source-state">
-            <span>
-              {task.column === "polling" ? "Source enabled" : "Source paused"}
-            </span>
-            <button
-              type="button"
-              disabled={busyNow || stale || !onToggle}
-              onClick={async () => {
-                try {
-                  const saved = await onToggle!(!(task.column === "polling"), version);
-                  if (editable(saved.polling!) !== editable(baseline)) {
-                    setVersion(version + 1);
-                    setMessage("This source changed. Reload latest source before saving again.");
-                    return;
-                  }
-                  setVersion(saved.version);
-                  setMessage(
-                    task.column === "polling"
-                      ? "Source paused."
-                      : "Source enabled.",
-                  );
-                } catch (err) {
-                  setMessage((err as Error).message);
-                }
-              }}
-            >
-              {task.column === "polling" ? "Pause source" : "Enable source"}
-            </button>
-          </div>
-        ) : (
-          <label className="check-line">
-            <input
-              type="checkbox"
-              checked={enabled}
-              onChange={(e) => setEnabled(e.target.checked)}
-            />
-            Source enabled
-          </label>
-        )}
-        <p className="note">
-          The source keeps creating tasks. Initial launch follows this source’s
-          policy. Each child’s rules choose how to continue its chat.
-        </p>
-        <PollingFields value={polling} onChange={setPolling} />
-        {polling.type === "pr_changes_source" && <EventGroups allowed={{ request_changes: "Request changes", merge_checks_failed: "Required merge checks failed" }} config={{ ...polling.config, condition_groups: polling.config.condition_groups || (polling.config.check_merge_failures ? [["request_changes"], ["merge_checks_failed"]] : [["request_changes"]]) }} onChange={config => setPolling({ ...polling, config: { ...config, check_merge_failures: undefined } })} />}
-        {polling.type === "pr_review_source" && <p className="note">Event: assigned as reviewer.</p>}
-        {polling.type === "cron" && <p className="note">Event: scheduled time reached.</p>}
-        {task && <details className="form-section"><summary>Polling status</summary><PollingDiagnostics task={task} /></details>}
-        {!task && !enabled && (
-          <p className="note">Starts paused. Enable it when ready.</p>
-        )}
-      </WorkflowStep>
-      <WorkflowStep number={2} title="After event · create task">
-        <p className="note">
-          Changes apply to future tasks. Existing tasks keep their settings.
-        </p>
-        <Field
-          label="Task title"
-          hint="Prefixed by source name; schedules also include the scheduled date and time."
-        >
-          <input
-            required
-            value={definition.title}
-            onChange={(e) =>
-              setDefinition({ ...definition, title: e.target.value })
+      {!task && <Field label="Source name"><input required value={name} onChange={e => setName(e.target.value)} placeholder="PR source" /></Field>}
+      {task ? <div className="source-state"><span>{task.column === 'polling' ? 'Source enabled' : 'Source paused'}</span>
+        <button type="button" disabled={busyNow || stale || !onToggle} onClick={async () => {
+          try {
+            const saved = await onToggle!(!(task.column === 'polling'), version);
+            if (editable(saved.polling!) !== editable(baseline)) {
+              setVersion(version + 1); setBaseline(saved.polling!);
+              setMessage('This source changed. Reload latest source before saving again.'); return;
             }
-            placeholder="Review PR {{pr_id}}"
-          />
-        </Field>
-        <Field label="Description">
-          <textarea
-            rows={2}
-            value={definition.description}
-            onChange={(e) =>
-              setDefinition({ ...definition, description: e.target.value })
-            }
-          />
-        </Field>
-        <Field label="Initial prompt">
-          <textarea
-            required={polling.action.initial_launch?.mode !== "none"}
-            rows={3}
-            value={config.initial_prompt}
-            onChange={(e) =>
-              setDefinition({
-                ...definition,
-                config: { ...config, initial_prompt: e.target.value },
-              })
-            }
-            placeholder="What should Codex do?"
-          />
-        </Field>
-        <details className="form-section"><summary>Prompt variables</summary><p className="note section-content">PR: {"{{pr_title}}, {{pr_id}}, {{pr_url}}, {{author}}, {{login}}"}. Schedule: {"{{date}}, {{scheduled_at}}"}.</p></details>
-        {executionSettings}
-        <Field
-          label="After event"
-          hint="The source keeps discovering events. These actions apply to each new task."
-        >
-          <select
-            value={polling.action.initial_launch?.mode || "manual"}
-            onChange={(e) =>
-              setPolling({
-                ...polling,
-                action: {
-                  ...polling.action,
-                  column: e.target.value === "none" ? "inbox" : "todo",
-                  initial_launch: {
-                    mode: e.target.value as "manual" | "trusted_authors" | "auto" | "none",
-                    authors: polling.action.initial_launch?.authors || [],
-                  },
-                },
-              })
-            }
-          >
-            <option value="none">Move task · no model launch</option>
-            <option value="manual">TODO + prompt · Telegram approval</option>
-            {polling.type !== "cron" && (
-              <option value="trusted_authors">
-                Automatic · trusted PR authors
-              </option>
-            )}
-            <option value="auto">TODO + prompt · automatic</option>
-          </select>
-        </Field>
-        {polling.action.initial_launch?.mode === "none" && <Field label="Move new task to"><select value={polling.action.column || "inbox"} onChange={e => setPolling({ ...polling, action: { ...polling.action, column: e.target.value as "inbox" | "done" } })}><option value="inbox">Inbox</option><option value="done">Done</option></select></Field>}
-        {polling.action.initial_launch?.mode === "trusted_authors" && (
-          <Field
-            label="Trusted PR authors"
-            hint="Comma-separated Arcanum logins. Other authors require Telegram Start."
-          >
-            <input
-              value={trustedAuthors}
-              onChange={(e) => setTrustedAuthors(e.target.value)}
-            />
-          </Field>
-        )}
-        <label className="check-line">
-          <input
-            type="checkbox"
-            checked={repeat}
-            onChange={(e) => {
-              setRepeat(e.target.checked);
-              if (e.target.checked && !waitingConfigured) {
-                setWaiting(
-                  asRules(childWaiting(polling.type), config.continuation_prompt),
-                );
-                setWaitingConfigured(true);
-              }
-            }}
-          />
-          Waiting settings for new tasks
-        </label>
-      </WorkflowStep>
-        {repeat && (
-          <WorkflowStep number={3} title="Waiting settings for new tasks" tone="future">
-            {polling.type === "cron" && (
-              <p className="note">
-                For scheduled repeat work, choose an existing PR by its numeric
-                ID. PR placeholders are unavailable.
-              </p>
-            )}
-            <PollingRules child variables={polling.type !== "cron"} value={waiting} onChange={setWaiting} promptSettings={executionSettings} />
-            <p className="note">Copied. Activate manually later.</p>
-          </WorkflowStep>
-        )}
+            setVersion(saved.version);
+            setMessage(task.column === 'polling' ? 'Source paused.' : 'Source enabled.');
+          } catch (err) { setMessage((err as Error).message); }
+        }}>{task.column === 'polling' ? 'Pause source' : 'Enable source'}</button>
+      </div> : <label className="check-line"><input type="checkbox" checked={enabled} onChange={e => setEnabled(e.target.checked)} />Source enabled</label>}
+      <section className="polling-rule source-workflow-card" aria-label="Source workflow" onKeyDown={event => {
+        if (panel && event.key === 'Escape' && !event.nativeEvent.isComposing) { event.preventDefault(); event.stopPropagation(); close(); }
+      }}>
+        <div className="rule-card-heading"><h3>Source</h3><span className="source-card-hint">Continuous polling</span></div>
+        <div className="rule-card-body">
+          <div className="rule-card-row"><span className="rule-row-label">When</span><div className="rule-blocks">
+            <button type="button" className="rule-block" aria-label="Source settings" aria-expanded={panel === 'source'} aria-controls={panel === 'source' ? editorID : undefined} onClick={e => toggle('source', e)}>{polling.type === 'cron' ? 'Cron' : 'Arcanum PR'}<span className="rule-chevron" aria-hidden="true">⌄</span></button>
+            {polling.type === 'pr_changes_source' ? <EventSummary label="Source events" groups={eventConfig.condition_groups} expanded={panel === 'events'} controls={editorID} onClick={e => toggle('events', e)} />
+              : <button type="button" className="rule-block" aria-label="Source events" aria-expanded={panel === 'events'} aria-controls={panel === 'events' ? editorID : undefined} onClick={e => toggle('events', e)}>{polling.type === 'cron' ? 'Scheduled time reached' : 'Assigned as reviewer'}</button>}
+          </div></div>
+          <div className="rule-card-row"><span className="rule-row-label">Then</span><div className="rule-blocks">
+            <button type="button" className="rule-block" aria-label="Task template" aria-expanded={panel === 'template'} aria-controls={panel === 'template' ? editorID : undefined} onClick={e => toggle('template', e)}>Create task<span className="rule-chevron" aria-hidden="true">⌄</span></button>
+            <ChipSelect className="rule-target" label="New task status" value={column} options={[{ value: 'inbox', label: 'Inbox' }, { value: 'todo', label: 'TODO' }, { value: 'done', label: 'Done' }]} onChange={setColumn} />
+            <button type="button" className="rule-block" aria-label="Initial prompt action" aria-expanded={panel === 'run'} aria-controls={panel === 'run' ? editorID : undefined} onClick={e => toggle('run', e)}>{launchLabels[launch]}<span className="rule-chevron" aria-hidden="true">⌄</span></button>
+          </div></div>
+        </div>
+        {panel && <div id={editorID} className="rule-editor" role="region" aria-label={panelTitles[panel]}>
+          <div className="rule-editor-heading"><strong>{panelTitles[panel]}</strong><button type="button" onClick={close}>Done</button></div>
+          {panel === 'source' && <SourceFields value={polling} onChange={setPolling} />}
+          {panel === 'events' && (polling.type === 'pr_changes_source'
+            ? <EventGroups allowed={{ request_changes: 'Request changes', merge_checks_failed: 'Required merge checks failed' }} config={eventConfig} onChange={config => setPolling({ ...polling, config: { ...config, check_merge_failures: undefined } })} />
+            : <><p className="note">{polling.type === 'cron' ? 'Creates a task when the scheduled time is reached.' : 'Creates a task when you are assigned as reviewer.'}</p><button type="button" onClick={() => setPanel('source')}>Edit source settings</button></>)}
+          {panel === 'template' && <>
+            <Field label="Task title" hint="Prefixed by source name; schedules include the scheduled time."><input required value={definition.title} onChange={e => setDefinition({ ...definition, title: e.target.value })} placeholder="Review PR {{pr_id}}" /></Field>
+            <Field label="Description"><textarea rows={2} value={definition.description} onChange={e => setDefinition({ ...definition, description: e.target.value })} /></Field>
+          </>}
+          {panel === 'run' && <>
+            <ChipSelect label="Initial launch" value={launch} options={Object.entries(launchLabels).filter(([key]) => polling.type !== 'cron' || key !== 'trusted_authors').map(([value, label]) => ({ value: value as keyof typeof launchLabels, label }))} onChange={setLaunch} />
+            {launch !== 'none' && <>
+              <Field label="Initial prompt"><textarea rows={3} value={config.initial_prompt} onChange={e => setDefinition({ ...definition, config: { ...config, initial_prompt: e.target.value } })} placeholder="What should Codex do?" /></Field>
+              {launch === 'trusted_authors' && <Field label="Trusted PR authors" hint="Comma-separated Arcanum logins. Other authors require Telegram Start."><input value={trustedAuthors} onChange={e => setTrustedAuthors(e.target.value)} /></Field>}
+              {executionSettings}
+              <details className="form-section"><summary>Prompt variables</summary><p className="note section-content">PR: {"{{pr_title}}, {{pr_id}}, {{pr_url}}, {{author}}, {{login}}"}. Schedule: {"{{date}}, {{scheduled_at}}"}.</p></details>
+            </>}
+          </>}
+        </div>}
+      </section>
+      <p className="note source-continuous-note">The source keeps creating tasks. Each child’s rules choose how to continue its chat.</p>
+      <div className="source-child-heading"><h3>In new tasks</h3><label className="check-line">
+        <input type="checkbox" checked={repeat} onChange={e => {
+          setRepeat(e.target.checked);
+          if (e.target.checked && !waitingConfigured) { setWaiting(asRules(childWaiting(polling.type), config.continuation_prompt)); setWaitingConfigured(true); }
+        }} />Copy waiting rules
+      </label></div>
+      {repeat && <div className="source-child-rules">
+        {polling.type === 'cron' && <p className="note">For scheduled repeat work, choose an explicit numeric PR ID. PR placeholders are unavailable.</p>}
+        <PollingRules child variables={polling.type !== 'cron'} value={waiting} onChange={setWaiting} promptSettings={executionSettings} />
+        <p className="note">Copied. Activate manually later.</p>
+      </div>}
+      {task && <details className="form-section"><summary>Polling status</summary><PollingDiagnostics task={task} /></details>}
       {message && (
         <p className="info-note" role="status">
           {message}

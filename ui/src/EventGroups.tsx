@@ -1,5 +1,15 @@
+import { Fragment } from 'react';
+import type { MouseEvent } from 'react';
 import type { Polling } from './model';
 export const eventLabels: Record<string, string> = { new_commit: 'Any new commit', all_answered: 'All tracked comments answered', all_resolved: 'All tracked issues resolved', request_changes: 'Request changes', merge_checks_failed: 'Required merge checks failed', pr_merged: 'PR merged' };
+export function EventSummary({ groups, onClick, expanded, controls, label = 'Rule events' }: {
+  groups: string[][]; onClick: (event: MouseEvent<HTMLButtonElement>) => void; expanded: boolean; controls?: string; label?: string;
+}) {
+  const block = (group: string[], key: number) => <button key={key} type="button" className="rule-block rule-event-block" aria-label={label} aria-expanded={expanded} aria-controls={expanded ? controls : undefined} onClick={onClick}>
+    {group.length ? group.map((term, ti) => <Fragment key={ti}>{ti > 0 && <span className="event-operator">AND</span>}<span>{term === 'merge_checks_failed' ? 'Merge checks failed' : eventLabels[term] || term}</span></Fragment>) : 'Choose event'}
+  </button>;
+  return groups.length ? groups.map((group, gi) => <span className="rule-condition-group" key={gi}>{gi > 0 && <span className="event-operator">OR</span>}{block(group, gi)}</span>) : block([], 0);
+}
 export function EventGroups({ config, onChange, allowed = eventLabels }: { config: Polling['config']; onChange: (config: Polling['config']) => void; allowed?: Record<string, string> }) {
   const groups = config.condition_groups || (config.conditions || []).map(c => [c]);
   const update = (next: string[][]) => onChange({ ...config, conditions: undefined, condition_groups: next });

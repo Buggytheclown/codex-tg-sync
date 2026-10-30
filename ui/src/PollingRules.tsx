@@ -1,10 +1,10 @@
-import { Fragment, useId, useRef, useState } from 'react';
+import { useId, useRef, useState } from 'react';
 import type { MouseEvent, ReactNode } from 'react';
 import type { Polling, PollingRule } from './model';
 import { defaultRule } from './model';
 import { Field } from './forms';
 import { ChipSelect } from './ChipSelect';
-import { EventGroups, eventLabels } from './EventGroups';
+import { EventGroups, EventSummary } from './EventGroups';
 
 type Panel = 'source' | 'events' | 'run' | 'settings';
 const launchOptions = [
@@ -57,12 +57,7 @@ function RuleCard({ rule, index, onChange, onRemove, child, variables, promptSet
       <div className="rule-card-row"><span className="rule-row-label">When</span><div className="rule-blocks">
         <button type="button" className="rule-block" aria-label="Rule source" aria-expanded={panel === 'source'} aria-controls={panel === 'source' ? editorID : undefined} onClick={e => toggle('source', e)}>{source}<span className="rule-chevron" aria-hidden="true">⌄</span></button>
         {rule.type === 'cron' ? <button type="button" className="rule-block" aria-label="Schedule settings" title={`${rule.config.cron || ''} · ${rule.config.timezone || ''}`} onClick={e => toggle('source', e)}>{scheduleLabel(rule.config)}</button>
-          : groups.length ? groups.map((group, gi) => <span className="rule-condition-group" key={gi}>
-            {gi > 0 && <span className="event-operator">OR</span>}
-            <button type="button" className="rule-block rule-event-block" aria-label="Rule events" aria-expanded={panel === 'events'} onClick={e => toggle('events', e)}>
-              {group.map((term, ti) => <Fragment key={ti}>{ti > 0 && <span className="event-operator">AND</span>}<span>{term === 'merge_checks_failed' ? 'Merge checks failed' : eventLabels[term] || term}</span></Fragment>)}
-            </button>
-          </span>) : <button type="button" className="rule-block" aria-label="Rule events" onClick={e => toggle('events', e)}>Choose event</button>}
+          : <EventSummary groups={groups} expanded={panel === 'events'} controls={editorID} onClick={e => toggle('events', e)} />}
       </div></div>
       <div className="rule-card-row rule-then"><span className="rule-row-label">Then</span><div className="rule-blocks">
         <ChipSelect label="After-event status" value={column} options={[{ value: 'inbox', label: 'Inbox' }, { value: 'todo', label: 'TODO' }, { value: 'done', label: 'Done' }]} onChange={setColumn} className="rule-target" />
@@ -108,6 +103,6 @@ export function PollingRules({ value, onChange, child = false, variables = true,
     <div className="polling-rules-heading"><h3>Rules <span>{rules.length}</span></h3><button type="button" disabled={rules.length >= 20} onClick={() => update([...rules, defaultRule()])}>+ Add rule</button></div>
     {rules.map((rule, i) => <RuleCard key={rule.id} rule={rule} index={i} child={child} variables={variables} promptSettings={promptSettings}
       onChange={next => update(rules.map((old, j) => j === i ? next : old))} onRemove={() => update(rules.filter((_, j) => j !== i))} />)}
-    <p className="note rule-stop-note">Any action leaves Polling and stops all task rules. Done wins simultaneous matches; otherwise rule order applies.</p>
+    {!child && <p className="note rule-stop-note">Any action leaves Polling and stops all task rules. Done wins simultaneous matches; otherwise rule order applies.</p>}
   </div>;
 }

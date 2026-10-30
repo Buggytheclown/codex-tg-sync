@@ -397,3 +397,18 @@ For live Telegram QA, verify:
   preserving hidden permissions in the saved task/child configuration. Browser
   acceptance checks nested disclosure layout and narrow-screen wrapping; new-task
   and source forms must not expose permission controls.
+
+## Source When/Then cards
+
+- `ui/src/SourceEditor.test.tsx`: distinct PR source/events, AND/OR editing,
+  legacy flags without accidental opt-in, independent template and launch fields,
+  destination/launch invariants, retained drafts/permissions, PR scope/Cron
+  switching, trusted-author fallback, nested Escape and missing-field recovery.
+- App source tests retain creation, pause with unsaved edits, atomic child copies,
+  explicit keyboard saves, external refresh failures, stale-version fencing and
+  authoritative normalization while preserving typing during a save.
+- Browser fixtures check source and child event independence, failed save/retry,
+  exact payload/readback, menu/panel Escape without dismissal, source pause and
+  narrow wrapping. Verify 320/375/736/1024 px, existing palette, no permissions,
+  and separate Cron source / scheduled event. Install assets and verify live
+  byte readback without dispatching Telegram or LLM work.

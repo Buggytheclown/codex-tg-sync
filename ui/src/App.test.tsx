@@ -541,7 +541,9 @@ it("retains a source's unsaved child definition across outside dismissal", async
   })];
   window.history.replaceState(null, "", "/?task=source");
   render(<App />);
-  const childTitle = await screen.findByLabelText("Task title");
+  await screen.findByRole("button", { name: "Task template" });
+  sourcePanel("Task template");
+  const childTitle = screen.getByLabelText("Task title");
   fireEvent.change(childTitle, { target: { value: "Unsaved child title" } });
   fireEvent(document.body, new MouseEvent("pointerdown", { bubbles: true, button: 0 }));
   await screen.findByText("Select a card to see its details.");
@@ -1058,11 +1060,11 @@ describe("board operator flows", () => {
     rows = [sourceTask()];
     window.history.replaceState(null, "", "/?task=source");
     render(<App />);
-    await screen.findByRole("heading", { name: "After event · create task" });
+    await screen.findByRole("button", { name: "Task template" });
     expect(
-      screen.getByRole("heading", { name: "Wait" }),
+      screen.getByRole("heading", { name: "Source" }),
     ).toBeTruthy();
-    expect((screen.getByLabelText("Initial prompt") as HTMLTextAreaElement).value).toBe(
+    expect((initialPrompt() as HTMLTextAreaElement).value).toBe(
       "Use $scan-internal-radar",
     );
     expect(
@@ -1087,7 +1089,7 @@ describe("board operator flows", () => {
     fireEvent.change(screen.getByLabelText("Task title"), {
       target: { value: "Review {{pr_id}}" },
     });
-    fireEvent.change(screen.getByLabelText("Initial prompt"), {
+    fireEvent.change(initialPrompt(), {
       target: { value: "Check {{pr_url}}" },
     });
     fireEvent.change(screen.getByLabelText("Working directory"), {
@@ -1122,10 +1124,11 @@ describe("board operator flows", () => {
     ];
     window.history.replaceState(null, "", "/?task=source");
     render(<App />);
-    await screen.findByLabelText("Initial prompt");
-    fireEvent.change(screen.getByLabelText("Initial prompt"), {
+    await findInitialPrompt();
+    fireEvent.change(initialPrompt(), {
       target: { value: "Future instruction" },
     });
+    sourcePanel("Source settings");
     fireEvent.change(screen.getByLabelText("Check every · seconds"), {
       target: { value: "120" },
     });
@@ -1209,7 +1212,7 @@ it("retains a source draft while adopting a version with unchanged owned setting
   const view = render(
     <SourceEditor task={original} busy={false} onSave={save} />,
   );
-  fireEvent.change(screen.getByLabelText("Initial prompt"), {
+  fireEvent.change(initialPrompt(), {
     target: { value: "My draft" },
   });
   view.rerender(
@@ -1234,8 +1237,8 @@ it("pauses a source independently while preserving its unsaved child draft", asy
   rows = [sourceTask()];
   window.history.replaceState(null, "", "/?task=source");
   render(<App />);
-  await screen.findByLabelText("Initial prompt");
-  fireEvent.change(screen.getByLabelText("Initial prompt"), {
+  await findInitialPrompt();
+  fireEvent.change(initialPrompt(), {
     target: { value: "Unsaved future prompt" },
   });
   fireEvent.click(screen.getByRole("button", { name: "Pause source" }));
@@ -1247,7 +1250,7 @@ it("pauses a source independently while preserving its unsaved child draft", asy
       body: { expected_version: 3, column: "todo", position: 1 },
     },
   ]);
-  expect((screen.getByLabelText("Initial prompt") as HTMLTextAreaElement).value).toBe(
+  expect((initialPrompt() as HTMLTextAreaElement).value).toBe(
     "Unsaved future prompt",
   );
   fireEvent.click(screen.getByRole("button", { name: "Save source" }));
@@ -1261,7 +1264,7 @@ it("copies optional waiting defaults inactive with one continuation instruction"
   const { SourceEditor } = await import("./SourceEditor");
   const save = vi.fn(async (polling: Polling, _enabled: boolean, version: number) => makeTask({ polling, version: version + 1 }));
   render(<SourceEditor task={sourceTask()} busy={false} onSave={save} />);
-  fireEvent.click(screen.getByLabelText("Waiting settings for new tasks"));
+  fireEvent.click(screen.getByLabelText("Copy waiting rules"));
   fireEvent.change(rulePrompt(), {
     target: { value: "Review the new revision" },
   });
@@ -1299,9 +1302,7 @@ it("preserves a PR waiting draft when switching to cron and requires explicit PR
   };
   const save = vi.fn(async (polling: Polling, _enabled: boolean, version: number) => makeTask({ polling, version: version + 1 }));
   render(<SourceEditor task={t} busy={false} onSave={save} />);
-  fireEvent.change(screen.getAllByLabelText("Polling type")[0], {
-    target: { value: "cron" },
-  });
+  chooseSource("Cron schedule");
   fireEvent.click(screen.getByRole("button", { name: "Save source" }));
   expect(await screen.findByText(/explicit positive PR ID/)).toBeTruthy();
   expect(save).not.toHaveBeenCalled();
@@ -1331,10 +1332,8 @@ it("starts a new cron waiting definition with blank PR ID and author", async () 
   const { SourceEditor } = await import("./SourceEditor");
   const save = vi.fn(async (polling: Polling) => makeTask({ polling, version: 1 }));
   render(<SourceEditor busy={false} onSave={save} />);
-  fireEvent.change(screen.getByLabelText("Polling type"), {
-    target: { value: "cron" },
-  });
-  fireEvent.click(screen.getByLabelText("Waiting settings for new tasks"));
+  chooseSource("Cron schedule");
+  fireEvent.click(screen.getByLabelText("Copy waiting rules"));
   expect((ruleSource() as HTMLInputElement).value).toBe("");
   expect((screen.getByLabelText("PR author") as HTMLInputElement).value).toBe(
     "",
@@ -1345,12 +1344,10 @@ it("edits initial launch policy independently of execution approvals", async () 
   const { SourceEditor } = await import("./SourceEditor");
   const save = vi.fn(async (polling: Polling, _enabled: boolean, version: number) => makeTask({ polling, version: version + 1 }));
   render(<SourceEditor task={sourceTask()} busy={false} onSave={save} />);
-  expect(
-    (screen.getByLabelText("After event") as HTMLSelectElement).value,
-  ).toBe("manual");
-  fireEvent.change(screen.getByLabelText("After event"), {
-    target: { value: "trusted_authors" },
-  });
+  sourcePanel('Initial prompt action');
+  expect(screen.getByRole('combobox', { name: 'Initial launch' }).textContent).toContain('ТГ аппрув + промпт');
+  fireEvent.click(screen.getByRole('combobox', { name: 'Initial launch' }));
+  fireEvent.click(screen.getByRole('option', { name: 'Automatic · trusted PR authors' }));
   fireEvent.change(screen.getByLabelText("Trusted PR authors"), {
     target: { value: "alice, bob" },
   });
@@ -1400,7 +1397,7 @@ it("preserves an unsaved source prompt when background details refresh fails and
   rows = [sourceTask()];
   window.history.replaceState(null, "", "/?task=source");
   render(<App />);
-  const prompt = await screen.findByLabelText("Initial prompt");
+  const prompt = await findInitialPrompt();
   fireEvent.change(prompt, { target: { value: "Unsaved draft" } });
   const original = vi.mocked(fetch).getMockImplementation()!;
   let failed = true;
@@ -1410,13 +1407,13 @@ it("preserves an unsaved source prompt when background details refresh fails and
   });
   fireEvent.focus(window);
   await screen.findByText("Details refresh unavailable");
-  expect((screen.getByLabelText("Initial prompt") as HTMLTextAreaElement).value).toBe("Unsaved draft");
-  expect(screen.getByLabelText("Initial prompt")).toBe(prompt);
+  expect((initialPrompt() as HTMLTextAreaElement).value).toBe("Unsaved draft");
+  expect(initialPrompt()).toBe(prompt);
   failed = false;
   fireEvent.click(screen.getByRole("button", { name: "Retry details" }));
   await waitFor(() => expect(screen.queryByText("Details refresh unavailable")).toBeNull());
-  expect((screen.getByLabelText("Initial prompt") as HTMLTextAreaElement).value).toBe("Unsaved draft");
-  expect(screen.getByLabelText("Initial prompt")).toBe(prompt);
+  expect((initialPrompt() as HTMLTextAreaElement).value).toBe("Unsaved draft");
+  expect(initialPrompt()).toBe(prompt);
 });
 it("does not promote stale full settings to the compact reorder version", async () => {
   rows = [makeTask({ config: { ...emptyConfig(), initial_prompt: "Old settings" } })];
@@ -1626,7 +1623,7 @@ it("preserves new overview typing during an ordinary save and saves sources with
   vi.mocked(fetch).mockImplementation(original);
   window.history.replaceState(null, "", "/?task=source");
   render(<App />);
-  const prompt = await screen.findByLabelText("Initial prompt");
+  const prompt = await findInitialPrompt();
   fireEvent.change(prompt, { target: { value: "Keyboard source prompt" } });
   fireEvent.keyDown(prompt, { key: "Enter", metaKey: true });
   await waitFor(() => expect(rows[0].polling?.action.child_definition?.config.initial_prompt).toBe("Keyboard source prompt"));
@@ -1884,7 +1881,7 @@ it.each(['pr_review_source', 'pr_changes_source', 'cron'])('copies independent c
   task.polling.action.child_definition = { title: 'Child', description: '', config: { ...emptyConfig(), initial_prompt: 'Work', continuation_prompt: 'Follow up' } };
   const save = vi.fn(async (polling: Polling) => makeTask({ polling, version: 4 }));
   render(<SourceEditor task={task} busy={false} onSave={save} />);
-  fireEvent.click(screen.getByLabelText('Waiting settings for new tasks'));
+  fireEvent.click(screen.getByLabelText('Copy waiting rules'));
   if (type === 'cron') fireEvent.change(ruleSource(), { target: { value: '123' } });
   fireEvent.click(screen.getByRole('button', { name: 'Save source' }));
   await waitFor(() => expect(save).toHaveBeenCalledOnce());
@@ -1900,22 +1897,22 @@ it('fences source drafts after a newer concurrent save reply and reloads authori
   concurrent.polling!.action.child_definition!.config.initial_prompt = 'External instruction';
   const save = vi.fn(async () => concurrent);
   const view = render(<SourceEditor task={original} busy={false} onSave={save} />);
-  fireEvent.change(screen.getByLabelText('Initial prompt'), { target: { value: 'Local instruction' } });
+  fireEvent.change(initialPrompt(), { target: { value: 'Local instruction' } });
   fireEvent.click(screen.getByRole('button', { name: 'Save source' }));
   await waitFor(() => expect(save).toHaveBeenCalledOnce());
   view.rerender(<SourceEditor task={concurrent} busy={false} onSave={save} />);
   fireEvent.click(screen.getByRole('button', { name: 'Save source' }));
   expect(save).toHaveBeenCalledOnce();
-  expect((screen.getByLabelText('Initial prompt') as HTMLTextAreaElement).value).toBe('Local instruction');
+  expect((initialPrompt() as HTMLTextAreaElement).value).toBe('Local instruction');
   fireEvent.click(screen.getByRole('button', { name: 'Reload latest source' }));
-  expect((screen.getByLabelText('Initial prompt') as HTMLTextAreaElement).value).toBe('External instruction');
+  expect((initialPrompt() as HTMLTextAreaElement).value).toBe('External instruction');
 });
 it('copies PR feedback waiting defaults with an editable detected PR placeholder', async () => {
   const { SourceEditor } = await import('./SourceEditor');
   const t = sourceTask(); t.polling!.type = 'pr_changes_source';
   const save = vi.fn(async (polling: Polling, _enabled: boolean, version: number) => makeTask({ polling, version: version + 1 }));
   render(<SourceEditor task={t} busy={false} onSave={save} />);
-  fireEvent.click(screen.getByLabelText('Waiting settings for new tasks'));
+  fireEvent.click(screen.getByLabelText('Copy waiting rules'));
   fireEvent.change(rulePrompt(), { target: { value: 'Follow up' } });
   const id = ruleSource() as HTMLInputElement;
   expect(id.value).toBe('{{pr_id}}'); expect(id.readOnly).toBe(false);
@@ -1930,17 +1927,17 @@ it('adopts normalized source settings while retaining fields typed during the sa
   const held = new Promise<Task>(done => { resolve = done; });
   const save = vi.fn(async (_polling: Polling) => held);
   render(<SourceEditor task={original} busy={false} onSave={save} />);
-  fireEvent.change(screen.getByLabelText('Initial prompt'), { target: { value: 'Submitted prompt' } });
+  fireEvent.change(initialPrompt(), { target: { value: 'Submitted prompt' } });
   fireEvent.click(screen.getByRole('button', { name: 'Save source' }));
   await waitFor(() => expect(save).toHaveBeenCalledOnce());
-  fireEvent.change(screen.getByLabelText('Initial prompt'), { target: { value: 'Typed while saving' } });
+  fireEvent.change(initialPrompt(), { target: { value: 'Typed while saving' } });
   fireEvent.change(screen.getByLabelText('Model'), { target: { value: 'new-model' } });
   const saved = { ...original, version: original.version + 1, polling: structuredClone(save.mock.calls[0][0]) };
   saved.polling!.action.child_definition!.config.execution.cwd = '/workspace/project';
   saved.polling!.action.child_definition!.config.execution.model = 'daemon-default';
   resolve(saved);
   await waitFor(() => expect((screen.getByLabelText('Working directory') as HTMLInputElement).value).toBe('/workspace/project'));
-  expect((screen.getByLabelText('Initial prompt') as HTMLTextAreaElement).value).toBe('Typed while saving');
+  expect((initialPrompt() as HTMLTextAreaElement).value).toBe('Typed while saving');
   expect((screen.getByLabelText('Model') as HTMLInputElement).value).toBe('new-model');
   save.mockImplementationOnce(async polling => ({ ...saved, version: saved.version + 1, polling }));
   fireEvent.click(screen.getByRole('button', { name: 'Save source' }));
@@ -1952,10 +1949,11 @@ it("keeps feedback discovery and child event expressions independent", async () 
   const original = sourceTask(); original.polling = { ...original.polling!, type: "pr_changes_source" };
   const save = vi.fn(async (polling: Polling) => ({ ...original, polling, version: original.version + 1 }));
   render(<SourceEditor task={original} busy={false} onSave={save} />);
+  sourcePanel('Source events');
   fireEvent.click(screen.getByRole('button', { name: '+ OR event' }));
   fireEvent.change(screen.getByLabelText('Event 2.1'), { target: { value: 'merge_checks_failed' } });
-  fireEvent.click(screen.getByLabelText('Waiting settings for new tasks'));
-  const card = within(document.querySelector('.polling-rule') as HTMLElement);
+  fireEvent.click(screen.getByLabelText('Copy waiting rules'));
+  const card = within(document.querySelector('.source-child-rules .polling-rule') as HTMLElement);
   fireEvent.click(card.getAllByRole('button', { name: 'Rule events' })[0]);
   fireEvent.click(card.getByRole('button', { name: '+ OR event' }));
   fireEvent.change(card.getByLabelText('Event 3.1'), { target: { value: 'merge_checks_failed' } });
@@ -1976,4 +1974,22 @@ function rulePrompt(index=0) {
  const trigger=screen.getAllByRole('button',{name:'Prompt action'})[index];
  if(trigger.getAttribute('aria-expanded')!=='true')fireEvent.click(trigger);
  return within(trigger.closest('.polling-rule') as HTMLElement).getByLabelText('Continuation prompt');
+}
+
+function sourcePanel(name: string) {
+ const trigger=screen.getAllByRole('button',{name})[0];
+ if(trigger.getAttribute('aria-expanded')!=='true')fireEvent.click(trigger);
+}
+function initialPrompt() {
+ if(screen.queryByRole('button',{name:'Initial prompt action'})) sourcePanel('Initial prompt action');
+ return screen.getByLabelText('Initial prompt');
+}
+async function findInitialPrompt() {
+ await waitFor(()=>expect(screen.queryByLabelText('Initial prompt') || screen.queryByRole('button',{name:'Initial prompt action'})).toBeTruthy());
+ return initialPrompt();
+}
+function chooseSource(option: string) {
+ sourcePanel('Source settings');
+ fireEvent.click(screen.getByRole('combobox',{name:'Event source'}));
+ fireEvent.click(screen.getByRole('option',{name:option}));
 }
