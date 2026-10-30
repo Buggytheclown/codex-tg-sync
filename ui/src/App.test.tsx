@@ -1265,11 +1265,17 @@ it("copies optional waiting defaults inactive with one continuation instruction"
   fireEvent.change(rulePrompt(), {
     target: { value: "Review the new revision" },
   });
+  const promptPanel = screen.getByRole('region', { name: 'Prompt action' });
+  expect(within(promptPanel).getByText('Execution settings')).toBeTruthy();
+  expect(screen.queryByText(/Permissions/)).toBeNull();
+  expect(screen.queryByLabelText('Approval policy')).toBeNull();
+  fireEvent.change(within(promptPanel).getByLabelText('Model'), { target: { value: 'child-model' } });
   fireEvent.click(screen.getByRole("button", { name: "Save source" }));
   await waitFor(() => expect(save).toHaveBeenCalledTimes(1));
   expect(save.mock.calls[0][0]).toMatchObject({
     action: {
       child_definition: {
+        config: { execution: { model: 'child-model', approval_policy: 'on-request', approvals_reviewer: 'auto_review', sandbox_mode: 'workspace-write' } },
         polling: { type: "rules", mode: "once", config: { rules: [expect.objectContaining({ type: "pr_wait", action: expect.objectContaining({ type: "resume_task", prompt: "Review the new revision" }), config: expect.objectContaining({ pr_id: "{{pr_id}}" }) }), expect.anything()] } },
       },
     },

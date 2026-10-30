@@ -258,3 +258,10 @@ the draft prompt, while stale-version and explicit save/activation guards remain
 Panel Escape restores focus to its trigger and leaves the task selected; an open
 chip menu consumes its own Escape first. Colors, server configuration, polling
 execution and frozen requests are unchanged.
+
+Execution fields (working directory, model and reasoning) live inside the prompt
+launch panel, including copied child rules. They still edit the existing shared
+task configuration, also used by initial launch; the UI states this scope.
+Without waiting, initial-launch settings retain these fields. Permission controls
+are omitted from all board forms; existing permission values and server defaults
+are preserved when editing visible execution fields.

@@ -71,15 +71,19 @@ export function WorkflowForm({ task, busy, onSave, onActivate, onLink, configure
     } catch (err) { setMessage((err as Error).message); }
     finally { submitting.current = false; setPending(false); }
   };
+  const executionSettings = <details className="form-section"><summary>Execution settings</summary>
+    <p className="note">Shared by this task’s prompts.</p>
+    <ExecutionFields value={config.execution} onChange={execution => setConfig({ ...config, execution })} />
+  </details>;
   return <>
     <form className="workflow-editor" onSubmit={e => void save(e)}>
       {!waiting && <h2>Polling</h2>}
-      {waiting ? <PollingRules value={waiting} onChange={setWaiting} /> : <><p className="note">No waiting configured.</p><button type="button" disabled={disabled} onClick={() => setWaiting(newRules())}>Configure waiting</button></>}
+      {waiting ? <PollingRules value={waiting} onChange={setWaiting} promptSettings={executionSettings} /> : <><p className="note">No waiting configured.</p><button type="button" disabled={disabled} onClick={() => setWaiting(newRules())}>Configure waiting</button></>}
       {missingChat && <div className="readiness-banner" role="status"><strong>Codex chat required</strong><p>Prompt rules continue this task’s linked chat.</p><button type="button" disabled={disabled} onClick={() => setShowChat(true)}>Link chat</button></div>}
-      <details className="form-section"><summary>Execution settings for prompts</summary><ExecutionFields compact value={config.execution} onChange={execution => setConfig({ ...config, execution })} /></details>
       <details className="form-section initial-launch"><summary>Initial launch · prompt and source</summary>
         <div className="section-content"><p className="note">Existing launch requests keep their frozen prompt and settings.</p><Field label="Initial prompt"><textarea rows={4} value={config.initial_prompt} onChange={e => setConfig({ ...config, initial_prompt: e.target.value })} /></Field>
           <Field label="Source URL" hint="Task provenance. Waiting uses the PR ID above."><input type="url" value={sourceURL} onChange={e => setSourceURL(e.target.value)} /></Field>
+          {!waiting && executionSettings}
           {!waiting && <Field label="Default continuation prompt"><textarea rows={3} value={config.continuation_prompt} onChange={e => setConfig({ ...config, continuation_prompt: e.target.value })} /></Field>}
         </div>
       </details>

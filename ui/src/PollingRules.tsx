@@ -1,5 +1,5 @@
 import { Fragment, useId, useRef, useState } from 'react';
-import type { MouseEvent } from 'react';
+import type { MouseEvent, ReactNode } from 'react';
 import type { Polling, PollingRule } from './model';
 import { defaultRule } from './model';
 import { Field } from './forms';
@@ -20,8 +20,8 @@ function scheduleLabel(config: Polling['config']) {
   }
   return config.cron || 'Configure schedule';
 }
-function RuleCard({ rule, index, onChange, onRemove, child, variables }: {
-  rule: PollingRule; index: number; onChange: (r: PollingRule) => void; onRemove: () => void; child: boolean; variables: boolean;
+function RuleCard({ rule, index, onChange, onRemove, child, variables, promptSettings }: {
+  rule: PollingRule; index: number; onChange: (r: PollingRule) => void; onRemove: () => void; child: boolean; variables: boolean; promptSettings?: ReactNode;
 }) {
   const [panel, setPanel] = useState<Panel | null>(() => rule.type === 'pr_wait' && !rule.config.pr_id ? 'source' : null);
   const trigger = useRef<HTMLButtonElement | null>(null);
@@ -94,18 +94,19 @@ function RuleCard({ rule, index, onChange, onRemove, child, variables }: {
         <ChipSelect label="Prompt launch" value={launch} options={launchOptions} onChange={setLaunch} />
         {launch !== 'none' && <>
           <Field label="Continuation prompt"><textarea rows={3} value={action.prompt || ''} onChange={e => onChange({ ...rule, action: { ...action, prompt: e.target.value } })} /></Field>
+          {promptSettings}
           <p className="note">{launch === 'auto' ? 'Starts automatically in the linked chat when it is idle.' : 'Starts in the linked chat after Telegram approval.'} The task moves to TODO.</p>
         </>}
       </>}
     </div>}
   </section>;
 }
-export function PollingRules({ value, onChange, child = false, variables = true }: { value: Polling; onChange: (p: Polling) => void; child?: boolean; variables?: boolean }) {
+export function PollingRules({ value, onChange, child = false, variables = true, promptSettings }: { value: Polling; onChange: (p: Polling) => void; child?: boolean; variables?: boolean; promptSettings?: ReactNode }) {
   const rules = value.config.rules || [];
   const update = (next: PollingRule[]) => onChange({ ...value, config: { ...value.config, rules: next } });
   return <div className="polling-rules">
     <div className="polling-rules-heading"><h3>Rules <span>{rules.length}</span></h3><button type="button" disabled={rules.length >= 20} onClick={() => update([...rules, defaultRule()])}>+ Add rule</button></div>
-    {rules.map((rule, i) => <RuleCard key={rule.id} rule={rule} index={i} child={child} variables={variables}
+    {rules.map((rule, i) => <RuleCard key={rule.id} rule={rule} index={i} child={child} variables={variables} promptSettings={promptSettings}
       onChange={next => update(rules.map((old, j) => j === i ? next : old))} onRemove={() => update(rules.filter((_, j) => j !== i))} />)}
     <p className="note rule-stop-note">Any action leaves Polling and stops all task rules. Done wins simultaneous matches; otherwise rule order applies.</p>
   </div>;

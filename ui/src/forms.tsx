@@ -90,11 +90,9 @@ export function PollingFields({ value, onChange }: { value: Polling; onChange: (
 export function ExecutionFields({
   value,
   onChange,
-  compact = false,
 }: {
   value: ExecutionSettings;
   onChange: (value: ExecutionSettings) => void;
-  compact?: boolean;
 }) {
   const execution = (key: keyof ExecutionSettings, text: string) =>
     onChange({ ...value, [key]: text });
@@ -128,79 +126,6 @@ export function ExecutionFields({
           </select>
         </Field>
       </div>
-      {compact ? (
-        <details className="form-section">
-          <summary>Permissions</summary>{" "}
-          <Field label="Approval policy">
-            <select
-              value={value.approval_policy}
-              onChange={(e) => execution("approval_policy", e.target.value)}
-            >
-              {["on-request", "untrusted", "never"].map((x) => (
-                <option key={x}>{x}</option>
-              ))}
-            </select>
-          </Field>
-          <Field label="Approval reviewer">
-            <select
-              value={value.approvals_reviewer}
-              onChange={(e) => execution("approvals_reviewer", e.target.value)}
-            >
-              {["auto_review", "user"].map((x) => (
-                <option key={x}>{x}</option>
-              ))}
-            </select>
-          </Field>
-          <Field label="Sandbox">
-            <select
-              value={value.sandbox_mode}
-              onChange={(e) => execution("sandbox_mode", e.target.value)}
-            >
-              {["workspace-write", "read-only", "danger-full-access"].map(
-                (x) => (
-                  <option key={x}>{x}</option>
-                ),
-              )}
-            </select>
-          </Field>
-        </details>
-      ) : (
-        <>
-          {" "}
-          <Field label="Approval policy">
-            <select
-              value={value.approval_policy}
-              onChange={(e) => execution("approval_policy", e.target.value)}
-            >
-              {["on-request", "untrusted", "never"].map((x) => (
-                <option key={x}>{x}</option>
-              ))}
-            </select>
-          </Field>
-          <Field label="Approval reviewer">
-            <select
-              value={value.approvals_reviewer}
-              onChange={(e) => execution("approvals_reviewer", e.target.value)}
-            >
-              {["auto_review", "user"].map((x) => (
-                <option key={x}>{x}</option>
-              ))}
-            </select>
-          </Field>
-          <Field label="Sandbox">
-            <select
-              value={value.sandbox_mode}
-              onChange={(e) => execution("sandbox_mode", e.target.value)}
-            >
-              {["workspace-write", "read-only", "danger-full-access"].map(
-                (x) => (
-                  <option key={x}>{x}</option>
-                ),
-              )}
-            </select>
-          </Field>
-        </>
-      )}
     </div>
   );
 }

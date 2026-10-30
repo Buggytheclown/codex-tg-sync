@@ -391,3 +391,9 @@ For live Telegram QA, verify:
   drafts and 1024/736/375/320 px wrapping. OR stays with the following group.
   Install the checked UI assets and verify exact live asset readback; no daemon
   restart is needed for this presentation-only change.
+
+- Workflow and source integration tests cover execution fields inside prompt
+  panels, shared values between rules, hiding fields for no-launch actions and
+  preserving hidden permissions in the saved task/child configuration. Browser
+  acceptance checks nested disclosure layout and narrow-screen wrapping; new-task
+  and source forms must not expose permission controls.

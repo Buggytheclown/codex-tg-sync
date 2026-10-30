@@ -136,6 +136,10 @@ export function SourceEditor({
       setMessage((err as Error).message);
     } finally { setSaving(false); submitting.current = false; }
   };
+  const executionSettings = <details className="form-section"><summary>Execution settings</summary>
+    <p className="note">Shared by the new task’s initial and continuation prompts.</p>
+    <ExecutionFields value={config.execution} onChange={execution => setDefinition({ ...definition, config: { ...config, execution } })} />
+  </details>;
   return (
     <form className="source-editor workflow-editor" onSubmit={(e) => void submit(e)}>
       <h2>Workflow steps</h2>
@@ -244,15 +248,7 @@ export function SourceEditor({
           />
         </Field>
         <details className="form-section"><summary>Prompt variables</summary><p className="note section-content">PR: {"{{pr_title}}, {{pr_id}}, {{pr_url}}, {{author}}, {{login}}"}. Schedule: {"{{date}}, {{scheduled_at}}"}.</p></details>
-        <details className="form-section"><summary>Working directory · Model · Permissions</summary>
-        <ExecutionFields
-          compact
-          value={config.execution}
-          onChange={(execution) =>
-            setDefinition({ ...definition, config: { ...config, execution } })
-          }
-        />
-        </details>
+        {executionSettings}
         <Field
           label="After event"
           hint="The source keeps discovering events. These actions apply to each new task."
@@ -320,7 +316,7 @@ export function SourceEditor({
                 ID. PR placeholders are unavailable.
               </p>
             )}
-            <PollingRules child variables={polling.type !== "cron"} value={waiting} onChange={setWaiting} />
+            <PollingRules child variables={polling.type !== "cron"} value={waiting} onChange={setWaiting} promptSettings={executionSettings} />
             <p className="note">Copied. Activate manually later.</p>
           </WorkflowStep>
         )}

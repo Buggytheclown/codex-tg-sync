@@ -1,8 +1,8 @@
 // @vitest-environment jsdom
 import { afterEach, expect, it, vi } from 'vitest';
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { WorkflowForm } from './Workflow';
-import { defaultPolling, emptyConfig } from './model';
+import { defaultPolling, emptyConfig, newRules } from './model';
 import type { Task } from './model';
 const task = (extra: Partial<Task> = {}): Task => ({ id: 'task', title: 'Review', description: '', column: 'todo', position: 1, thread_id: '', source_url: 'https://example.com/provenance', source_key: '', version: 1, config: emptyConfig(), requests: [], created_at: '', updated_at: '', ...extra });
 const polling = () => ({ ...defaultPolling(), config: { ...defaultPolling().config, pr_id: '123' }, action: { type: 'resume_task' } });
@@ -108,3 +108,32 @@ function rulePrompt() {
  if(trigger.getAttribute('aria-expanded')!=='true')fireEvent.click(trigger);
  return screen.getByLabelText('Continuation prompt');
 }
+
+it('edits shared execution inside prompt actions and preserves hidden permissions', async () => {
+  const rules = newRules();
+  rules.config.rules![0].config.pr_id = '42';
+  rules.config.rules![0].action = { type: 'resume_task', column: 'todo', prompt: 'Continue' };
+  rules.config.rules!.push({ ...structuredClone(rules.config.rules![0]), id: 'second' });
+  const execution = { ...emptyConfig().execution, approval_policy: 'untrusted', approvals_reviewer: 'user', sandbox_mode: 'read-only' };
+  const t = task({ thread_id: 'chat', config: { ...emptyConfig(), execution }, polling: rules });
+  const save = vi.fn(async input => ({ ...t, ...input, version: 2 }));
+  render(<WorkflowForm task={t} busy={false} onSave={save} onActivate={vi.fn()} onLink={vi.fn()} />);
+  expect(screen.queryByText('Execution settings for prompts')).toBeNull();
+  expect(screen.queryByLabelText('Model')).toBeNull();
+  rulePrompt();
+  const panel = screen.getByRole('region', { name: 'Prompt action' });
+  expect(within(panel).getByText('Execution settings')).toBeTruthy();
+  expect(screen.queryByText('Permissions')).toBeNull();
+  for (const label of ['Approval policy', 'Approval reviewer', 'Sandbox']) expect(screen.queryByLabelText(label)).toBeNull();
+  fireEvent.change(within(panel).getByLabelText('Model'), { target: { value: 'chosen-model' } });
+  fireEvent.change(within(panel).getByLabelText('Reasoning'), { target: { value: 'high' } });
+  fireEvent.click(within(panel).getByRole('button', { name: 'Done' }));
+  fireEvent.click(screen.getAllByRole('button', { name: 'Prompt action' })[1]);
+  expect((screen.getByLabelText('Model') as HTMLInputElement).value).toBe('chosen-model');
+  fireEvent.click(screen.getByRole('combobox', { name: 'Prompt launch' }));
+  fireEvent.click(screen.getByRole('option', { name: 'No launch' }));
+  expect(screen.queryByLabelText('Model')).toBeNull();
+  fireEvent.click(screen.getByRole('button', { name: 'Save settings' }));
+  await waitFor(() => expect(save).toHaveBeenCalledOnce());
+  expect(save.mock.calls[0][0].config.execution).toEqual({ ...execution, model: 'chosen-model', reasoning_effort: 'high' });
+});
