@@ -101,3 +101,18 @@ content height while staying editable; the
 inspector scrolls when the content exceeds the window.
 Review/feedback icons follow the existing source classification and appear inline
 at the beginning of the task title, including wrapped card titles.
+
+## Failed PR merge checks
+
+PR feedback sources offer **Also detect failed required merge checks**. When
+selected, either Request changes or a failed required check can create the first
+PR task. Source-owned waiting and existing task Polling independently offer
+**Required merge checks failed** as an ANY wake condition. Both options start off;
+source changes affect future tasks only.
+
+Closed issues and Approved are excluded. Pending, skipped and unknown are not
+failures. Unchanged failures do not repeat after rearming/restart; an observed
+retry followed by failure or a new published revision can wake the task again.
+Retries that complete entirely between polls with the same end state are not
+observable. Ask initial/continuation prompts to inspect PR feedback and merge
+checks. Standard bootstrap prompts include this; saved prompts are preserved.

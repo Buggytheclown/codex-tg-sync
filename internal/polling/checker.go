@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -19,6 +20,8 @@ import (
 type PRClient interface {
 	arcanumreview.AssignedClient
 	arcanumreview.WaitingChangesClient
+	ListAuthoredOpen(context.Context, string) ([]arcanumreview.PullRequest, error)
+	ReadPRChecks(context.Context, int64) ([]arcanumreview.PRCheck, error)
 	ReadPRSnapshot(context.Context, int64) (arcanumreview.PRSnapshot, error)
 }
 type Checker struct {
@@ -72,13 +75,18 @@ func (c *Checker) Check(ctx context.Context, p model.TaskPolling, now time.Time)
 			prs, err = c.pr.ListAssigned(ctx, cfg.Login)
 		} else {
 			prefix = "arcanum_changes:"
-			prs, err = c.pr.ListAuthoredWaitingForChanges(ctx, cfg.Login)
+			if cfg.CheckMergeFailures {
+				prs, err = c.pr.ListAuthoredOpen(ctx, cfg.Login)
+			} else {
+				prs, err = c.pr.ListAuthoredWaitingForChanges(ctx, cfg.Login)
+			}
 		}
 		if err != nil {
 			return out, err
 		}
 		var cursor struct {
-			Seen []int64 `json:"seen"`
+			Seen     []int64 `json:"seen"`
+			NextPRID int64   `json:"next_pr_id,omitempty"`
 		}
 		if len(p.Cursor) > 0 && string(p.Cursor) != "{}" {
 			if err := json.Unmarshal(p.Cursor, &cursor); err != nil {
@@ -91,11 +99,20 @@ func (c *Checker) Check(ctx context.Context, p model.TaskPolling, now time.Time)
 		}
 		attempts := 0
 		var readErrors []error
-		for _, pr := range prs {
+		start := 0
+		for i, pr := range prs {
+			if pr.ID == cursor.NextPRID {
+				start = i
+				break
+			}
+		}
+		for n := 0; n < len(prs); n++ {
+			pr := prs[(start+n)%len(prs)]
 			if seen[pr.ID] || (p.Type == TypeReview && pr.Author == cfg.Login) {
 				continue
 			}
 			if attempts >= 5 {
+				cursor.NextPRID = pr.ID
 				break
 			}
 			attempts++
@@ -108,6 +125,18 @@ func (c *Checker) Check(ctx context.Context, p model.TaskPolling, now time.Time)
 				cursor.Seen = append(cursor.Seen, pr.ID)
 				continue
 			}
+			if cfg.CheckMergeFailures {
+				if snapshot.Status != "open" {
+					continue
+				}
+				if err := c.readChecks(ctx, &snapshot); err != nil {
+					readErrors = append(readErrors, err)
+					continue
+				}
+				if snapshot.CommonStatus != "waiting_for_changes" && len(arcanumreview.FailedMergeChecks(snapshot.Checks)) == 0 {
+					continue
+				}
+			}
 			author := strings.TrimSpace(snapshot.Author.Name)
 			if author == "" {
 				author = pr.Author
@@ -116,6 +145,9 @@ func (c *Checker) Check(ctx context.Context, p model.TaskPolling, now time.Time)
 			key := prefix + id
 			url := "https://a.yandex-team.ru/review/" + id
 			baseline := PRCursor{HeadCommit: snapshot.HeadCommit, CommonStatus: snapshot.CommonStatus, Since: now.UTC().Format(time.RFC3339Nano)}
+			if cfg.CheckMergeFailures {
+				baseline, _ = compareMergeChecks(baseline, snapshot)
+			}
 			for _, comment := range snapshot.Comments {
 				if comment.Published() && comment.ReplyToID != 0 {
 					baseline.ConsumedReplies = append(baseline.ConsumedReplies, comment.ID)
@@ -128,10 +160,22 @@ func (c *Checker) Check(ctx context.Context, p model.TaskPolling, now time.Time)
 				}
 			}
 			out.Events = append(out.Events, model.PollingEvent{Key: key, SourceKey: key, Title: pr.Summary, SourceURL: url, Cursor: jsonBytes(baseline), Payload: jsonBytes(map[string]string{"pr_id": id, "author": author, "head_commit": snapshot.HeadCommit, "common_status": snapshot.CommonStatus}), Variables: map[string]string{"pr_id": id, "pr_title": pr.Summary, "pr_url": url, "author": author, "login": cfg.Login}})
+			if cfg.CheckMergeFailures {
+				event := &out.Events[len(out.Events)-1]
+				reasons := []string{}
+				if snapshot.CommonStatus == "waiting_for_changes" {
+					reasons = append(reasons, ConditionChanges)
+				}
+				failed := arcanumreview.FailedMergeChecks(snapshot.Checks)
+				if len(failed) > 0 {
+					reasons = append(reasons, ConditionMergeChecks)
+				}
+				event.Payload = jsonBytes(map[string]any{"pr_id": id, "author": author, "head_commit": snapshot.HeadCommit, "published_diff_id": snapshot.PublishedDiffID, "reasons": reasons, "failed_checks": failed})
+			}
 			cursor.Seen = append(cursor.Seen, pr.ID)
 		}
 		out.Cursor = jsonBytes(cursor)
-		if len(out.Events) == 0 && len(readErrors) > 0 {
+		if len(readErrors) > 0 && (cfg.CheckMergeFailures || len(out.Events) == 0) {
 			return out, errors.Join(readErrors...)
 		}
 	case TypePRWait:
@@ -146,6 +190,11 @@ func (c *Checker) Check(ctx context.Context, p model.TaskPolling, now time.Time)
 		if current.Status == "merged" {
 			out.PRStatus = "merged"
 			return out, nil
+		}
+		if slices.Contains(cfg.Conditions, ConditionMergeChecks) {
+			if err := c.readChecks(ctx, &current); err != nil {
+				return out, err
+			}
 		}
 		var old PRCursor
 		if len(p.Cursor) > 0 {
@@ -162,9 +211,24 @@ func (c *Checker) Check(ctx context.Context, p model.TaskPolling, now time.Time)
 			return out, nil
 		}
 		payload := jsonBytes(map[string]any{"pr_id": cfg.PRID, "author": current.Author.Name, "reasons": reasons, "head_commit": current.HeadCommit, "common_status": current.CommonStatus})
+		if slices.Contains(cfg.Conditions, ConditionMergeChecks) {
+			payload = jsonBytes(map[string]any{"pr_id": cfg.PRID, "author": current.Author.Name, "reasons": reasons, "head_commit": current.HeadCommit, "published_diff_id": current.PublishedDiffID, "failed_checks": arcanumreview.FailedMergeChecks(current.Checks)})
+		}
 		hash := sha256.Sum256(append(append([]byte{}, payload...), out.Cursor...))
 		key := fmt.Sprintf("wait:%d:%s", p.Generation, hex.EncodeToString(hash[:12]))
 		out.Events = []model.PollingEvent{{Key: key, SourceURL: "https://a.yandex-team.ru/review/" + cfg.PRID, Payload: payload, Variables: map[string]string{"pr_id": cfg.PRID, "pr_url": "https://a.yandex-team.ru/review/" + cfg.PRID, "reasons": strings.Join(reasons, ", "), "author": current.Author.Name}}}
 	}
 	return out, nil
+}
+
+func (c *Checker) readChecks(ctx context.Context, snapshot *arcanumreview.PRSnapshot) error {
+	if snapshot.PublishedDiffID == 0 {
+		return nil
+	}
+	checks, err := c.pr.ReadPRChecks(ctx, snapshot.PublishedDiffID)
+	if err != nil {
+		return err
+	}
+	snapshot.Checks = checks
+	return nil
 }

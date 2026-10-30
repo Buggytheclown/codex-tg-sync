@@ -1,6 +1,7 @@
 package polling
 
 import (
+	"encoding/json"
 	"github.com/mideco-tech/codex-tg/internal/arcanumreview"
 	"testing"
 )
@@ -75,5 +76,50 @@ func TestPRWaitRetainsHeadAcrossDraftAndFindsIssueResolvedBeforeRearm(t *testing
 	old.Since = "2026-10-06T11:00:00Z"
 	if _, reasons = ComparePR(Config{Conditions: []string{ConditionResolved}}, old, arcanumreview.PRSnapshot{Comments: []arcanumreview.PRComment{issue}}, 2); len(reasons) > 0 {
 		t.Fatal("historical resolved issue retriggered")
+	}
+}
+
+func TestMergeFailuresTrackObservedEdgesAndPublishedRevision(t *testing.T) {
+	cfg := Config{Conditions: []string{ConditionMergeChecks}}
+	snap := arcanumreview.PRSnapshot{PublishedDiffID: 9, Checks: []arcanumreview.PRCheck{{Key: arcanumreview.CheckKey{System: "ci", Type: "tests"}, Required: true, Status: "failure"}}}
+	next, reasons := ComparePR(cfg, PRCursor{}, snap, 1)
+	if len(reasons) != 1 || reasons[0] != ConditionMergeChecks {
+		t.Fatal(reasons)
+	}
+	raw := jsonBytes(next)
+	var restored PRCursor
+	if err := json.Unmarshal(raw, &restored); err != nil {
+		t.Fatal(err)
+	}
+	next, reasons = ComparePR(cfg, restored, snap, 2)
+	if len(reasons) != 0 {
+		t.Fatal("rearm repeated failure", reasons)
+	}
+	snap.Checks[0].Status = "pending"
+	next, reasons = ComparePR(cfg, next, snap, 2)
+	if len(reasons) != 0 {
+		t.Fatal(reasons)
+	}
+	snap.Checks[0].Status = "failure"
+	next, reasons = ComparePR(cfg, next, snap, 2)
+	if len(reasons) != 1 {
+		t.Fatal("observed retry missed", reasons)
+	}
+	snap.PublishedDiffID = 10
+	next, reasons = ComparePR(cfg, next, snap, 3)
+	if len(reasons) != 1 {
+		t.Fatal("new revision missed", reasons)
+	}
+	snap.Checks = append(snap.Checks, arcanumreview.PRCheck{Key: arcanumreview.CheckKey{System: "CI", Type: "lint"}, Required: true, Status: "failure"})
+	_, reasons = ComparePR(cfg, next, snap, 4)
+	if len(reasons) != 1 {
+		t.Fatal("new failed check missed", reasons)
+	}
+}
+func TestUnreadChecksNeverClearAcceptedFailure(t *testing.T) {
+	old := PRCursor{ChecksDiffID: 9, FailedChecks: []arcanumreview.CheckKey{{System: "ci", Type: "tests"}}}
+	next, reasons := ComparePR(Config{Conditions: []string{ConditionMergeChecks}}, old, arcanumreview.PRSnapshot{PublishedDiffID: 9}, 1)
+	if len(reasons) != 0 || len(next.FailedChecks) != 1 {
+		t.Fatalf("%#v %v", next, reasons)
 	}
 }

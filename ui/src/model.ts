@@ -20,6 +20,7 @@ export type TaskConfig = {
   execution: ExecutionSettings;
 };
 export type PollConfig = {
+  check_merge_failures?: boolean;
   login?: string;
   pr_id?: string;
   author?: string;
@@ -211,6 +212,8 @@ export function pollingProblem(p?: Polling, child = false): string {
       !["return_task", "resume_task"].includes(p.action.type))
   )
     return "Child waiting settings must wait on one PR once.";
+  if (p.config.check_merge_failures && p.type !== "pr_changes_source")
+    return "Merge check discovery requires a PR feedback source.";
   if (p.action.type === "create_task") {
     const policy = p.action.initial_launch;
     if (policy && !["manual", "trusted_authors", "auto"].includes(policy.mode))

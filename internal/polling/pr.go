@@ -10,12 +10,14 @@ import (
 // replies. Arming refreshes tracked open issues, but never overwrites the head
 // before comparing: changes while the user reviewed results must stay visible.
 type PRCursor struct {
-	HeadCommit      string  `json:"head_commit"`
-	CommonStatus    string  `json:"common_status"`
-	Generation      int64   `json:"generation"`
-	Tracked         []int64 `json:"tracked"`
-	ConsumedReplies []int64 `json:"consumed_replies"`
-	Since           string  `json:"since,omitempty"`
+	HeadCommit      string                   `json:"head_commit"`
+	CommonStatus    string                   `json:"common_status"`
+	Generation      int64                    `json:"generation"`
+	Tracked         []int64                  `json:"tracked"`
+	ConsumedReplies []int64                  `json:"consumed_replies"`
+	Since           string                   `json:"since,omitempty"`
+	ChecksDiffID    int64                    `json:"checks_diff_id,omitempty"`
+	FailedChecks    []arcanumreview.CheckKey `json:"failed_checks,omitempty"`
 }
 
 func ComparePR(cfg Config, old PRCursor, current arcanumreview.PRSnapshot, generation int64) (PRCursor, []string) {
@@ -43,6 +45,14 @@ func ComparePR(cfg Config, old PRCursor, current arcanumreview.PRSnapshot, gener
 	}
 	next.Generation = generation
 	reasons := []string{}
+	if slices.Contains(cfg.Conditions, ConditionMergeChecks) {
+		var failed bool
+		next, failed = compareMergeChecks(next, current)
+		if failed {
+			reasons = append(reasons, ConditionMergeChecks)
+		}
+	}
+
 	if slices.Contains(cfg.Conditions, ConditionCommit) && old.HeadCommit != "" && current.HeadCommit != "" && current.HeadCommit != old.HeadCommit {
 		reasons = append(reasons, ConditionCommit)
 	}
@@ -135,4 +145,22 @@ func descendsFrom(reply arcanumreview.PRComment, id int64, comments map[int64]ar
 		parent = c.ReplyToID
 	}
 	return false
+}
+
+func compareMergeChecks(old PRCursor, current arcanumreview.PRSnapshot) (PRCursor, bool) {
+	if current.PublishedDiffID == 0 || current.Checks == nil {
+		return old, false
+	}
+	next := old
+	next.ChecksDiffID = current.PublishedDiffID
+	next.FailedChecks = nil
+	changed := false
+	for _, check := range arcanumreview.FailedMergeChecks(current.Checks) {
+		if old.ChecksDiffID != current.PublishedDiffID || !slices.Contains(old.FailedChecks, check.Key) {
+			changed = true
+		}
+		next.FailedChecks = append(next.FailedChecks, check.Key)
+	}
+	// shortcut: retries entirely between polls are invisible; add run identity if the API provides it.
+	return next, changed
 }

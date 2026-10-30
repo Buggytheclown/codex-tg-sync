@@ -79,6 +79,10 @@ func (c *CLIClient) ListAuthoredWaitingForChanges(ctx context.Context, login str
 	return c.search(ctx, login, "open(true);published(true);author("+strings.TrimSpace(login)+");common_status(waiting_for_changes)")
 }
 
+func (c *CLIClient) ListAuthoredOpen(ctx context.Context, login string) ([]PullRequest, error) {
+	return c.search(ctx, login, "open(true);published(true);author("+strings.TrimSpace(login)+")")
+}
+
 func (c *CLIClient) search(ctx context.Context, login, query string) ([]PullRequest, error) {
 	login = strings.TrimSpace(login)
 	if c == nil || c.runner == nil || c.yaBin == "" || !loginPattern.MatchString(login) {

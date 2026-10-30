@@ -209,3 +209,8 @@ it("uses daemon identity without requiring an editable login", () => {
   source.action.child_definition!.config.initial_prompt = "Review PR";
   expect(pollingProblem(source)).toBe("");
 });
+it("rejects the source-only merge-check discovery flag on an ordinary wait", () => {
+  const wait = defaultPolling();
+  wait.config = { ...wait.config, pr_id: "42", check_merge_failures: true };
+  expect(pollingProblem(wait)).toBe("Merge check discovery requires a PR feedback source.");
+});

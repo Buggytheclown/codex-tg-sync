@@ -1956,3 +1956,23 @@ it('adopts normalized source settings while retaining fields typed during the sa
   await waitFor(() => expect(save).toHaveBeenCalledTimes(2));
   expect(save.mock.calls[1][0].action.child_definition!.config.execution.cwd).toBe('/workspace/project');
 });
+it("keeps feedback discovery and child waiting merge-check options independent and opt-in", async () => {
+  const { SourceEditor } = await import("./SourceEditor");
+  const original = sourceTask();
+  original.polling = { ...original.polling!, type: "pr_changes_source" };
+  const save = vi.fn(async (polling: Polling) => ({ ...original, polling, version: original.version + 1 }));
+  render(<SourceEditor task={original} busy={false} onSave={save} />);
+  const discover = screen.getByLabelText("Also detect failed required merge checks") as HTMLInputElement;
+  expect(discover.checked).toBe(false);
+  fireEvent.click(discover);
+  fireEvent.click(screen.getByLabelText("Waiting settings for new tasks"));
+  const wait = screen.getByLabelText("Required merge checks failed") as HTMLInputElement;
+  expect(wait.checked).toBe(false);
+  fireEvent.click(wait);
+  fireEvent.change(screen.getByLabelText("Continuation prompt"), { target: { value: "Inspect PR feedback and merge checks" } });
+  fireEvent.click(screen.getByRole("button", { name: "Save source" }));
+  await waitFor(() => expect(save).toHaveBeenCalledOnce());
+  expect(save.mock.calls[0][0].config.check_merge_failures).toBe(true);
+  expect(save.mock.calls[0][0].action.child_definition?.polling?.config.conditions).toContain("merge_checks_failed");
+  expect(original.polling.config.check_merge_failures).toBeUndefined();
+});

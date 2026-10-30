@@ -170,3 +170,34 @@ resizing columns or revealing Done. Drop uses the existing version-guarded move
 command. Cancel, success and failure restore the toggle, retaining the user's Done
 visibility preference and existing rollback/conflict behavior. Expanded Done keeps
 its ordinary column target. Only static UI assets change.
+
+## Failed merge checks
+
+PR feedback sources may opt into `check_merge_failures`. Discovery then scans the
+account's open published PRs and accepts Request changes OR a failed required
+merge check. A bounded source pass remembers its next candidate so healthy PRs
+do not continually occupy the first five slots. Existing PR task identity and
+source deduplication remain unchanged.
+
+PR waits may independently select `merge_checks_failed` among their ANY conditions.
+Both paths use the same predicate: required and status=failure, excluding the
+Arcanum approved and comment_issues_closed checks. Pending, skipped and unknown
+are not failures. Checks are read for a specific published diff with complete
+pagination; a draft head preserves the latest published diff for checks without
+exposing that draft as a new commit. Unavailable/incomplete pages are errors and
+must not consume the wait cursor or queue a partial result.
+
+The existing JSON cursor remembers the published diff and previously observed
+failed check keys. Initial failures, newly failed checks, a new published revision
+and observed recovery/retry followed by failure may wake a task. Rearming or
+restarting with unchanged failures does not. A retry entirely between polls with
+identical end state is indistinguishable without additional run identity.
+Accepted events retain failed check names, descriptions and available URIs. The
+existing atomic event/request path, permissions, initial launch policies and
+manual continuation approval remain authoritative; no schema or queue is added.
+
+Both options default off. Source discovery and child waiting are independent;
+source edits affect future children. Standard bootstrap prompts mention merge
+checks, but saved custom prompts and existing tasks are not rewritten. The UI
+explains the exclusions and asks the operator to include check inspection in the
+prompt. No CI logs are collected by the poller.

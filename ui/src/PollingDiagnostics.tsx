@@ -16,7 +16,7 @@ export function PollingDiagnostics({ task }: { task: Task }) {
             {p.type === "pr_review_source"
               ? "PR review"
               : p.type === "pr_changes_source"
-                ? "My PRs requesting changes"
+                ? (p.config.check_merge_failures ? "My PRs requesting changes or failing merge checks" : "My PRs requesting changes")
                 : p.type === "cron"
                   ? "Cron schedule"
                   : "PR waiting"}{" "}

@@ -70,3 +70,15 @@ func TestMergedSnapshotNeedsOnlyAuthoritativeMetadata(t *testing.T) {
 		t.Fatal("wrong PR identity accepted")
 	}
 }
+
+func TestDraftHeadRetainsLatestPublishedDiffForChecks(t *testing.T) {
+	r := &snapshotRunner{outputs: [][]byte{
+		[]byte(`{"id":42,"status":"open","author":{"name":"alice"}}`),
+		[]byte(`{"review_requests":[{"id":42,"common_status":"waiting_for_review","active_diff_set":{"id":12,"arc_branch_heads":{"from_id":"draft"}},"diff_sets":[{"id":11,"status":"published","published_at":"2026-10-02T00:00:00Z"},{"id":12,"status":"draft"},{"id":9,"status":"published","published_at":"2026-10-01T00:00:00Z"}]}]}`),
+		[]byte(`[]`),
+	}}
+	got, err := NewCLIClient("ya", r).ReadPRSnapshot(context.Background(), 42)
+	if err != nil || got.PublishedDiffID != 11 || got.HeadCommit != "" {
+		t.Fatalf("%#v %v", got, err)
+	}
+}

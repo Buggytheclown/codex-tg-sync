@@ -25,6 +25,12 @@ func (f *fakePR) ListAssigned(_ context.Context, login string) ([]arcanumreview.
 func (f *fakePR) ListAuthoredWaitingForChanges(ctx context.Context, s string) ([]arcanumreview.PullRequest, error) {
 	return f.ListAssigned(ctx, s)
 }
+func (f *fakePR) ListAuthoredOpen(ctx context.Context, login string) ([]arcanumreview.PullRequest, error) {
+	return f.ListAssigned(ctx, login)
+}
+func (f *fakePR) ReadPRChecks(context.Context, int64) ([]arcanumreview.PRCheck, error) {
+	return []arcanumreview.PRCheck{}, nil
+}
 func (f *fakePR) ReadPRSnapshot(context.Context, int64) (arcanumreview.PRSnapshot, error) {
 	f.calls++
 	if f.fail {

@@ -341,3 +341,21 @@ For live Telegram QA, verify:
   increased height and identical board/column bounds; perform a real mouse drag
   to Done and check the existing move command, hidden column and restored toggle.
   Check chip menus at desktop/narrow widths and that page color tokens stay intact.
+
+## Failed merge checks
+
+- `internal/arcanumreview/checks_test.go` covers authored-open discovery, complete
+  check pagination, explicit failure versus pending/unknown, required-only
+  filtering, the two review exclusions, links, invalid diff IDs and incomplete or
+  repeated-cursor pages. Snapshot tests cover a draft head over published diffs.
+- `internal/polling/merge_checks_test.go` covers healthy-candidate rotation,
+  discovery before Request changes, unchanged Request changes behavior, opt-in,
+  read errors and child baselines. A real isolated SQLite test accepts a same-chat
+  continuation, reopens/rearms without duplicates and observes a retry edge.
+  `pr_test.go` covers new revision/check identities and unknown observations.
+- UI integration covers independent, initially disabled source and child waiting
+  options and saving the new ANY condition without changing merge completion.
+- Live read-only QA reads published checks through the configured CLI and runs
+  discovery/acceptance into an isolated database; it never dispatches its requests
+  to Telegram or App Server. Browser QA uses isolated request fixtures for editing
+  source and ordinary wait settings. Deployment preserves Sync state.

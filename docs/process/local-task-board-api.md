@@ -81,3 +81,13 @@ PR wait config accepts optional boolean complete_on_merge. Explicit false disabl
 Task fields and provided polling share one version-checked transaction. Typed polling validation and active-column readiness use the resulting action and continuation prompt, so switching an active resume wait to return_task can clear the prompt in the same command. Invalid/stale commands or persistence failures roll back both. Inactive settings may be prepared without a chat or continuation prompt; moving to Polling still requires runnable readiness.
 
 The task version and polling generation each advance once. Runtime fields are server-owned: a supplied cursor or timestamps cannot replace observation state. Same-identity saves retain the accepted cursor; identity changes reset it. Provided polling resets scheduling/health fields as the existing polling command does. Existing clients omitting polling retain the existing task-edit generation fence and runtime preservation. Frozen requests and task column/chat identity are unchanged. The browser saves settings first and explicitly activates through the existing guarded move command.
+
+## Failed merge checks
+
+`pr_changes_source` config accepts optional boolean `check_merge_failures`
+(default false). `pr_wait` config independently accepts `merge_checks_failed` in
+its `conditions` array. The source flag is rejected on other polling types.
+Read-only event payloads include the published diff ID and failed checks with
+`key: {system, type}`, required/status, optional description and URI. Existing
+JSON cursors persist observation/dedup state; no route or database migration is
+required. Existing source child-copy, version/generation and launch rules apply.

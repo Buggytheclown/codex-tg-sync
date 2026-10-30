@@ -15,27 +15,29 @@ import (
 )
 
 const (
-	TypeReview        = "pr_review_source"
-	TypeChanges       = "pr_changes_source"
-	TypePRWait        = "pr_wait"
-	TypeCron          = "cron"
-	ConditionCommit   = "new_commit"
-	ConditionAnswered = "all_answered"
-	ConditionResolved = "all_resolved"
-	ConditionChanges  = "request_changes"
+	TypeReview           = "pr_review_source"
+	TypeChanges          = "pr_changes_source"
+	TypePRWait           = "pr_wait"
+	TypeCron             = "cron"
+	ConditionCommit      = "new_commit"
+	ConditionAnswered    = "all_answered"
+	ConditionResolved    = "all_resolved"
+	ConditionChanges     = "request_changes"
+	ConditionMergeChecks = "merge_checks_failed"
 )
 
 type Config struct {
-	CompleteOnMerge *bool    `json:"complete_on_merge,omitempty"`
-	Login           string   `json:"login,omitempty"`
-	PRID            string   `json:"pr_id,omitempty"`
-	Author          string   `json:"author,omitempty"`
-	Conditions      []string `json:"conditions,omitempty"`
-	IntervalSeconds int      `json:"interval_seconds,omitempty"`
-	Cron            string   `json:"cron,omitempty"`
-	Timezone        string   `json:"timezone,omitempty"`
-	MaxLateness     string   `json:"max_lateness,omitempty"`
-	LegacyID        string   `json:"legacy_id,omitempty"`
+	CheckMergeFailures bool     `json:"check_merge_failures,omitempty"`
+	CompleteOnMerge    *bool    `json:"complete_on_merge,omitempty"`
+	Login              string   `json:"login,omitempty"`
+	PRID               string   `json:"pr_id,omitempty"`
+	Author             string   `json:"author,omitempty"`
+	Conditions         []string `json:"conditions,omitempty"`
+	IntervalSeconds    int      `json:"interval_seconds,omitempty"`
+	Cron               string   `json:"cron,omitempty"`
+	Timezone           string   `json:"timezone,omitempty"`
+	MaxLateness        string   `json:"max_lateness,omitempty"`
+	LegacyID           string   `json:"legacy_id,omitempty"`
 }
 
 var loginPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
@@ -67,6 +69,9 @@ func Validate(p model.TaskPolling) error {
 	if err != nil {
 		return err
 	}
+	if c.CheckMergeFailures && p.Type != TypeChanges {
+		return errors.New("check_merge_failures is only supported for PR feedback sources")
+	}
 	switch p.Type {
 	case TypeReview, TypeChanges:
 		if !loginPattern.MatchString(c.Login) {
@@ -88,7 +93,7 @@ func Validate(p model.TaskPolling) error {
 		}
 		for _, condition := range c.Conditions {
 			switch condition {
-			case ConditionCommit, ConditionResolved, ConditionChanges:
+			case ConditionCommit, ConditionResolved, ConditionChanges, ConditionMergeChecks:
 			case ConditionAnswered:
 				if !loginPattern.MatchString(c.Login) {
 					return errors.New("reviewer login required for replies")

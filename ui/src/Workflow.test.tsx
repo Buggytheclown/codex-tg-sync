@@ -83,3 +83,13 @@ it('preserves workflow drafts while attaching the required chat', async () => {
   expect(screen.queryByText('Codex chat required')).toBeNull();
   expect(screen.queryByRole('button', { name: 'Reload latest settings' })).toBeNull();
 });
+it('saves failed merge checks as an independent ANY condition', async () => {
+  const t = task({ polling: polling() });
+  const save = vi.fn(async input => ({ ...t, ...input, version: 2 }));
+  render(<WorkflowForm task={t} busy={false} onSave={save} onActivate={vi.fn()} onLink={vi.fn()} />);
+  fireEvent.click(screen.getByLabelText('Required merge checks failed'));
+  fireEvent.click(screen.getByRole('button', { name: 'Save settings' }));
+  await waitFor(() => expect(save).toHaveBeenCalledOnce());
+  expect(save.mock.calls[0][0].polling.config.conditions).toContain('merge_checks_failed');
+  expect(save.mock.calls[0][0].polling.config.complete_on_merge).toBe(t.polling?.config.complete_on_merge);
+});

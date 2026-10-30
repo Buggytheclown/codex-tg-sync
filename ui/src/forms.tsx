@@ -70,6 +70,7 @@ export const conditionLabels: Record<string, string> = {
   all_answered: "All tracked comments answered",
   all_resolved: "All tracked issues resolved",
   request_changes: "Transitions to request changes",
+  merge_checks_failed: "Required merge checks failed",
 };
 export function PollingFields({
   value,
@@ -124,6 +125,11 @@ export function PollingFields({
           {!sourceOnly && <option value="pr_wait">Wait on one PR</option>}
         </select>
       </Field>
+      {value.type === "pr_changes_source" && <>
+        <label className="check-line"><input type="checkbox" checked={value.config.check_merge_failures === true}
+          onChange={e => cfg("check_merge_failures", e.target.checked)} />Also detect failed required merge checks</label>
+        <p className="note">Request changes or failed checks can create a task. Closed issues and Approved are excluded. Ask the task prompt to inspect feedback and merge checks.</p>
+      </>}
       {value.type === "cron" ? (
         <>
           <Field
@@ -214,7 +220,7 @@ export function PollingFields({
                   </label>
                 ))}
                 <small>
-                  Any selected condition wakes this task. Empty issue sets do not count.
+                  Any selected condition wakes this task. Empty issue sets do not count. Merge check failures exclude Closed issues and Approved.
                 </small>
               </fieldset>
             </>

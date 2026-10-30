@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // PRSnapshot contains observation facts, not a claim that a model reviewed them.
@@ -18,6 +19,7 @@ type PRSnapshot struct {
 	PublishedDiffID int64       `json:"published_diff_id"`
 	HeadCommit      string      `json:"head_commit"`
 	Comments        []PRComment `json:"comments"`
+	Checks          []PRCheck   `json:"checks,omitempty"`
 }
 type PRIdentity struct {
 	UID  string `json:"uid"`
@@ -85,12 +87,13 @@ func (c *CLIClient) ReadPRSnapshot(ctx context.Context, id int64) (PRSnapshot, e
 				} `json:"arc_branch_heads"`
 			} `json:"active_diff_set"`
 			Diffs []struct {
-				ID     int64  `json:"id"`
-				Status string `json:"status"`
+				ID          int64  `json:"id"`
+				Status      string `json:"status"`
+				PublishedAt string `json:"published_at"`
 			} `json:"diff_sets"`
 		} `json:"review_requests"`
 	}
-	err := c.readJSON(ctx, &search, "pr", "search", "--query", "author("+snapshot.Author.Name+")", "--limit", "100", "--all", "--order=-updated_at", "--fields", "review_requests(id,common_status,active_diff_set(id,arc_branch_heads(from_id)),diff_sets(id,status)),total_count")
+	err := c.readJSON(ctx, &search, "pr", "search", "--query", "author("+snapshot.Author.Name+")", "--limit", "100", "--all", "--order=-updated_at", "--fields", "review_requests(id,common_status,active_diff_set(id,arc_branch_heads(from_id)),diff_sets(id,status,published_at)),total_count")
 	if err != nil {
 		return snapshot, err
 	}
@@ -106,6 +109,16 @@ func (c *CLIClient) ReadPRSnapshot(ctx context.Context, id int64) (PRSnapshot, e
 				snapshot.PublishedDiffID = pr.Active.ID
 				snapshot.HeadCommit = pr.Active.Heads.FromID
 				break
+			}
+		}
+		if snapshot.PublishedDiffID == 0 {
+			// A draft head must not hide checks of the last published revision.
+			var latest time.Time
+			for _, diff := range pr.Diffs {
+				published, err := time.Parse(time.RFC3339Nano, diff.PublishedAt)
+				if diff.Status == "published" && err == nil && published.After(latest) {
+					snapshot.PublishedDiffID, latest = diff.ID, published
+				}
 			}
 		}
 		break
