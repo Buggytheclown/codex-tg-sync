@@ -1006,7 +1006,7 @@ export function App() {
         </div>
         <footer className="board-footer">
           <span>Reading a card leaves its state unchanged.</span>
-          <span>Launch approval happens in Telegram.</span>
+          <span>Prompt rules choose Telegram approval or automatic start.</span>
         </footer>
       </main>
       <aside ref={detailPanel} className={`detail-panel${panel === "details" && (detailDismissed || !selectedCard) ? " detail-panel-empty" : ""}`} aria-label="Task details and settings" onKeyDown={(e) => {

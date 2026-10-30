@@ -699,3 +699,57 @@ func TestTrustedBoardInitialRequestRendersThenAutomaticallyDispatches(t *testing
 		t.Fatal("automatic dispatch replayed")
 	}
 }
+
+func TestAutomaticBoardContinuationWaitsForIdleWithoutReplay(t *testing.T) {
+	s := activeSyncService(t)
+	ctx := context.Background()
+	cfg, _ := json.Marshal(model.PollingRulesConfig{Rules: []model.PollingRule{{ID: "feedback", Type: "pr_wait", Config: json.RawMessage(`{"pr_id":"42","condition_groups":[["request_changes"]]}`), Action: model.TaskPollingAction{Type: model.PollingResumeTask, Column: model.TaskTODO, Prompt: "continue", AutoStart: true}}}})
+	p := model.TaskPolling{Type: model.PollingRules, Mode: model.PollingOnce, Config: cfg, Action: model.TaskPollingAction{Type: model.PollingReturnTask}}
+	task, err := s.store.CreateTask(ctx, model.CreateTaskInput{Title: "automatic", ThreadID: "board-thread", Column: model.TaskPollingColumn, Polling: &p})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = s.store.AcceptTaskPollingOutcome(ctx, model.TaskPollingOutcome{TaskID: task.ID, Generation: task.Polling.Generation, RuleID: "feedback", Events: []model.PollingEvent{{Key: "feedback", Payload: json.RawMessage(`{}`)}}}, 123)
+	if err != nil {
+		t.Fatal(err)
+	}
+	task, _ = s.store.GetTask(ctx, task.ID)
+	requestID := task.Requests[0].ID
+	queued, err := s.store.ListExternalLaunchRequestsForAutoStart(ctx, 20)
+	if err != nil || len(queued) != 0 {
+		t.Fatal("start before visible Telegram card", queued, err)
+	}
+	if err := s.store.MarkExternalLaunchRequestTelegramSent(ctx, requestID, 1, model.ExternalLaunchPendingApproval); err != nil {
+		t.Fatal(err)
+	}
+	queued, err = s.store.ListExternalLaunchRequestsForAutoStart(ctx, 20)
+	if err != nil || len(queued) != 1 {
+		t.Fatal(queued, err)
+	}
+	poll := &stubSession{threadReads: map[string]map[string]any{"board-thread": boardThreadPayload("board-thread", "inProgress", "active", "")}}
+	s.poll, s.pollConnected = poll, true
+	if ok, err := s.store.ClaimExternalLaunchRequest(ctx, requestID); err != nil || !ok {
+		t.Fatal(ok, err)
+	}
+	s.dispatchExternalLaunchRequest(ctx, requestID)
+	pending, _ := s.store.GetExternalLaunchRequest(ctx, requestID)
+	if pending.Status != model.ExternalLaunchPendingApproval || !pending.AutoStart || !strings.Contains(pending.ErrorSummary, "automatically") {
+		t.Fatal(pending)
+	}
+	payload := boardThreadPayload("board-thread", "completed", "old-turn", "answer")
+	poll.threadReads["board-thread"] = payload
+	writer := &stubSession{threadReads: map[string]map[string]any{"board-thread": payload}}
+	s.liveFactory = func() Session { return writer }
+	if ok, err := s.store.ClaimExternalLaunchRequest(ctx, requestID); err != nil || !ok {
+		t.Fatal(ok, err)
+	}
+	s.dispatchExternalLaunchRequest(ctx, requestID)
+	got, _ := s.store.GetExternalLaunchRequest(ctx, requestID)
+	if got.Status != model.ExternalLaunchSessionStarted || len(writer.turnStartCalls) != 1 || len(writer.threadStartCalls) > 0 || len(writer.turnSteerCalls) > 0 {
+		t.Fatal(got, writer)
+	}
+	s.dispatchExternalLaunchRequest(ctx, requestID)
+	if len(writer.turnStartCalls) != 1 {
+		t.Fatal("automatic continuation replayed")
+	}
+}

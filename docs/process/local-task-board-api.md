@@ -91,3 +91,35 @@ Read-only event payloads include the published diff ID and failed checks with
 `key: {system, type}`, required/status, optional description and URI. Existing
 JSON cursors persist observation/dedup state; no route or database migration is
 required. Existing source child-copy, version/generation and launch rules apply.
+
+## Independent rule sets (supersedes single-wait editor behavior)
+
+New ordinary configurations use `type: "rules"`, `mode: "once"`, neutral
+`action: {type:"return_task"}` and `config: {rules:[...]}`. Each rule has a stable
+`id`, optional `title`, `type: "pr_wait" | "cron"`, source `config`, and `action`.
+PR config accepts `condition_groups: [["request_changes"], ["merge_checks_failed"]]`
+for OR, or `[["request_changes","merge_checks_failed"]]` for AND. Available terms
+also include new_commit, all_answered, all_resolved and pr_merged. Empty issue sets
+never prove replies/resolution. Cron leaves use the existing supported schedule,
+timezone and maximum lateness, with one scheduled-time event.
+
+Actions are `{type:"return_task",column:"inbox"|"done"}` or
+`{type:"resume_task",column:"todo",prompt:"...",auto_start:false|true}`. Prompt rules
+need an attached chat and nonempty rule prompt to activate; inactive drafts can be
+saved first. A source child template requires nonempty continuation rule prompts.
+Explicit status change is mandatory. Any accepted rule stops the entire task's
+polling; Done wins among simultaneous due matches, otherwise list order wins.
+The runner's outcome carries RuleID and storage resolves that ID from the fenced
+stored configuration, never an externally supplied action.
+
+Source feedback config supports the same condition_groups for request_changes and
+merge_checks_failed, superseding the editor's boolean merge-failure option. Source
+action initial_launch also accepts `none`; action.column selects the new child's
+column (omission preserves legacy Inbox). Prompt choices in the source editor move
+new children to TODO. The source stays active; copied child rules stay inactive.
+
+Legacy configs and routes remain supported. On editor save the old wait is lifted
+into the rule list with its accepted cursor, and complete_on_merge becomes a
+separate pr_merged → Done rule. No bulk rewrite, version change on read or frozen
+request migration occurs. Automatic continuations retain the original-thread,
+frozen-permission, visible-Telegram-card and no-replay dispatch guarantees.

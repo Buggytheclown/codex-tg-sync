@@ -18,7 +18,7 @@ func validateInitialLaunch(p model.TaskPolling) error {
 		return fmt.Errorf("%w: initial launch policy belongs to a source", ErrTaskInvalid)
 	}
 	switch policy.Mode {
-	case "manual", "auto":
+	case "manual", "auto", "none":
 	case "trusted_authors":
 		if p.Type != "pr_review_source" && p.Type != "pr_changes_source" {
 			return fmt.Errorf("%w: trusted authors requires a PR source", ErrTaskInvalid)

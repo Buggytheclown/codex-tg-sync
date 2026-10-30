@@ -16,10 +16,10 @@ export function PollingDiagnostics({ task }: { task: Task }) {
             {p.type === "pr_review_source"
               ? "PR review"
               : p.type === "pr_changes_source"
-                ? (p.config.check_merge_failures ? "My PRs requesting changes or failing merge checks" : "My PRs requesting changes")
+                ? ((p.config.check_merge_failures || p.config.condition_groups?.some(g => g.includes("merge_checks_failed"))) ? "My PRs requesting changes or failing merge checks" : "My PRs requesting changes")
                 : p.type === "cron"
                   ? "Cron schedule"
-                  : "PR waiting"}{" "}
+                  : p.type === "rules" ? `${p.config.rules?.length || 0} independent rules` : "PR waiting"}{" "}
             · {p.mode}
           </p>
           <dl className="metadata">

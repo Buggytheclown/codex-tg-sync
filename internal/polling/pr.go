@@ -1,6 +1,9 @@
 package polling
 
 import (
+	"crypto/sha256"
+	"encoding/json"
+	"fmt"
 	"github.com/mideco-tech/codex-tg/internal/arcanumreview"
 	"slices"
 	"time"
@@ -10,6 +13,7 @@ import (
 // replies. Arming refreshes tracked open issues, but never overwrites the head
 // before comparing: changes while the user reviewed results must stay visible.
 type PRCursor struct {
+	Matches         map[string]string        `json:"matches,omitempty"`
 	HeadCommit      string                   `json:"head_commit"`
 	CommonStatus    string                   `json:"common_status"`
 	Generation      int64                    `json:"generation"`
@@ -21,6 +25,8 @@ type PRCursor struct {
 }
 
 func ComparePR(cfg Config, old PRCursor, current arcanumreview.PRSnapshot, generation int64) (PRCursor, []string) {
+	grouped := len(cfg.ConditionGroups) > 0
+	cfg.Conditions = conditions(cfg)
 	next := old
 	comments := map[int64]arcanumreview.PRComment{}
 	for _, c := range current.Comments {
@@ -45,10 +51,12 @@ func ComparePR(cfg Config, old PRCursor, current arcanumreview.PRSnapshot, gener
 	}
 	next.Generation = generation
 	reasons := []string{}
+	checksChanged := false
 	if slices.Contains(cfg.Conditions, ConditionMergeChecks) {
 		var failed bool
 		next, failed = compareMergeChecks(next, current)
-		if failed {
+		checksChanged = failed
+		if (grouped && len(arcanumreview.FailedMergeChecks(current.Checks)) > 0) || (!grouped && failed) {
 			reasons = append(reasons, ConditionMergeChecks)
 		}
 	}
@@ -56,7 +64,7 @@ func ComparePR(cfg Config, old PRCursor, current arcanumreview.PRSnapshot, gener
 	if slices.Contains(cfg.Conditions, ConditionCommit) && old.HeadCommit != "" && current.HeadCommit != "" && current.HeadCommit != old.HeadCommit {
 		reasons = append(reasons, ConditionCommit)
 	}
-	if slices.Contains(cfg.Conditions, ConditionChanges) && old.CommonStatus != "" && old.CommonStatus != "waiting_for_changes" && current.CommonStatus == "waiting_for_changes" {
+	if slices.Contains(cfg.Conditions, ConditionChanges) && (grouped || (old.CommonStatus != "" && old.CommonStatus != "waiting_for_changes")) && current.CommonStatus == "waiting_for_changes" {
 		reasons = append(reasons, ConditionChanges)
 	}
 	answered, resolved := len(next.Tracked) > 0, len(next.Tracked) > 0
@@ -90,6 +98,54 @@ func ComparePR(cfg Config, old PRCursor, current arcanumreview.PRSnapshot, gener
 	}
 	if slices.Contains(cfg.Conditions, ConditionResolved) && resolved {
 		reasons = append(reasons, ConditionResolved)
+	}
+	if grouped {
+		if current.Status == "merged" && slices.Contains(cfg.Conditions, ConditionMerged) {
+			reasons = append(reasons, ConditionMerged)
+		}
+		next.Matches = map[string]string{}
+		matched := []string{}
+		changed := false
+		for _, group := range cfg.ConditionGroups {
+			if !groupsMatch([][]string{group}, reasons) {
+				continue
+			}
+			groupID, _ := json.Marshal(group)
+			evidence := []any{current.HeadCommit, current.PublishedDiffID}
+			fresh := current.HeadCommit != "" && current.HeadCommit != old.HeadCommit
+			if slices.Contains(group, ConditionChanges) {
+				fresh = fresh || current.CommonStatus != old.CommonStatus
+			}
+			if slices.Contains(group, ConditionAnswered) {
+				evidence = append(evidence, qualifying)
+				fresh = fresh || len(qualifying) > 0
+			}
+			if slices.Contains(group, ConditionMergeChecks) {
+				keys := []arcanumreview.CheckKey{}
+				for _, check := range arcanumreview.FailedMergeChecks(current.Checks) {
+					keys = append(keys, check.Key)
+				}
+				evidence = append(evidence, keys)
+				fresh = fresh || checksChanged
+			}
+			data, _ := json.Marshal(evidence)
+			key := fmt.Sprintf("%x", sha256.Sum256(data))
+			previous, exists := old.Matches[string(groupID)]
+			// Remember each group's observation independently: one OR branch recovering
+			// must not replay another branch that remains true.
+			next.Matches[string(groupID)] = key
+			changed = changed || !exists || (previous != key && fresh)
+			for _, term := range group {
+				if !slices.Contains(matched, term) {
+					matched = append(matched, term)
+				}
+			}
+		}
+		if changed {
+			reasons = matched
+		} else {
+			reasons = nil
+		}
 	}
 	if len(reasons) > 0 {
 		if current.HeadCommit != "" {

@@ -3,6 +3,7 @@ package storage
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -50,6 +51,24 @@ func (s *Store) AcceptTaskPollingOutcome(ctx context.Context, out model.TaskPoll
 		return true, tx.Commit()
 	}
 
+	if p.Type == model.PollingRules && len(out.Events) > 0 {
+		var cfg model.PollingRulesConfig
+		if err := json.Unmarshal(p.Config, &cfg); err != nil {
+			return false, err
+		}
+		found := false
+		for _, rule := range cfg.Rules {
+			if rule.ID == out.RuleID {
+				leaf := rule.Polling(*p)
+				p = &leaf
+				found = true
+				break
+			}
+		}
+		if !found {
+			return false, fmt.Errorf("%w: outcome rule no longer exists", ErrTaskInvalid)
+		}
+	}
 	if out.PRStatus == "merged" && p.Type == "pr_wait" && p.Action.Type != model.PollingCreateTask {
 		complete, err := taskCompleteOnMerge(ctx, tx, t)
 		if err != nil {
@@ -81,6 +100,12 @@ func (s *Store) AcceptTaskPollingOutcome(ctx context.Context, out model.TaskPoll
 		if !errors.Is(err, sql.ErrNoRows) {
 			return false, err
 		}
+
+		if !acceptedEvent && p.Mode == model.PollingOnce && (p.Action.Column == model.TaskTODO || p.Action.Column == model.TaskDone) {
+			if err := cancelUnstartedTaskRequestsTx(ctx, tx, t.ID, now); err != nil {
+				return false, err
+			}
+		}
 		eventID := uuid.NewString()
 		resultID := ""
 		var target *model.Task
@@ -102,6 +127,9 @@ func (s *Store) AcceptTaskPollingOutcome(ctx context.Context, out model.TaskPoll
 				if err != nil {
 					return false, err
 				}
+				if p.Action.Column != "" {
+					child.Column = p.Action.Column
+				}
 				if err := insertTaskTx(ctx, tx, child); err != nil {
 					return false, err
 				}
@@ -119,7 +147,9 @@ func (s *Store) AcceptTaskPollingOutcome(ctx context.Context, out model.TaskPoll
 						return false, err
 					}
 				}
-				target = &child
+				if p.Action.InitialLaunch == nil || p.Action.InitialLaunch.Mode != "none" {
+					target = &child
+				}
 				resultID = child.ID
 			} else {
 				return false, err
@@ -147,7 +177,11 @@ func (s *Store) AcceptTaskPollingOutcome(ctx context.Context, out model.TaskPoll
 			prompt := target.Config.InitialPrompt
 			threadID := ""
 			if p.Action.Type == model.PollingResumeTask {
-				prompt = renderTaskText(target.Config.ContinuationPrompt, event.Variables)
+				prompt = target.Config.ContinuationPrompt
+				if p.Action.Prompt != "" {
+					prompt = p.Action.Prompt
+				}
+				prompt = renderTaskText(prompt, event.Variables)
 				threadID = target.ThreadID
 			}
 			if strings.TrimSpace(prompt) == "" || approvalTopicID == 0 {
@@ -169,7 +203,7 @@ func (s *Store) AcceptTaskPollingOutcome(ctx context.Context, out model.TaskPoll
 			if sender == "" {
 				sender = sourceLabel
 			}
-			autoStart := p.Action.Type == model.PollingCreateTask && initialLaunchAllowed(p.Action.InitialLaunch, author)
+			autoStart := (p.Action.Type == model.PollingCreateTask && initialLaunchAllowed(p.Action.InitialLaunch, author)) || (p.Action.Type == model.PollingResumeTask && p.Action.AutoStart)
 			cfg := normalizeConfig(target.Config).Execution
 			request := model.ExternalLaunchRequest{ID: uuid.NewString(), Source: sourceLabel, ExternalID: eventID, Sender: sender, AutoStart: autoStart, Title: target.Title, SafePreview: prompt, SourceURL: target.SourceURL, Prompt: prompt, CWD: cfg.CWD, Model: cfg.Model, ReasoningEffort: cfg.ReasoningEffort, ApprovalPolicy: &cfg.ApprovalPolicy, ApprovalsReviewer: &cfg.ApprovalsReviewer, SandboxMode: &cfg.SandboxMode, Status: model.ExternalLaunchPendingApproval, TelegramTopicID: approvalTopicID, TaskID: target.ID, TriggerEventID: eventID, TargetThreadID: threadID, CreatedAt: now, UpdatedAt: now}
 			if err := validateExternalLaunchRequest(request, request.Source); err != nil {
@@ -194,7 +228,7 @@ func (s *Store) AcceptTaskPollingOutcome(ctx context.Context, out model.TaskPoll
 		return false, err
 	}
 	if acceptedEvent && p.Mode == model.PollingOnce {
-		_, err = tx.ExecContext(ctx, `UPDATE tasks SET column='inbox',version=version+1,updated_at=? WHERE id=?`, now, t.ID)
+		_, err = tx.ExecContext(ctx, `UPDATE tasks SET column=?,version=version+1,updated_at=? WHERE id=?`, pollingDestination(p.Action), now, t.ID)
 		if err != nil {
 			return false, err
 		}
@@ -207,4 +241,11 @@ func (s *Store) AcceptTaskPollingOutcome(ctx context.Context, out model.TaskPoll
 		return false, err
 	}
 	return true, nil
+}
+
+func pollingDestination(a model.TaskPollingAction) string {
+	if a.Column != "" {
+		return a.Column
+	}
+	return model.TaskInbox
 }

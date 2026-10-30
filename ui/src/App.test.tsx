@@ -846,7 +846,7 @@ it("keeps Overview a native editable brief while polling diagnostics and frozen 
   fireEvent.click(detail.getByRole("tab", { name: "Polling" }));
   expect(detail.getByLabelText("PR ID")).toBeTruthy();
   expect(detail.getByText("Last attempt")).toBeTruthy();
-  expect(detail.getByLabelText("Move to Done when PR is merged")).toBeTruthy();
+  expect(detail.queryByLabelText("Move to Done when PR is merged")).toBeNull();
   fireEvent.click(detail.getByRole("tab", { name: "History" }));
   expect(await detail.findByText("Frozen prompt")).toBeTruthy();
   expect(detail.getByText("Preserved frozen instruction")).toBeTruthy();
@@ -1056,9 +1056,9 @@ describe("board operator flows", () => {
     rows = [sourceTask()];
     window.history.replaceState(null, "", "/?task=source");
     render(<App />);
-    await screen.findByRole("heading", { name: "Create task" });
+    await screen.findByRole("heading", { name: "After event · create task" });
     expect(
-      screen.getByRole("heading", { name: "When" }),
+      screen.getByRole("heading", { name: "Wait" }),
     ).toBeTruthy();
     expect((screen.getByLabelText("Initial prompt") as HTMLTextAreaElement).value).toBe(
       "Use $scan-internal-radar",
@@ -1268,13 +1268,7 @@ it("copies optional waiting defaults inactive with one continuation instruction"
   expect(save.mock.calls[0][0]).toMatchObject({
     action: {
       child_definition: {
-        config: { continuation_prompt: "Review the new revision" },
-        polling: {
-          type: "pr_wait",
-          mode: "once",
-          action: { type: "resume_task" },
-          config: { pr_id: "{{pr_id}}" },
-        },
+        polling: { type: "rules", mode: "once", config: { rules: [expect.objectContaining({ type: "pr_wait", action: expect.objectContaining({ type: "resume_task", prompt: "Review the new revision" }), config: expect.objectContaining({ pr_id: "{{pr_id}}" }) }), expect.anything()] } },
       },
     },
   });
@@ -1306,9 +1300,7 @@ it("preserves a PR waiting draft when switching to cron and requires explicit PR
   expect((screen.getByLabelText("PR ID") as HTMLInputElement).value).toBe(
     "{{pr_id}}",
   );
-  expect(
-    (screen.getByLabelText("Continuation prompt") as HTMLInputElement).value,
-  ).toBe("Keep this follow-up");
+
   fireEvent.change(screen.getByLabelText("PR ID"), {
     target: { value: "123" },
   });
@@ -1323,7 +1315,7 @@ it("preserves a PR waiting draft when switching to cron and requires explicit PR
   expect(save.mock.calls[0][0]).toMatchObject({
     type: "cron",
     action: {
-      child_definition: { polling: { config: { pr_id: "123", author: "" } } },
+      child_definition: { config: { continuation_prompt: "Keep this follow-up" }, polling: { config: { rules: [expect.objectContaining({ config: expect.objectContaining({ pr_id: "123", author: "" }) })] } } },
     },
   });
 });
@@ -1346,9 +1338,9 @@ it("edits initial launch policy independently of execution approvals", async () 
   const save = vi.fn(async (polling: Polling, _enabled: boolean, version: number) => makeTask({ polling, version: version + 1 }));
   render(<SourceEditor task={sourceTask()} busy={false} onSave={save} />);
   expect(
-    (screen.getByLabelText("Initial launch") as HTMLSelectElement).value,
+    (screen.getByLabelText("After event") as HTMLSelectElement).value,
   ).toBe("manual");
-  fireEvent.change(screen.getByLabelText("Initial launch"), {
+  fireEvent.change(screen.getByLabelText("After event"), {
     target: { value: "trusted_authors" },
   });
   fireEvent.change(screen.getByLabelText("Trusted PR authors"), {
@@ -1361,7 +1353,7 @@ it("edits initial launch policy independently of execution approvals", async () 
       initial_launch: { mode: "trusted_authors", authors: ["alice", "bob"] },
     },
   });
-  expect(screen.getByText(/continuations require Start/)).toBeTruthy();
+  expect(screen.getByText(/Each child’s rules choose/)).toBeTruthy();
 });
 
 it("loads full details only on selection and retries failed details without blank editors", async () => {
@@ -1479,13 +1471,13 @@ it("edits overview text preserving execution/source and exposes History", async 
   await waitFor(() => expect((screen.getByRole("button", { name: "Save settings" }) as HTMLButtonElement).disabled).toBe(false));
   await waitFor(() => expect(screen.queryByRole("button", { name: "Reload latest settings" })).toBeNull());
   fireEvent.click(screen.getByRole("button", { name: "Save settings" }));
-  await waitFor(() => expect(rows[0].polling?.config.pr_id).toBe("123"));
+  await waitFor(() => expect(rows[0].polling?.config.rules?.[0].config.pr_id).toBe("123"));
   fireEvent.change(screen.getByLabelText("Initial prompt"), { target: { value: "Another draft" } });
   fireEvent.change(screen.getByLabelText("PR ID"), { target: { value: "456" } });
   await waitFor(() => expect((screen.getByRole("button", { name: "Save settings" }) as HTMLButtonElement).disabled).toBe(false));
   await waitFor(() => expect(screen.queryByRole("button", { name: "Reload latest settings" })).toBeNull());
   fireEvent.click(screen.getByRole("button", { name: "Save settings" }));
-  await waitFor(() => expect(rows[0].polling?.config.pr_id).toBe("456"));
+  await waitFor(() => expect(rows[0].polling?.config.rules?.[0].config.pr_id).toBe("456"));
   expect((screen.getByLabelText("Initial prompt") as HTMLTextAreaElement).value).toBe("Another draft");
   await waitFor(() => expect((screen.getByRole("button", { name: "Save settings" }) as HTMLButtonElement).disabled).toBe(false));
   await waitFor(() => expect(screen.queryByRole("button", { name: "Reload latest settings" })).toBeNull());
@@ -1599,14 +1591,12 @@ it("Cmd+Enter saves the focused polling section and respects native validation",
   fireEvent.click(screen.getByRole("button", { name: "Configure waiting" }));
   fireEvent.change(screen.getByLabelText("PR ID"), { target: { value: "43" } });
   expect(screen.queryByLabelText("Your Arcanum login")).toBeNull();
-  fireEvent.click(screen.getByLabelText("Move to Done when PR is merged"));
   fireEvent.keyDown(screen.getByLabelText("PR ID"), { key: "Enter", metaKey: true });
-  await waitFor(() => expect(rows[0].polling?.config.pr_id).toBe("43"));
-  expect(rows[0].polling?.config.complete_on_merge).toBe(true);
+  await waitFor(() => expect(rows[0].polling?.config.rules?.[0].config.pr_id).toBe("43"));
+  expect(rows[0].polling?.type).toBe("rules");
   await waitFor(() => expect((screen.getByRole("button", { name: "Save settings" }) as HTMLButtonElement).disabled).toBe(false));
-  fireEvent.click(screen.getByLabelText("Move to Done when PR is merged"));
   fireEvent.keyDown(screen.getByLabelText("PR ID"), { key: "Enter", metaKey: true });
-  await waitFor(() => expect(rows[0].polling?.config.complete_on_merge).toBe(false));
+  await waitFor(() => expect(rows[0].polling?.config.rules?.[0].config.pr_id).toBe("43"));
 });
 it("preserves new overview typing during an ordinary save and saves sources with Cmd+Enter", async () => {
   window.history.replaceState(null, "", "/?task=task-1");
@@ -1858,48 +1848,41 @@ it("does not advance unseen full settings from a newer compact ticket reply", as
   expect(rows[0].ticket_url).toBe("https://tracker.example/TASK-123");
 });
 
-it("saves merge completion independently of ANY conditions and preserves a conflicting draft", async () => {
+it("adds a merged Done rule and preserves its conflicting draft", async () => {
   const initial = defaultPolling(); initial.config.pr_id = "123";
   const t = makeTask({ polling: initial });
-  const save = vi.fn(async (input) => ({ ...t, ...input, version: 2 }));
+  const save = vi.fn(async input => ({ ...t, ...input, version: 2 }));
   const view = render(<WorkflowForm task={t} busy={false} onSave={save} onActivate={vi.fn()} onLink={vi.fn()} />);
-  expect(screen.queryByLabelText("Your Arcanum login")).toBeNull();
-  const merged = screen.getByLabelText("Move to Done when PR is merged") as HTMLInputElement;
-  expect(merged.checked).toBe(false);
-  fireEvent.click(merged);
-  fireEvent.click(screen.getByRole("button", { name: "Save settings" }));
-  await waitFor(() => expect(save).toHaveBeenCalledTimes(1));
-  expect(save.mock.calls[0][0].polling.config).toMatchObject({ complete_on_merge: true, conditions: ["new_commit", "all_answered"] });
-  fireEvent.click(merged);
-  view.rerender(<WorkflowForm task={{ ...t, version: 3, polling: { ...initial, config: { ...initial.config, pr_id: "456", complete_on_merge: true } } }} busy={false} onSave={save} onActivate={vi.fn()} onLink={vi.fn()} />);
-  fireEvent.click(screen.getByRole("button", { name: "Save settings" }));
-  expect(await screen.findByRole("button", { name: "Reload latest settings" })).toBeTruthy();
-  expect(merged.checked).toBe(false);
-  expect(save).toHaveBeenCalledTimes(1);
+  fireEvent.click(screen.getByRole('button', { name: '+ Add rule' }));
+  const ids = screen.getAllByLabelText('PR ID');
+  fireEvent.change(ids[1], { target: { value: '123' } });
+  const cards = document.querySelectorAll('.polling-rule');
+  const card = within(cards[1] as HTMLElement);
+  fireEvent.change(card.getByLabelText('Event 1.1'), { target: { value: 'pr_merged' } });
+  fireEvent.click(card.getByRole('button', { name: 'Remove event 2.1' }));
+  fireEvent.change(card.getByLabelText('Move to'), { target: { value: 'done' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Save settings' }));
+  await waitFor(() => expect(save).toHaveBeenCalledOnce());
+  expect(save.mock.calls[0][0].polling.config.rules[1]).toMatchObject({ config: { condition_groups: [['pr_merged']] }, action: { type: 'return_task', column: 'done' } });
+  view.rerender(<WorkflowForm task={{ ...t, version: 3, description: 'external', config: { ...t.config, initial_prompt: 'External' } }} busy={false} onSave={save} onActivate={vi.fn()} onLink={vi.fn()} />);
+  fireEvent.click(screen.getByRole('button', { name: 'Save settings' }));
+  expect(await screen.findByRole('button', { name: 'Reload latest settings' })).toBeTruthy();
+  expect(save).toHaveBeenCalledOnce();
 });
-
-it.each(["pr_review_source", "pr_changes_source", "cron"])("saves child merge completion both ways for %s", async type => {
-  const { SourceEditor } = await import("./SourceEditor");
-  const task = sourceTask();
-  task.polling = defaultPolling(type);
-  task.polling.action.child_definition = { title: "Child", description: "", config: { ...emptyConfig(), initial_prompt: "Work", continuation_prompt: "Follow up" } };
-  const save = vi.fn(async (polling: Polling, _enabled: boolean, version: number) => makeTask({ polling, version: version + 1 }));
+it.each(['pr_review_source', 'pr_changes_source', 'cron'])('copies independent child rules for %s', async type => {
+  const { SourceEditor } = await import('./SourceEditor');
+  const task = sourceTask(); task.polling = defaultPolling(type);
+  task.polling.action.child_definition = { title: 'Child', description: '', config: { ...emptyConfig(), initial_prompt: 'Work', continuation_prompt: 'Follow up' } };
+  const save = vi.fn(async (polling: Polling) => makeTask({ polling, version: 4 }));
   render(<SourceEditor task={task} busy={false} onSave={save} />);
-  expect(screen.queryByLabelText("Your Arcanum login")).toBeNull();
-  expect(screen.queryByLabelText("Move to Done when PR is merged")).toBeNull();
-  fireEvent.click(screen.getByLabelText("Waiting settings for new tasks"));
-  const merged = screen.getByLabelText("Move to Done when PR is merged") as HTMLInputElement;
-  const expected = type !== "cron";
-  expect(merged.checked).toBe(expected);
-  if (type === "cron") fireEvent.change(screen.getByLabelText("PR ID"), { target: { value: "123" } });
-  fireEvent.click(screen.getByRole("button", { name: "Save source" }));
-  await waitFor(() => expect(save).toHaveBeenCalledTimes(1));
-  expect(save.mock.calls[0][0].action.child_definition!.polling!.config.complete_on_merge).toBe(expected);
-  fireEvent.click(merged);
-  fireEvent.click(screen.getByRole("button", { name: "Save source" }));
-  await waitFor(() => expect(save).toHaveBeenCalledTimes(2));
-  expect(save.mock.calls[1][0].action.child_definition!.polling!.config.complete_on_merge).toBe(!expected);
-  expect(save.mock.calls[1][0].config).not.toHaveProperty("complete_on_merge");
+  fireEvent.click(screen.getByLabelText('Waiting settings for new tasks'));
+  if (type === 'cron') fireEvent.change(screen.getByLabelText('PR ID'), { target: { value: '123' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Save source' }));
+  await waitFor(() => expect(save).toHaveBeenCalledOnce());
+  const waiting = save.mock.calls[0][0].action.child_definition!.polling!;
+  expect(waiting.type).toBe('rules');
+  expect(waiting.config.rules).toHaveLength(type === 'cron' ? 1 : 2);
+  if (type !== 'cron') expect(waiting.config.rules![1].action.column).toBe('done');
 });
 it('fences source drafts after a newer concurrent save reply and reloads authoritative settings', async () => {
   const { SourceEditor } = await import('./SourceEditor');
@@ -1918,20 +1901,19 @@ it('fences source drafts after a newer concurrent save reply and reloads authori
   fireEvent.click(screen.getByRole('button', { name: 'Reload latest source' }));
   expect((screen.getByLabelText('Initial prompt') as HTMLTextAreaElement).value).toBe('External instruction');
 });
-it('copies PR feedback waiting defaults with a readonly detected PR placeholder', async () => {
+it('copies PR feedback waiting defaults with an editable detected PR placeholder', async () => {
   const { SourceEditor } = await import('./SourceEditor');
   const t = sourceTask(); t.polling!.type = 'pr_changes_source';
   const save = vi.fn(async (polling: Polling, _enabled: boolean, version: number) => makeTask({ polling, version: version + 1 }));
   render(<SourceEditor task={t} busy={false} onSave={save} />);
   fireEvent.click(screen.getByLabelText('Waiting settings for new tasks'));
   fireEvent.change(screen.getByLabelText('Continuation prompt'), { target: { value: 'Follow up' } });
-  const id = screen.getByLabelText('PR ID') as HTMLInputElement;
-  expect(id.value).toBe('{{pr_id}}'); expect(id.readOnly).toBe(true);
-  expect(screen.getByText('From detected PR')).toBeTruthy();
+  const id = screen.getAllByLabelText('PR ID')[0] as HTMLInputElement;
+  expect(id.value).toBe('{{pr_id}}'); expect(id.readOnly).toBe(false);
   expect(screen.queryByRole('link', { name: /Open PR/ })).toBeNull();
   fireEvent.click(screen.getByRole('button', { name: 'Save source' }));
   await waitFor(() => expect(save).toHaveBeenCalledOnce());
-  expect((save.mock.calls[0] as unknown as [Polling])[0].action.child_definition!.polling!.config.conditions).toEqual(['all_resolved', 'request_changes']);
+  expect((save.mock.calls[0] as unknown as [Polling])[0].action.child_definition!.polling!.config.rules![0].config.condition_groups).toEqual([['all_resolved'], ['request_changes']]);
 });
 it('adopts normalized source settings while retaining fields typed during the save', async () => {
   const { SourceEditor } = await import('./SourceEditor');
@@ -1956,23 +1938,21 @@ it('adopts normalized source settings while retaining fields typed during the sa
   await waitFor(() => expect(save).toHaveBeenCalledTimes(2));
   expect(save.mock.calls[1][0].action.child_definition!.config.execution.cwd).toBe('/workspace/project');
 });
-it("keeps feedback discovery and child waiting merge-check options independent and opt-in", async () => {
+it("keeps feedback discovery and child event expressions independent", async () => {
   const { SourceEditor } = await import("./SourceEditor");
-  const original = sourceTask();
-  original.polling = { ...original.polling!, type: "pr_changes_source" };
+  const original = sourceTask(); original.polling = { ...original.polling!, type: "pr_changes_source" };
   const save = vi.fn(async (polling: Polling) => ({ ...original, polling, version: original.version + 1 }));
   render(<SourceEditor task={original} busy={false} onSave={save} />);
-  const discover = screen.getByLabelText("Also detect failed required merge checks") as HTMLInputElement;
-  expect(discover.checked).toBe(false);
-  fireEvent.click(discover);
-  fireEvent.click(screen.getByLabelText("Waiting settings for new tasks"));
-  const wait = screen.getByLabelText("Required merge checks failed") as HTMLInputElement;
-  expect(wait.checked).toBe(false);
-  fireEvent.click(wait);
-  fireEvent.change(screen.getByLabelText("Continuation prompt"), { target: { value: "Inspect PR feedback and merge checks" } });
-  fireEvent.click(screen.getByRole("button", { name: "Save source" }));
+  fireEvent.click(screen.getByRole('button', { name: '+ OR event' }));
+  fireEvent.change(screen.getByLabelText('Event 2.1'), { target: { value: 'merge_checks_failed' } });
+  fireEvent.click(screen.getByLabelText('Waiting settings for new tasks'));
+  const card = within(document.querySelector('.polling-rule') as HTMLElement);
+  fireEvent.click(card.getByRole('button', { name: '+ OR event' }));
+  fireEvent.change(card.getByLabelText('Event 3.1'), { target: { value: 'merge_checks_failed' } });
+  fireEvent.change(screen.getByLabelText('Continuation prompt'), { target: { value: 'Inspect PR feedback and merge checks' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Save source' }));
   await waitFor(() => expect(save).toHaveBeenCalledOnce());
-  expect(save.mock.calls[0][0].config.check_merge_failures).toBe(true);
-  expect(save.mock.calls[0][0].action.child_definition?.polling?.config.conditions).toContain("merge_checks_failed");
+  expect(save.mock.calls[0][0].config.condition_groups).toEqual([['request_changes'], ['merge_checks_failed']]);
+  expect(save.mock.calls[0][0].action.child_definition?.polling?.config.rules?.[0].config.condition_groups).toContainEqual(['merge_checks_failed']);
   expect(original.polling.config.check_merge_failures).toBeUndefined();
 });

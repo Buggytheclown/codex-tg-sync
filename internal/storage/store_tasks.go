@@ -78,11 +78,44 @@ func validatePolling(p model.TaskPolling) error {
 	if strings.TrimSpace(p.Type) == "" || (p.Mode != model.PollingOnce && p.Mode != model.PollingRepeat) || !jsonObject(p.Config) {
 		return fmt.Errorf("%w: polling type, mode and object config required", ErrTaskInvalid)
 	}
+	if p.Type == model.PollingRules {
+		if p.Mode != model.PollingOnce || p.Action.Type != model.PollingReturnTask || p.Action.Column != "" {
+			return ErrTaskInvalid
+		}
+		var cfg model.PollingRulesConfig
+		if err := json.Unmarshal(p.Config, &cfg); err != nil {
+			return err
+		}
+		if len(cfg.Rules) == 0 || len(cfg.Rules) > 20 {
+			return fmt.Errorf("%w: configure 1..20 rules", ErrTaskInvalid)
+		}
+		ids := map[string]bool{}
+		for _, r := range cfg.Rules {
+			if r.ID == "" || ids[r.ID] || (r.Type != "pr_wait" && r.Type != "cron") {
+				return ErrTaskInvalid
+			}
+			ids[r.ID] = true
+			a := r.Action
+			if a.Type == model.PollingResumeTask {
+				if a.Column != model.TaskTODO {
+					return ErrTaskInvalid
+				}
+			} else if a.Type != model.PollingReturnTask || (a.Column != model.TaskInbox && a.Column != model.TaskDone) || a.AutoStart {
+				return ErrTaskInvalid
+			}
+			if err := validatePolling(r.Polling(p)); err != nil {
+				return err
+			}
+		}
+	}
 	if err := validateInitialLaunch(p); err != nil {
 		return err
 	}
 	switch p.Action.Type {
 	case model.PollingReturnTask, model.PollingResumeTask:
+		if p.Action.Column != "" && ((p.Action.Type == model.PollingResumeTask && p.Action.Column != model.TaskTODO) || (p.Action.Type == model.PollingReturnTask && p.Action.Column != model.TaskInbox && p.Action.Column != model.TaskDone)) {
+			return fmt.Errorf("%w: action must leave Polling", ErrTaskInvalid)
+		}
 		if p.Action.ChildDefinition != nil {
 			return fmt.Errorf("%w: only sources own child definitions", ErrTaskInvalid)
 		}
@@ -93,7 +126,14 @@ func validatePolling(p model.TaskPolling) error {
 		if p.Mode != model.PollingRepeat || p.Action.ChildDefinition == nil {
 			return fmt.Errorf("%w: sources require repeat and child definition", ErrTaskInvalid)
 		}
-		if err := validateChildDefinition(*p.Action.ChildDefinition); err != nil {
+		child := *p.Action.ChildDefinition
+		if p.Action.InitialLaunch != nil && p.Action.InitialLaunch.Mode == "none" {
+			child.Config.InitialPrompt = "unused"
+		}
+		if p.Action.Column != "" && p.Action.Column != model.TaskInbox && p.Action.Column != model.TaskTODO && p.Action.Column != model.TaskDone {
+			return ErrTaskInvalid
+		}
+		if err := validateChildDefinition(child); err != nil {
 			return err
 		}
 	default:
@@ -416,9 +456,7 @@ func (s *Store) UpdateTask(ctx context.Context, id string, in model.UpdateTaskIn
 		p.Cursor = json.RawMessage(`{}`)
 		if t.Polling != nil {
 			p.Generation = t.Polling.Generation + 1
-			if samePollingIdentity(*t.Polling, p) {
-				p.Cursor = t.Polling.Cursor
-			}
+			p.Cursor = reconcileRuleCursor(*t.Polling, p)
 		}
 		p.LastAttemptAt = ""
 		p.LastSuccessAt = ""
@@ -640,11 +678,7 @@ func (s *Store) SetTaskPolling(ctx context.Context, id string, in model.SetTaskP
 	p.Cursor = json.RawMessage(`{}`)
 	if t.Polling != nil {
 		p.Generation = t.Polling.Generation + 1
-		if samePollingIdentity(*t.Polling, p) {
-			p.Cursor = t.Polling.Cursor
-		} else {
-			p.Cursor = json.RawMessage(`{}`)
-		}
+		p.Cursor = reconcileRuleCursor(*t.Polling, p)
 	}
 	p.LastAttemptAt = ""
 	p.LastSuccessAt = ""
@@ -778,8 +812,23 @@ func (s *Store) normalizeTaskConfig(c model.TaskConfig) model.TaskConfig {
 }
 
 func validateTaskPollingReadiness(t *model.Task, p model.TaskPolling) error {
+	if p.Type == model.PollingRules {
+		var cfg model.PollingRulesConfig
+		if err := json.Unmarshal(p.Config, &cfg); err != nil {
+			return err
+		}
+		for _, r := range cfg.Rules {
+			if r.Action.Type == model.PollingResumeTask && strings.TrimSpace(r.Action.Prompt) == "" {
+				return fmt.Errorf("%w: continuation rule requires a prompt", ErrTaskInvalid)
+			}
+			if err := validateTaskPollingReadiness(t, r.Polling(p)); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
 	if p.Action.Type == model.PollingResumeTask {
-		if strings.TrimSpace(t.ThreadID) == "" || strings.TrimSpace(t.Config.ContinuationPrompt) == "" {
+		if strings.TrimSpace(t.ThreadID) == "" || strings.TrimSpace(t.Config.ContinuationPrompt) == "" && strings.TrimSpace(p.Action.Prompt) == "" {
 			return fmt.Errorf("%w: continuation waiting requires a linked chat and continuation prompt", ErrTaskInvalid)
 		}
 	}
@@ -812,3 +861,35 @@ func findTaskIdentityTx(ctx context.Context, tx *sql.Tx, sourceKey, threadID str
 }
 
 func validTaskPriority(p string) bool { return p == "low" || p == "normal" || p == "high" }
+
+func reconcileRuleCursor(old, next model.TaskPolling) json.RawMessage {
+	if next.Type != model.PollingRules {
+		if samePollingIdentity(old, next) {
+			return old.Cursor
+		}
+		return json.RawMessage(`{}`)
+	}
+	var cfg model.PollingRulesConfig
+	_ = json.Unmarshal(next.Config, &cfg)
+	previous := map[string]model.PollingRule{}
+	state := model.PollingRulesCursor{}
+	if old.Type == model.PollingRules {
+		var c model.PollingRulesConfig
+		_ = json.Unmarshal(old.Config, &c)
+		for _, r := range c.Rules {
+			previous[r.ID] = r
+		}
+		_ = json.Unmarshal(old.Cursor, &state)
+	} else {
+		previous["legacy-wait"] = model.PollingRule{Type: old.Type, Config: old.Config}
+		state.Rules = map[string]model.PollingRuleState{"legacy-wait": {Cursor: old.Cursor}}
+	}
+	result := model.PollingRulesCursor{Rules: map[string]model.PollingRuleState{}}
+	for _, r := range cfg.Rules {
+		if prev, ok := previous[r.ID]; ok && samePollingIdentity(prev.Polling(old), r.Polling(next)) {
+			result.Rules[r.ID] = state.Rules[r.ID]
+		}
+	}
+	raw, _ := json.Marshal(result)
+	return raw
+}

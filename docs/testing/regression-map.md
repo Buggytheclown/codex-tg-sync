@@ -359,3 +359,20 @@ For live Telegram QA, verify:
   discovery/acceptance into an isolated database; it never dispatches its requests
   to Telegram or App Server. Browser QA uses isolated request fixtures for editing
   source and ordinary wait settings. Deployment preserves Sync state.
+
+## Independent polling rules
+
+- `internal/polling/rules_test.go`: same-snapshot AND versus latched facts,
+  unconsumed partial evidence, unchanged rearm dedup, Done arbitration, failed
+  reads, cron once rules, source expressions and child accepted baselines.
+- `internal/storage/store_task_rules_test.go`: atomic TODO continuation/manual or
+  auto claim, generation stop, Done without launch, cursor upgrade/identity reset,
+  and no-model source creation while discovery stays active.
+- `internal/daemon/board_launch_test.go`: automatic same-chat continuation waits
+  for visible Telegram rendering and idle authority, then starts once without
+  steering, creating a replacement thread or replaying.
+- UI workflow, source and rule tests cover reusable rule editing, AND/OR, explicit
+  destinations, automatic/manual choices, multiple copied rules, cron validation,
+  lazy legacy conversion, stale drafts, keyboard saves and independent source
+  versus child conditions. Browser fixtures check source/task editing and readback
+  at desktop and 1024/736/375/320 px; page color tokens must stay unchanged.

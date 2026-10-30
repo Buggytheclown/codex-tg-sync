@@ -47,7 +47,13 @@ func (c *Checker) Check(ctx context.Context, p model.TaskPolling, now time.Time)
 	if err := Validate(p); err != nil {
 		return out, err
 	}
+	if p.Type == model.PollingRules {
+		return c.checkRules(ctx, p, now)
+	}
 	cfg, _ := DecodeConfig(p)
+	if p.Type == TypeChanges && slices.Contains(conditions(cfg), ConditionMergeChecks) {
+		cfg.CheckMergeFailures = true
+	}
 	out.NextCheckAt = timestamp(now.Add(time.Duration(cfg.IntervalSeconds) * time.Second))
 	switch p.Type {
 	case TypeCron:
@@ -137,6 +143,18 @@ func (c *Checker) Check(ctx context.Context, p model.TaskPolling, now time.Time)
 					continue
 				}
 			}
+			if p.Type == TypeChanges && len(cfg.ConditionGroups) > 0 {
+				facts := []string{}
+				if snapshot.CommonStatus == "waiting_for_changes" {
+					facts = append(facts, ConditionChanges)
+				}
+				if len(arcanumreview.FailedMergeChecks(snapshot.Checks)) > 0 {
+					facts = append(facts, ConditionMergeChecks)
+				}
+				if !groupsMatch(cfg.ConditionGroups, facts) {
+					continue
+				}
+			}
 			author := strings.TrimSpace(snapshot.Author.Name)
 			if author == "" {
 				author = pr.Author
@@ -159,7 +177,7 @@ func (c *Checker) Check(ctx context.Context, p model.TaskPolling, now time.Time)
 					baseline.Tracked = append(baseline.Tracked, comment.ID)
 				}
 			}
-			out.Events = append(out.Events, model.PollingEvent{Key: key, SourceKey: key, Title: pr.Summary, SourceURL: url, Cursor: jsonBytes(baseline), Payload: jsonBytes(map[string]string{"pr_id": id, "author": author, "head_commit": snapshot.HeadCommit, "common_status": snapshot.CommonStatus}), Variables: map[string]string{"pr_id": id, "pr_title": pr.Summary, "pr_url": url, "author": author, "login": cfg.Login}})
+			out.Events = append(out.Events, model.PollingEvent{Key: key, SourceKey: key, Title: pr.Summary, SourceURL: url, Cursor: seedChildRules(p.Action.ChildDefinition, cfg.Login, snapshot, baseline), Payload: jsonBytes(map[string]string{"pr_id": id, "author": author, "head_commit": snapshot.HeadCommit, "common_status": snapshot.CommonStatus}), Variables: map[string]string{"pr_id": id, "pr_title": pr.Summary, "pr_url": url, "author": author, "login": cfg.Login}})
 			if cfg.CheckMergeFailures {
 				event := &out.Events[len(out.Events)-1]
 				reasons := []string{}
@@ -187,11 +205,11 @@ func (c *Checker) Check(ctx context.Context, p model.TaskPolling, now time.Time)
 		if err != nil {
 			return out, err
 		}
-		if current.Status == "merged" {
+		if current.Status == "merged" && len(cfg.ConditionGroups) == 0 {
 			out.PRStatus = "merged"
 			return out, nil
 		}
-		if slices.Contains(cfg.Conditions, ConditionMergeChecks) {
+		if slices.Contains(conditions(cfg), ConditionMergeChecks) {
 			if err := c.readChecks(ctx, &current); err != nil {
 				return out, err
 			}
@@ -211,7 +229,7 @@ func (c *Checker) Check(ctx context.Context, p model.TaskPolling, now time.Time)
 			return out, nil
 		}
 		payload := jsonBytes(map[string]any{"pr_id": cfg.PRID, "author": current.Author.Name, "reasons": reasons, "head_commit": current.HeadCommit, "common_status": current.CommonStatus})
-		if slices.Contains(cfg.Conditions, ConditionMergeChecks) {
+		if slices.Contains(conditions(cfg), ConditionMergeChecks) {
 			payload = jsonBytes(map[string]any{"pr_id": cfg.PRID, "author": current.Author.Name, "reasons": reasons, "head_commit": current.HeadCommit, "published_diff_id": current.PublishedDiffID, "failed_checks": arcanumreview.FailedMergeChecks(current.Checks)})
 		}
 		hash := sha256.Sum256(append(append([]byte{}, payload...), out.Cursor...))
@@ -231,4 +249,44 @@ func (c *Checker) readChecks(ctx context.Context, snapshot *arcanumreview.PRSnap
 	}
 	snapshot.Checks = checks
 	return nil
+}
+
+func groupsMatch(groups [][]string, facts []string) bool {
+	for _, group := range groups {
+		ok := len(group) > 0
+		for _, term := range group {
+			ok = ok && slices.Contains(facts, term)
+		}
+		if ok {
+			return true
+		}
+	}
+	return false
+}
+
+func seedChildRules(child *model.TaskDefinition, login string, snapshot arcanumreview.PRSnapshot, baseline PRCursor) json.RawMessage {
+	if child == nil || child.Polling == nil || child.Polling.Type != model.PollingRules {
+		return jsonBytes(baseline)
+	}
+	var cfg model.PollingRulesConfig
+	_ = json.Unmarshal(child.Polling.Config, &cfg)
+	cursor := model.PollingRulesCursor{Rules: map[string]model.PollingRuleState{}}
+	for _, rule := range cfg.Rules {
+		if rule.Type != TypePRWait {
+			continue
+		}
+		leafCfg, err := DecodeConfig(rule.Polling(*child.Polling))
+		if err != nil {
+			continue
+		}
+		if leafCfg.PRID != "{{pr_id}}" && leafCfg.PRID != strconv.FormatInt(snapshot.ID, 10) {
+			continue
+		}
+		leafCfg.Login = login
+		accepted, _ := ComparePR(leafCfg, baseline, snapshot, 1)
+		seeded := baseline
+		seeded.Matches = accepted.Matches
+		cursor.Rules[rule.ID] = model.PollingRuleState{Cursor: jsonBytes(seeded)}
+	}
+	return jsonBytes(cursor)
 }

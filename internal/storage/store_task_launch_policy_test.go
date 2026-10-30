@@ -179,7 +179,7 @@ func TestImportedReviewDefaultsUpgradeOncePreservesCustomPolicyAndFrozenRequests
 	}
 }
 
-func TestBoardAutoContinuationRejected(t *testing.T) {
+func TestBoardAutoContinuationAllowed(t *testing.T) {
 	s := openTestStore(t)
 	ctx := context.Background()
 	_, out := makeTaskBoardSource(t, s, "")
@@ -193,7 +193,7 @@ func TestBoardAutoContinuationRejected(t *testing.T) {
 	request.TriggerEventID = "invalid"
 	request.AutoStart = true
 	request.TargetThreadID = "thread"
-	if _, err := s.EnqueueExternalLaunchRequests(ctx, request.Source, []model.ExternalLaunchRequest{request}); err == nil {
-		t.Fatal("automatic continuation accepted")
+	if _, err := s.EnqueueExternalLaunchRequests(ctx, request.Source, []model.ExternalLaunchRequest{request}); err != nil {
+		t.Fatal(err)
 	}
 }

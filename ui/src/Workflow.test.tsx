@@ -26,7 +26,7 @@ it('uses the configured PR target and saves config and waiting together before s
   fireEvent.change(screen.getByLabelText('Continuation prompt'), { target: { value: 'Follow up' } });
   fireEvent.click(screen.getByRole('button', { name: 'Save settings' }));
   await waitFor(() => expect(save).toHaveBeenCalledOnce());
-  expect(save.mock.calls[0][0]).toMatchObject({ expected_version: 1, polling: { config: { pr_id: '456' } }, config: { continuation_prompt: 'Follow up' } });
+  expect(save.mock.calls[0][0]).toMatchObject({ expected_version: 1, polling: { config: { rules: [{ config: { pr_id: '456' }, action: { prompt: 'Follow up', column: 'todo' } }] } } });
   expect(activate).not.toHaveBeenCalled();
   view.rerender(<WorkflowForm task={await save.mock.results[0].value} busy={false} onSave={save} onActivate={activate} onLink={vi.fn()} />);
   fireEvent.click(screen.getByRole('button', { name: 'Activate waiting' }));
@@ -43,9 +43,10 @@ it('requires chat for continuation, offers attachment outside the settings form 
   fireEvent.change(chat, { target: { value: 'chat' } });
   fireEvent.click(screen.getByRole('button', { name: 'Attach chat' }));
   await waitFor(() => expect(link).toHaveBeenCalledWith('chat', 1));
-  fireEvent.click(screen.getByRole('button', { name: 'Use Return to Inbox' }));
-  expect((screen.getByLabelText('Continuation prompt') as HTMLTextAreaElement).required).toBe(false);
-  expect(screen.getByText('After event: Inbox. No approval or model launch.')).toBeTruthy();
+  fireEvent.click(screen.getByRole('combobox', { name: 'After event' }));
+  fireEvent.click(screen.getByRole('option', { name: 'Move task · no model launch' }));
+  expect(screen.queryByText('Codex chat required')).toBeNull();
+  expect(screen.getByLabelText('Move to')).toBeTruthy();
 });
 it('retains and fences the workflow draft after external changes', async () => {
   const t = task({ polling: polling() }); const save = vi.fn();
@@ -65,7 +66,7 @@ it('saves an incomplete inactive continuation while activation stays blocked', a
   fireEvent.change(screen.getByLabelText('PR ID'), { target: { value: '789' } });
   fireEvent.click(screen.getByRole('button', { name: 'Save settings' }));
   await waitFor(() => expect(save).toHaveBeenCalledOnce());
-  expect(save.mock.calls[0][0]).toMatchObject({ polling: { config: { pr_id: '789' } }, config: { continuation_prompt: '' } });
+  expect(save.mock.calls[0][0]).toMatchObject({ polling: { config: { rules: [{ config: { pr_id: '789' }, action: { prompt: '' } }] } } });
   expect((screen.getByRole('button', { name: 'Activate waiting' }) as HTMLButtonElement).disabled).toBe(true);
 });
 it('preserves workflow drafts while attaching the required chat', async () => {
@@ -87,9 +88,10 @@ it('saves failed merge checks as an independent ANY condition', async () => {
   const t = task({ polling: polling() });
   const save = vi.fn(async input => ({ ...t, ...input, version: 2 }));
   render(<WorkflowForm task={t} busy={false} onSave={save} onActivate={vi.fn()} onLink={vi.fn()} />);
-  fireEvent.click(screen.getByLabelText('Required merge checks failed'));
+  fireEvent.click(screen.getByRole('button', { name: '+ OR event' }));
+  fireEvent.change(screen.getByLabelText('Event 3.1'), { target: { value: 'merge_checks_failed' } });
   fireEvent.click(screen.getByRole('button', { name: 'Save settings' }));
   await waitFor(() => expect(save).toHaveBeenCalledOnce());
-  expect(save.mock.calls[0][0].polling.config.conditions).toContain('merge_checks_failed');
-  expect(save.mock.calls[0][0].polling.config.complete_on_merge).toBe(t.polling?.config.complete_on_merge);
+  expect(save.mock.calls[0][0].polling.config.rules[0].config.condition_groups).toContainEqual(['merge_checks_failed']);
+  expect(save.mock.calls[0][0].polling.config.rules).toHaveLength(1);
 });

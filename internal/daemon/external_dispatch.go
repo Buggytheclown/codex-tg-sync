@@ -156,7 +156,7 @@ func (s *Service) dispatchExternalContinuationLocked(ctx context.Context, reques
 	threadID := strings.TrimSpace(request.TargetThreadID)
 	initialState, stateErr := s.store.GetSyncState(ctx)
 	if stateErr != nil || initialState.State != model.SyncStateActive || s.syncMutationErrorLocked(ctx) != nil {
-		_, _ = s.store.ResetExternalLaunchRequestPending(ctx, request.ID, "sync_inactive", "Sync is inactive; enable Sync and press Start again.")
+		_, _ = s.store.ResetExternalLaunchRequestPending(ctx, request.ID, "sync_inactive", continuationRetryText(request, "Sync is inactive; enable Sync and press Start again.", "Sync is inactive; the prompt will start automatically after Sync is enabled."))
 		return
 	}
 
@@ -164,13 +164,13 @@ func (s *Service) dispatchExternalContinuationLocked(ctx context.Context, reques
 		_, _ = s.store.CompleteExternalLaunchRequest(ctx, request.ID, model.ExternalLaunchFailed, "", "", kind, message)
 	}
 	busy := func() {
-		_, _ = s.store.ResetExternalLaunchRequestPending(ctx, request.ID, "thread_busy", "The target chat is busy; press Start again after its current turn completes.")
+		_, _ = s.store.ResetExternalLaunchRequestPending(ctx, request.ID, "thread_busy", continuationRetryText(request, "The target chat is busy; press Start again after its current turn completes.", "The target chat is busy; the prompt will start automatically when it is idle."))
 	}
 	s.mu.RLock()
 	poll, connected := s.poll, s.pollConnected
 	s.mu.RUnlock()
 	if poll == nil || !connected {
-		_, _ = s.store.ResetExternalLaunchRequestPending(ctx, request.ID, "appserver_unavailable", "App Server is unavailable; press Start after connectivity returns.")
+		_, _ = s.store.ResetExternalLaunchRequestPending(ctx, request.ID, "appserver_unavailable", continuationRetryText(request, "App Server is unavailable; press Start after connectivity returns.", "App Server is unavailable; the prompt will start automatically after connectivity returns."))
 		return
 	}
 	current, err := readAuthoritativeSyncSnapshot(ctx, poll, threadID)
@@ -302,4 +302,11 @@ func (s *Service) dispatchExternalContinuationLocked(ctx context.Context, reques
 	}
 	s.markSyncThreadDirty(threadID)
 	s.queueExternalReplyFromStoredSnapshot(ctx, threadID)
+}
+
+func continuationRetryText(r model.ExternalLaunchRequest, manual, auto string) string {
+	if r.AutoStart {
+		return auto
+	}
+	return manual
 }

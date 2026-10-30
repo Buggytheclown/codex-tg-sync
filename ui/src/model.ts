@@ -20,6 +20,8 @@ export type TaskConfig = {
   execution: ExecutionSettings;
 };
 export type PollConfig = {
+  rules?: PollingRule[];
+  condition_groups?: string[][];
   check_merge_failures?: boolean;
   login?: string;
   pr_id?: string;
@@ -32,7 +34,7 @@ export type PollConfig = {
   max_lateness?: string;
 };
 export type LaunchPolicy = {
-  mode: "manual" | "trusted_authors" | "auto";
+  mode: "manual" | "trusted_authors" | "auto" | "none";
   authors?: string[];
 };
 export type Polling = {
@@ -42,6 +44,9 @@ export type Polling = {
   config: PollConfig;
   action: {
     type: string;
+    column?: "inbox" | "todo" | "done";
+    prompt?: string;
+    auto_start?: boolean;
     child_definition?: Definition;
     initial_launch?: LaunchPolicy;
   };
@@ -52,6 +57,7 @@ export type Polling = {
   last_success_at?: string;
   last_error?: string;
 };
+export type PollingRule = Pick<Polling, "type" | "config" | "action"> & { id: string; title?: string };
 export type RequestInfo = {
   id: string;
   status: string;
@@ -196,6 +202,16 @@ export const executionLabel = (task: Pick<Task, "execution">): string => {
 };
 export function pollingProblem(p?: Polling, child = false): string {
   if (!p) return "Add a polling configuration before moving to Polling.";
+  if (p.type === "rules") {
+    if (!p.config.rules?.length) return "Add at least one rule.";
+    for (const rule of p.config.rules) {
+      const problem = pollingProblem({ ...rule, mode: "once" }, child);
+      if (problem) return problem;
+      if (rule.action.type === "resume_task" && rule.action.column !== "todo") return "Prompt actions must move the task to TODO.";
+      if (rule.action.type === "return_task" && !["inbox", "done"].includes(rule.action.column || "")) return "Choose Inbox or Done.";
+    }
+    return "";
+  }
   if (
     !["pr_review_source", "pr_changes_source", "pr_wait", "cron"].includes(
       p.type,
@@ -207,25 +223,26 @@ export function pollingProblem(p?: Polling, child = false): string {
     return "Choose an action.";
   if (
     child &&
-    (p.type !== "pr_wait" ||
+    (!["pr_wait", "cron"].includes(p.type) ||
       p.mode !== "once" ||
       !["return_task", "resume_task"].includes(p.action.type))
   )
     return "Child waiting settings must wait on one PR once.";
+  if (p.config.condition_groups && !p.config.condition_groups.length) return "Select at least one event.";
   if (p.config.check_merge_failures && p.type !== "pr_changes_source")
     return "Merge check discovery requires a PR feedback source.";
   if (p.action.type === "create_task") {
     const policy = p.action.initial_launch;
-    if (policy && !["manual", "trusted_authors", "auto"].includes(policy.mode))
+    if (policy && !["manual", "trusted_authors", "auto", "none"].includes(policy.mode))
       return "Choose an initial launch policy.";
     if (policy?.mode === "trusted_authors" && p.type === "cron")
       return "Trusted authors require a PR source.";
     const d = p.action.child_definition;
     if (!d?.title.trim()) return "Enter the title for created tasks.";
-    if (!d.config.initial_prompt.trim())
+    if (policy?.mode !== "none" && !d.config.initial_prompt.trim())
       return "Enter the prompt for created tasks.";
     if (d.polling) {
-      if (p.type === "cron") {
+      if (p.type === "cron" && d.polling.type === "pr_wait") {
         if (!/^[1-9]\d*$/.test(d.polling.config.pr_id || ""))
           return "Scheduled repeat work needs an explicit positive PR ID. Enter one or turn Repeat work off.";
         if (
@@ -235,6 +252,13 @@ export function pollingProblem(p?: Polling, child = false): string {
         )
           return "Scheduled repeat work cannot use PR placeholders for the author. Enter a real author (or leave it blank), or turn Repeat work off.";
       }
+      if (p.type === "cron" && d.polling.type === "rules") {
+        for (const rule of d.polling.config.rules || []) if (rule.type === "pr_wait") {
+          if (!/^[1-9]\d*$/.test(rule.config.pr_id || "")) return "Scheduled repeat work needs an explicit positive PR ID.";
+          if (/\{\{|\}\}/.test(rule.config.author || "")) return "Scheduled repeat work cannot use PR placeholders for the author.";
+        }
+      }
+      if (promptRules(d.polling).some(r => !r.action.prompt?.trim())) return "Enter a continuation prompt for repeat work.";
       const problem = pollingProblem(d.polling, true);
       if (problem) return problem;
       if (
@@ -247,8 +271,7 @@ export function pollingProblem(p?: Polling, child = false): string {
   if (p.type === "cron") {
     if (!p.config.cron?.trim() || !p.config.timezone?.trim())
       return "Enter a cron schedule and timezone.";
-    if (p.mode !== "repeat" || p.action.type !== "create_task")
-      return "Cron sources use Repeat and Create task.";
+    if (!((p.mode === "repeat" && p.action.type === "create_task") || (p.mode === "once" && ["return_task", "resume_task"].includes(p.action.type)))) return "Choose a valid scheduled action.";
   } else {
     if (
       !p.config.interval_seconds ||
@@ -268,7 +291,7 @@ export function pollingProblem(p?: Polling, child = false): string {
           !(child && p.config.pr_id === "{{pr_id}}"))
       )
         return "Enter the numeric PR ID.";
-      if (!p.config.conditions?.length) return "Select at least one condition.";
+      if (!(p.config.condition_groups?.length || p.config.conditions?.length)) return "Select at least one condition.";
     } else if (p.mode !== "repeat" || p.action.type !== "create_task")
       return "PR sources use Repeat and Create task.";
   }
@@ -324,3 +347,19 @@ export function parseThreadID(raw: string): string {
   } catch {}
   return "";
 }
+
+export function defaultRule(id = crypto.randomUUID()): PollingRule {
+  return { id, title: "", type: "pr_wait", config: { pr_id: "", interval_seconds: 60, condition_groups: [["request_changes"], ["merge_checks_failed"]] }, action: { type: "return_task", column: "inbox" } };
+}
+export function asRules(p: Polling, prompt = ""): Polling {
+  if (p.type === "rules") return p;
+  const { complete_on_merge, ...config } = p.config;
+  const rules: PollingRule[] = [{ id: "legacy-wait", type: p.type, config, action: { ...p.action, column: p.action.type === "resume_task" ? "todo" : "inbox", ...(p.action.type === "resume_task" ? { prompt: p.action.prompt ?? prompt } : {}) } }];
+  if (complete_on_merge && p.type === "pr_wait") rules.push({ id: "merged", title: "PR merged → Done", type: "pr_wait", config: { pr_id: p.config.pr_id, interval_seconds: p.config.interval_seconds || 60, condition_groups: [["pr_merged"]] }, action: { type: "return_task", column: "done" } });
+  return { type: "rules", mode: "once", config: { rules }, action: { type: "return_task" } };
+}
+export function promptRules(p?: Polling): PollingRule[] {
+  return p?.type === "rules" ? (p.config.rules || []).filter(r => r.action.type === "resume_task") : [];
+}
+
+export function newRules(): Polling { return { type: 'rules', mode: 'once', config: { rules: [defaultRule()] }, action: { type: 'return_task' } }; }

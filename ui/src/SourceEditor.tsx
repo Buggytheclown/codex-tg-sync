@@ -1,10 +1,12 @@
 import { useEffect, useRef, useState } from "react";
 import type { FormEvent } from "react";
 import type { Definition, Polling, Task } from "./model";
-import { defaultPolling, emptyConfig, pollingProblem } from "./model";
+import { defaultPolling, emptyConfig, pollingProblem, asRules } from "./model";
 import { ExecutionFields, Field, PollingFields } from "./forms";
 import { PollingDiagnostics } from "./PollingDiagnostics";
-import { WorkflowStep, MergeCompletion } from "./Workflow";
+import { WorkflowStep } from "./Workflow";
+import { PollingRules } from "./PollingRules";
+import { EventGroups } from "./EventGroups";
 
 function childWaiting(type: string): Polling {
   return {
@@ -13,7 +15,7 @@ function childWaiting(type: string): Polling {
       complete_on_merge: type !== "cron",
       pr_id: type === "cron" ? "" : "{{pr_id}}",
       author: type === "cron" ? "" : "{{author}}",
-      conditions: type === "pr_changes_source" ? ["all_resolved", "request_changes"] : ["new_commit", "all_answered"],
+      condition_groups: type === "pr_changes_source" ? [["all_resolved"], ["request_changes"]] : [["new_commit"], ["all_answered"]],
       interval_seconds: 60,
     },
     action: { type: "resume_task" },
@@ -36,7 +38,7 @@ export function SourceEditor({
   onToggle?: (enabled: boolean, version: number) => Promise<Task>;
 }) {
   const initial = task?.polling || defaultPolling("pr_review_source");
-  const [polling, setPolling] = useState(initial);
+  const [polling, setPolling] = useState<Polling>({ ...initial, action: { ...initial.action, column: initial.action.column || (initial.action.initial_launch?.mode === "none" ? "inbox" : "todo") } });
   const [definition, setDefinition] = useState<Definition>(
     initial.action.child_definition || {
       title: "",
@@ -51,8 +53,7 @@ export function SourceEditor({
     !!initial.action.child_definition?.polling,
   );
   const [waiting, setWaiting] = useState(
-    initial.action.child_definition?.polling ||
-      childWaiting(initial.type),
+    asRules(initial.action.child_definition?.polling || childWaiting(initial.type), initial.action.child_definition?.config.continuation_prompt || ""),
   );
   const [waitingConfigured, setWaitingConfigured] = useState(
     !!initial.action.child_definition?.polling,
@@ -80,6 +81,7 @@ export function SourceEditor({
       mode: "repeat",
       action: {
         type: "create_task",
+        column: polling.action.column || (polling.action.initial_launch?.mode === "none" ? "inbox" : "todo"),
         initial_launch:
           polling.action.initial_launch?.mode === "trusted_authors"
             ? {
@@ -147,7 +149,7 @@ export function SourceEditor({
           />
         </Field>
       )}
-      <WorkflowStep number={1} title="When">
+      <WorkflowStep number={1} title="Wait">
         {task ? (
           <div className="source-state">
             <span>
@@ -189,16 +191,19 @@ export function SourceEditor({
           </label>
         )}
         <p className="note">
-          Sources create tasks in Inbox. Initial launch follows this source’s
-          policy; continuations require Telegram Start.
+          The source keeps creating tasks. Initial launch follows this source’s
+          policy. Each child’s rules choose how to continue its chat.
         </p>
-        <PollingFields workflow value={polling} onChange={setPolling} sourceOnly />
+        <PollingFields value={polling} onChange={setPolling} />
+        {polling.type === "pr_changes_source" && <EventGroups allowed={{ request_changes: "Request changes", merge_checks_failed: "Required merge checks failed" }} config={{ ...polling.config, condition_groups: polling.config.condition_groups || (polling.config.check_merge_failures ? [["request_changes"], ["merge_checks_failed"]] : [["request_changes"]]) }} onChange={config => setPolling({ ...polling, config: { ...config, check_merge_failures: undefined } })} />}
+        {polling.type === "pr_review_source" && <p className="note">Event: assigned as reviewer.</p>}
+        {polling.type === "cron" && <p className="note">Event: scheduled time reached.</p>}
         {task && <details className="form-section"><summary>Polling status</summary><PollingDiagnostics task={task} /></details>}
         {!task && !enabled && (
           <p className="note">Starts paused. Enable it when ready.</p>
         )}
       </WorkflowStep>
-      <WorkflowStep number={2} title="Create task">
+      <WorkflowStep number={2} title="After event · create task">
         <p className="note">
           Changes apply to future tasks. Existing tasks keep their settings.
         </p>
@@ -226,7 +231,7 @@ export function SourceEditor({
         </Field>
         <Field label="Initial prompt">
           <textarea
-            required
+            required={polling.action.initial_launch?.mode !== "none"}
             rows={3}
             value={config.initial_prompt}
             onChange={(e) =>
@@ -249,8 +254,8 @@ export function SourceEditor({
         />
         </details>
         <Field
-          label="Initial launch"
-          hint="A Telegram request card appears before automatic start. This applies only to new tasks; continuations require Start."
+          label="After event"
+          hint="The source keeps discovering events. These actions apply to each new task."
         >
           <select
             value={polling.action.initial_launch?.mode || "manual"}
@@ -259,23 +264,26 @@ export function SourceEditor({
                 ...polling,
                 action: {
                   ...polling.action,
+                  column: e.target.value === "none" ? "inbox" : "todo",
                   initial_launch: {
-                    mode: e.target.value as "manual" | "trusted_authors" | "auto",
+                    mode: e.target.value as "manual" | "trusted_authors" | "auto" | "none",
                     authors: polling.action.initial_launch?.authors || [],
                   },
                 },
               })
             }
           >
-            <option value="manual">Manual · Telegram Start</option>
+            <option value="none">Move task · no model launch</option>
+            <option value="manual">TODO + prompt · Telegram approval</option>
             {polling.type !== "cron" && (
               <option value="trusted_authors">
                 Automatic · trusted PR authors
               </option>
             )}
-            <option value="auto">Automatic · every new task</option>
+            <option value="auto">TODO + prompt · automatic</option>
           </select>
         </Field>
+        {polling.action.initial_launch?.mode === "none" && <Field label="Move new task to"><select value={polling.action.column || "inbox"} onChange={e => setPolling({ ...polling, action: { ...polling.action, column: e.target.value as "inbox" | "done" } })}><option value="inbox">Inbox</option><option value="done">Done</option></select></Field>}
         {polling.action.initial_launch?.mode === "trusted_authors" && (
           <Field
             label="Trusted PR authors"
@@ -295,7 +303,7 @@ export function SourceEditor({
               setRepeat(e.target.checked);
               if (e.target.checked && !waitingConfigured) {
                 setWaiting(
-                  childWaiting(polling.type),
+                  asRules(childWaiting(polling.type), config.continuation_prompt),
                 );
                 setWaitingConfigured(true);
               }
@@ -312,32 +320,7 @@ export function SourceEditor({
                 ID. PR placeholders are unavailable.
               </p>
             )}
-            <PollingFields
-              child workflow
-              variables={polling.type !== "cron"}
-              value={waiting}
-              onChange={setWaiting}
-            />
-            <Field label="Action"><select value={waiting.action.type} onChange={e => setWaiting({ ...waiting, action: { ...waiting.action, type: e.target.value } })}>
-              <option value="return_task">Return to Inbox</option><option value="resume_task">Request continuation</option>
-            </select></Field>
-            <Field
-              label="Continuation prompt"
-              hint="One instruction for continuing the same chat when its waiting condition is met."
-            >
-              <textarea
-                required={waiting.action.type === "resume_task"}
-                rows={3}
-                value={config.continuation_prompt}
-                onChange={(e) =>
-                  setDefinition({
-                    ...definition,
-                    config: { ...config, continuation_prompt: e.target.value },
-                  })
-                }
-              />
-            </Field>
-            <MergeCompletion value={waiting} onChange={setWaiting} />
+            <PollingRules child variables={polling.type !== "cron"} value={waiting} onChange={setWaiting} />
             <p className="note">Copied. Activate manually later.</p>
           </WorkflowStep>
         )}
@@ -348,7 +331,7 @@ export function SourceEditor({
       )}
       {stale && <div className="readiness-banner"><p>This source changed. Your draft has been preserved.</p><button type="button" disabled={busyNow} onClick={() => {
         const latest = task!.polling!; const child = latest.action.child_definition!;
-        setPolling(latest); setBaseline(latest); setDefinition(child); setWaiting(child.polling || childWaiting(latest.type));
+        setPolling(latest); setBaseline(latest); setDefinition(child); setWaiting(asRules(child.polling || childWaiting(latest.type), child.config.continuation_prompt));
         setRepeat(!!child.polling); setWaitingConfigured(!!child.polling); setTrustedAuthors((latest.action.initial_launch?.authors || []).join(", ")); setVersion(task!.version); setMessage("");
       }}>Reload latest source</button></div>}
       <div className="source-footer workflow-footer"><p className="future-notice">Changes apply only to future tasks</p>

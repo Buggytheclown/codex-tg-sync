@@ -7,6 +7,7 @@ const (
 	TaskTODO          = "todo"
 	TaskPollingColumn = "polling"
 	TaskDone          = "done"
+	PollingRules      = "rules"
 	PollingOnce       = "once"
 	PollingRepeat     = "repeat"
 	PollingReturnTask = "return_task"
@@ -32,6 +33,9 @@ type TaskLaunchPolicy struct {
 	Authors []string `json:"authors,omitempty"`
 }
 type TaskPollingAction struct {
+	Column          string            `json:"column,omitempty"`
+	Prompt          string            `json:"prompt,omitempty"`
+	AutoStart       bool              `json:"auto_start,omitempty"`
 	InitialLaunch   *TaskLaunchPolicy `json:"initial_launch,omitempty"`
 	Type            string            `json:"type"`
 	ChildDefinition *TaskDefinition   `json:"child_definition,omitempty"`
@@ -142,6 +146,7 @@ type PollingEvent struct {
 	Variables   map[string]string `json:"variables"`
 }
 type TaskPollingOutcome struct {
+	RuleID      string
 	PRStatus    string
 	TaskID      string
 	Generation  int64
@@ -206,4 +211,29 @@ type SetTaskPriorityInput struct {
 type SetTaskTicketInput struct {
 	ExpectedVersion int64  `json:"expected_version"`
 	TicketURL       string `json:"ticket_url"`
+}
+
+// Rules share the task lifecycle; runtime stays in the owner cursor.
+type PollingRule struct {
+	ID     string            `json:"id"`
+	Title  string            `json:"title,omitempty"`
+	Type   string            `json:"type"`
+	Config json.RawMessage   `json:"config"`
+	Action TaskPollingAction `json:"action"`
+}
+type PollingRulesConfig struct {
+	Rules []PollingRule `json:"rules"`
+}
+type PollingRuleState struct {
+	Cursor      json.RawMessage `json:"cursor"`
+	NextCheckAt TimeString      `json:"next_check_at,omitempty"`
+}
+type PollingRulesCursor struct {
+	Generation int64                       `json:"owner_generation,omitempty"`
+	Rules      map[string]PollingRuleState `json:"rules"`
+}
+
+func (r PollingRule) Polling(owner TaskPolling) TaskPolling {
+	owner.Type, owner.Mode, owner.Config, owner.Action = r.Type, PollingOnce, r.Config, r.Action
+	return owner
 }

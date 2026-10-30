@@ -65,202 +65,27 @@ export function PromptFields({
     </>
   );
 }
-export const conditionLabels: Record<string, string> = {
-  new_commit: "Any new commit",
-  all_answered: "All tracked comments answered",
-  all_resolved: "All tracked issues resolved",
-  request_changes: "Transitions to request changes",
-  merge_checks_failed: "Required merge checks failed",
-};
-export function PollingFields({
-  value,
-  onChange,
-  child = false,
-  variables = true,
-  sourceOnly = false,
-  workflow = false,
-}: {
-  value: Polling;
-  onChange: (p: Polling) => void;
-  child?: boolean;
-  variables?: boolean;
-  sourceOnly?: boolean;
-  workflow?: boolean;
-}) {
-  const cfg = (key: string, v: unknown) =>
-    onChange({ ...value, config: { ...value.config, [key]: v } });
+export function PollingFields({ value, onChange }: { value: Polling; onChange: (p: Polling) => void }) {
+  const cfg = (key: string, v: unknown) => onChange({ ...value, config: { ...value.config, [key]: v } });
   const changeType = (type: string) => {
-    const p = defaultPolling(type);
-    onChange({
-      ...p,
-      config: p.config,
-      action: {
-        ...p.action,
-        child_definition: value.action.child_definition,
-        initial_launch:
-          type === "cron" &&
-          value.action.initial_launch?.mode === "trusted_authors"
-            ? { mode: "manual" }
-            : value.action.initial_launch,
-      },
-    });
+    const next = defaultPolling(type);
+    onChange({ ...next, action: {
+      ...next.action, column: value.action.column,
+      child_definition: value.action.child_definition,
+      initial_launch: type === "cron" && value.action.initial_launch?.mode === "trusted_authors"
+        ? { mode: "manual" } : value.action.initial_launch,
+    } });
   };
-  const source =
-    value.type === "pr_review_source" ||
-    value.type === "pr_changes_source" ||
-    value.type === "cron";
-  return (
-    <div className="polling-fields">
-      <Field label="Polling type" className="polling-type">
-        <select value={value.type} onChange={(e) => changeType(e.target.value)}>
-          {sourceOnly && (
-            <>
-              <option value="pr_review_source">PR review</option>
-              <option value="pr_changes_source">
-                PR feedback
-              </option>
-              <option value="cron">Cron schedule</option>
-            </>
-          )}
-          {!sourceOnly && <option value="pr_wait">Wait on one PR</option>}
-        </select>
-      </Field>
-      {value.type === "pr_changes_source" && <>
-        <label className="check-line"><input type="checkbox" checked={value.config.check_merge_failures === true}
-          onChange={e => cfg("check_merge_failures", e.target.checked)} />Also detect failed required merge checks</label>
-        <p className="note">Request changes or failed checks can create a task. Closed issues and Approved are excluded. Ask the task prompt to inspect feedback and merge checks.</p>
-      </>}
-      {value.type === "cron" ? (
-        <>
-          <Field
-            label="Cron schedule" className="polling-cron"
-            hint="Daily or one weekday (0–6), for example 0 9 * * 1."
-          >
-            <input
-              required
-              value={value.config.cron || ""}
-              onChange={(e) => cfg("cron", e.target.value)}
-              placeholder="0 9 * * 1"
-            />
-          </Field>
-          <Field label="Timezone" className="polling-timezone">
-            <input
-              required
-              value={value.config.timezone || ""}
-              onChange={(e) => cfg("timezone", e.target.value)}
-              placeholder="Europe/Paris"
-            />
-          </Field>
-          <Field
-            label="Maximum lateness" className="polling-lateness"
-            hint="Optional. Skip an occurrence older than this duration."
-          >
-            <input
-              value={value.config.max_lateness || ""}
-              onChange={(e) => cfg("max_lateness", e.target.value)}
-              placeholder="5m"
-            />
-          </Field>
-        </>
-      ) : (
-        <>
-          {value.type === "pr_wait" && (
-            <>
-              <div className="pr-id-row"><Field label="PR ID" hint={child && variables && value.config.pr_id === "{{pr_id}}" ? "From detected PR" : undefined}>
-                <input
-                  required
-                  inputMode={child && variables ? undefined : "numeric"}
-                  pattern={child ? undefined : "[1-9][0-9]*"}
-                  readOnly={child && variables && value.config.pr_id === "{{pr_id}}"}
-                  value={value.config.pr_id || ""}
-                  onChange={(e) => cfg("pr_id", e.target.value)}
-                  placeholder={child && variables ? "{{pr_id}}" : "12345678"}
-                />
-              </Field>
-              {workflow && !child && /^[1-9]\d*$/.test(value.config.pr_id || "") && <a className="pr-target-link" href={`https://a.yandex-team.ru/review/${value.config.pr_id}`} target="_blank" rel="noreferrer" aria-label={`#${value.config.pr_id} Open PR`}>#{value.config.pr_id} ↗ <span>Open PR</span></a>}
-              </div>
-              {<details className="polling-author"><summary>PR author (optional)</summary><Field
-                label="PR author"
-                hint="Optional; resolved from Arcanum when omitted."
-              >
-                <input
-                  value={value.config.author || ""}
-                  onChange={(e) => cfg("author", e.target.value)}
-                  placeholder={child && variables ? "{{author}}" : "author"}
-                />
-              </Field></details>}
-              {!workflow && <><label className="check-line">
-                <input
-                  type="checkbox"
-                  checked={value.config.complete_on_merge === true}
-                  onChange={(e) => cfg("complete_on_merge", e.target.checked)}
-                />
-                Move to Done when PR is merged
-              </label>
-              <p className="note">A merged PR completes this task without requesting a continuation.</p></>}
-              <fieldset className="conditions">
-                <legend>Conditions (ANY)</legend>
-                {Object.entries(conditionLabels).map(([key, label]) => (
-                  <label key={key}>
-                    <input
-                      type="checkbox"
-                      checked={value.config.conditions?.includes(key) || false}
-                      onChange={(e) =>
-                        cfg(
-                          "conditions",
-                          e.target.checked
-                            ? [...(value.config.conditions || []), key]
-                            : (value.config.conditions || []).filter(
-                                (v) => v !== key,
-                              ),
-                        )
-                      }
-                    />
-                    <span>{label}</span>
-                  </label>
-                ))}
-                <small>
-                  Any selected condition wakes this task. Empty issue sets do not count. Merge check failures exclude Closed issues and Approved.
-                </small>
-              </fieldset>
-            </>
-          )}
-          <Field label="Check every · seconds" className="polling-interval">
-            <input
-              type="number"
-              min="10"
-              max="86400"
-              required
-              value={value.config.interval_seconds || 60}
-              onChange={(e) => cfg("interval_seconds", Number(e.target.value))}
-            />
-          </Field>
-        </>
-      )}
-      {!sourceOnly && !workflow && (
-        <div>
-          <Field label="Action">
-            <select
-              value={value.action.type}
-              disabled={source}
-              onChange={(e) =>
-                onChange({ ...value, action: { type: e.target.value } })
-              }
-            >
-              <option value="return_task">Return to Inbox</option>
-              <option value="resume_task">Request continuation</option>
-            </select>
-          </Field>
-        </div>
-      )}
-      {child && variables && !workflow && (
-        <p className="note">
-          Copied to each child as inactive settings. Use {"{{pr_id}}"} and{" "}
-          {"{{author}}"} for values from the source event.
-        </p>
-      )}
-    </div>
-  );
+  return <div className="polling-fields">
+    <Field label="Polling type" className="polling-type"><select value={value.type} onChange={e => changeType(e.target.value)}>
+      <option value="pr_review_source">PR review</option><option value="pr_changes_source">PR feedback</option><option value="cron">Cron schedule</option>
+    </select></Field>
+    {value.type === "cron" ? <>
+      <Field label="Cron schedule" className="polling-cron" hint="Daily or one weekday (0–6), for example 0 9 * * 1."><input required value={value.config.cron || ""} onChange={e => cfg("cron", e.target.value)} placeholder="0 9 * * 1" /></Field>
+      <Field label="Timezone" className="polling-timezone"><input required value={value.config.timezone || ""} onChange={e => cfg("timezone", e.target.value)} placeholder="Europe/Paris" /></Field>
+      <Field label="Maximum lateness" className="polling-lateness" hint="Optional. Skip an occurrence older than this duration."><input value={value.config.max_lateness || ""} onChange={e => cfg("max_lateness", e.target.value)} placeholder="5m" /></Field>
+    </> : <Field label="Check every · seconds" className="polling-interval"><input type="number" min="10" max="86400" required value={value.config.interval_seconds || 60} onChange={e => cfg("interval_seconds", Number(e.target.value))} /></Field>}
+  </div>;
 }
 export function ExecutionFields({
   value,

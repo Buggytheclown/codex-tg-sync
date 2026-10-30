@@ -201,3 +201,43 @@ source edits affect future children. Standard bootstrap prompts mention merge
 checks, but saved custom prompts and existing tasks are not rewritten. The UI
 explains the exclusions and asks the operator to include check inspection in the
 prompt. No CI logs are collected by the poller.
+
+## Independent polling rules amendment
+
+Ordinary tasks now configure `type: rules`, with 1–20 named rules in config.
+Each leaf selects one PR or cron source, and an explicit action destination.
+PR event groups are ORs of AND terms evaluated against the same current snapshot;
+no term is latched across passes. A per-check PR cache makes same-PR rules see
+one snapshot and one published check response. Accepted fingerprints and existing
+head/reply/check baselines prevent unchanged evidence from firing after rearming.
+Legacy flat conditions retain their transition semantics until explicitly edited.
+
+The existing single task_polling row owns the entire list. Rule cursors and check
+deadlines are stored by stable rule ID in the owner cursor. No new SQL table,
+scheduler, event bus or launch queue is introduced. Done rules are checked first,
+then configured order; the first matching due rule supplies the one action.
+A failed read fails the pass without accepting partial cursors/events.
+
+Actions are Inbox/Done without launch, or TODO plus a same-chat continuation with
+Telegram Start or automatic start. All rules stop when that action leaves Polling;
+only explicit re-entry rearms them. PR merged → Done is a normal PR rule, replacing
+the special checkbox in the editor. No merge watcher survives a prompt rule.
+The accepted leaf is resolved from persisted settings under the generation fence.
+Cancel older definitely unstarted requests before inserting the new request, in
+the same transaction as the destination, event and cursor. TODO requests may be
+claimed; manual moves to TODO/Done still cancel definitely unstarted requests.
+Already started or ambiguous work is never interrupted or replayed.
+
+Automatic continuations use the existing queue and dispatcher, remain visible in
+Telegram before claim, preserve frozen execution settings, wait for an idle target
+and use only the attached chat. Source launch policies additionally support `none`;
+the explicit destination applies to the child, while the source keeps discovering.
+The source editor uses the same Wait/events/After structure and copies multiple
+inactive child rules. Existing trusted-author policies remain supported.
+
+Upgrade is lazy and non-destructive: legacy active waits remain runnable; opening
+the editor projects their merge choice into a separate rule, and saving converts
+the definition. `legacy-wait` retains the old accepted cursor for the same PR.
+Stable rule IDs retain matching identity state across edits; changed identities
+reset only that rule. Copied source evidence seeds matching child-rule cursors,
+including the accepted fingerprint. Frozen launch requests are never rewritten.

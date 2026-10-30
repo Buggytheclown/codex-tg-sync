@@ -21,6 +21,17 @@ func validateChildDefinition(d model.TaskDefinition) error {
 		if err := validatePolling(*d.Polling); err != nil {
 			return err
 		}
+		if d.Polling.Type == model.PollingRules {
+			var cfg model.PollingRulesConfig
+			if err := json.Unmarshal(d.Polling.Config, &cfg); err != nil {
+				return err
+			}
+			for _, r := range cfg.Rules {
+				if r.Action.Type == model.PollingResumeTask && strings.TrimSpace(r.Action.Prompt) == "" {
+					return fmt.Errorf("%w: child continuation rule requires a prompt", ErrTaskInvalid)
+				}
+			}
+		}
 		if d.Polling.Action.Type == model.PollingResumeTask && strings.TrimSpace(d.Config.ContinuationPrompt) == "" {
 			return fmt.Errorf("%w: child resume waiting requires continuation prompt", ErrTaskInvalid)
 		}
@@ -107,7 +118,22 @@ func taskFromDefinition(def model.TaskDefinition, sourceID string, event model.P
 		p.Generation = 1
 		p.Cursor = json.RawMessage(`{}`)
 		if len(event.Cursor) > 0 {
-			p.Cursor = event.Cursor
+			var ruleCursor model.PollingRulesCursor
+			if p.Type == model.PollingRules && json.Unmarshal(event.Cursor, &ruleCursor) == nil && ruleCursor.Rules != nil {
+				p.Cursor = event.Cursor
+			} else if p.Type == model.PollingRules {
+				var cfg model.PollingRulesConfig
+				_ = json.Unmarshal(p.Config, &cfg)
+				state := model.PollingRulesCursor{Rules: map[string]model.PollingRuleState{}}
+				for _, r := range cfg.Rules {
+					if r.Type == "pr_wait" {
+						state.Rules[r.ID] = model.PollingRuleState{Cursor: event.Cursor}
+					}
+				}
+				p.Cursor, _ = json.Marshal(state)
+			} else {
+				p.Cursor = event.Cursor
+			}
 		}
 		var err error
 		p.Config, err = renderTaskJSON(p.Config, event.Variables)

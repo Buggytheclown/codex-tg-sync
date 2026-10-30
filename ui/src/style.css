@@ -516,3 +516,23 @@ small { font-size: 12px; line-height: 1.6; color: var(--muted); }
 .done-drop-icon { font-size: 20px; color: var(--blue); line-height: 1; }
 .done-drop-target small { font-size: 10px; line-height: 1.3; color: var(--muted); }
 .done-drop-target.drop-active { background: var(--blue-soft); border-style: solid; }
+
+/* Rule cards reuse the board's existing colors and controls. */
+.polling-rules { display: grid; gap: 14px; min-width: 0; }
+.polling-rule > summary { display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: center; }
+.polling-rule .section-content { display: grid; gap: 14px; }
+.rule-heading { display: flex; align-items: center; gap: 10px; }
+.rule-heading .field { flex: 1; min-width: 0; }
+.rule-after { border-top: 1px solid var(--border); padding-top: 14px; display: grid; gap: 10px; }
+.event-groups, .event-terms { display: grid; gap: 8px; min-width: 0; }
+.event-term { display: flex; gap: 8px; align-items: center; min-width: 0; }
+.event-term select { flex: 1; min-width: 0; }
+.event-operator { font-size: 11px; font-weight: 700; opacity: .65; }
+.event-group { display: grid; gap: 6px; }
+.polling-rule .chip-select { max-width: 100%; }
+.polling-rule .chip-select-trigger { max-width: 100%; text-align: left; white-space: normal; }
+.polling-rule h4 { margin: 0; }
+.polling-rules > .polling-rule { margin: 0; }
+.event-term select { border: 1px solid var(--border); border-radius: var(--radius); padding: 8px; min-height: 36px; font: inherit; color: var(--text); background: transparent; }
+.event-terms > button { justify-self: start; }
+.event-groups > button { justify-self: start; }

@@ -20,8 +20,8 @@ func externalSourceCursorKey(source string) string {
 
 func validateExternalLaunchRequest(request model.ExternalLaunchRequest, source string) error {
 	if request.TaskID != "" || request.Source == "task_board" {
-		if request.TaskID == "" || request.TriggerEventID == "" || (request.AutoStart && request.TargetThreadID != "") || request.ApprovalPolicy == nil || request.ApprovalsReviewer == nil || request.SandboxMode == nil || *request.ApprovalPolicy == "" || *request.ApprovalsReviewer == "" || *request.SandboxMode == "" {
-			return errors.New("board launch requires task/event linkage, manual continuations and explicit frozen permissions")
+		if request.TaskID == "" || request.TriggerEventID == "" || request.ApprovalPolicy == nil || request.ApprovalsReviewer == nil || request.SandboxMode == nil || *request.ApprovalPolicy == "" || *request.ApprovalsReviewer == "" || *request.SandboxMode == "" {
+			return errors.New("board launch requires task/event linkage, explicit frozen permissions")
 		}
 	}
 
@@ -296,7 +296,7 @@ func (s *Store) RetryExternalLaunchRequest(ctx context.Context, id string) (bool
 	SET status=?, thread_id=NULL, turn_id=NULL, error_type=NULL, error_summary=NULL,
 		reply_status=NULL, reply_text=NULL, reply_message_id=0, reply_attempts=0,
 		reply_available_at=NULL, reply_error=NULL, updated_at=?
-	WHERE id=? AND status=? AND (task_id IS NULL OR EXISTS (SELECT 1 FROM tasks WHERE tasks.id=task_id AND tasks.column IN ('inbox','polling')))`, model.ExternalLaunchStarting, model.NowString(), id, model.ExternalLaunchFailed)
+	WHERE id=? AND status=? AND (task_id IS NULL OR EXISTS (SELECT 1 FROM tasks WHERE tasks.id=task_id AND tasks.column IN ('inbox','polling','todo')))`, model.ExternalLaunchStarting, model.NowString(), id, model.ExternalLaunchFailed)
 	if err != nil {
 		return false, err
 	}
@@ -339,7 +339,7 @@ func (s *Store) ResolveExternalLaunchOutcome(ctx context.Context, id, threadID, 
 }
 
 func (s *Store) transitionExternalLaunchRequest(ctx context.Context, id, from, to string) (bool, error) {
-	result, err := s.db.ExecContext(ctx, `UPDATE external_launch_requests SET status=?, updated_at=? WHERE id=? AND status=? AND (task_id IS NULL OR EXISTS (SELECT 1 FROM tasks WHERE tasks.id=task_id AND tasks.column IN ('inbox','polling')))`,
+	result, err := s.db.ExecContext(ctx, `UPDATE external_launch_requests SET status=?, updated_at=? WHERE id=? AND status=? AND (task_id IS NULL OR EXISTS (SELECT 1 FROM tasks WHERE tasks.id=task_id AND tasks.column IN ('inbox','polling','todo')))`,
 		to, model.NowString(), id, from)
 	if err != nil {
 		return false, err
