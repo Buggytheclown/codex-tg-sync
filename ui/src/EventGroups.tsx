@@ -1,6 +1,6 @@
 import type { Polling } from './model';
-const events = { new_commit: 'Any new commit', all_answered: 'All tracked comments answered', all_resolved: 'All tracked issues resolved', request_changes: 'Request changes', merge_checks_failed: 'Required merge checks failed', pr_merged: 'PR merged' };
-export function EventGroups({ config, onChange, allowed = events }: { config: Polling['config']; onChange: (config: Polling['config']) => void; allowed?: Record<string, string> }) {
+export const eventLabels: Record<string, string> = { new_commit: 'Any new commit', all_answered: 'All tracked comments answered', all_resolved: 'All tracked issues resolved', request_changes: 'Request changes', merge_checks_failed: 'Required merge checks failed', pr_merged: 'PR merged' };
+export function EventGroups({ config, onChange, allowed = eventLabels }: { config: Polling['config']; onChange: (config: Polling['config']) => void; allowed?: Record<string, string> }) {
   const groups = config.condition_groups || (config.conditions || []).map(c => [c]);
   const update = (next: string[][]) => onChange({ ...config, conditions: undefined, condition_groups: next });
   const first = Object.keys(allowed)[0];

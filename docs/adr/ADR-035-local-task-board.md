@@ -241,3 +241,20 @@ the definition. `legacy-wait` retains the old accepted cursor for the same PR.
 Stable rule IDs retain matching identity state across edits; changed identities
 reset only that rule. Copied source evidence seeds matching child-rule cursors,
 including the accepted fingerprint. Frozen launch requests are never rewritten.
+
+## Compact rule cards amendment
+
+Ordinary and copied child rules use compact When/Then cards. The source chip
+opens PR identity/check frequency or cron settings. Event groups keep AND within
+and OR between groups, with editing available from the displayed expression.
+Then has two separate blocks: destination status, followed by launch mode and
+its prompt. Prompt text belongs to that launch block; it has no separate card
+control. Detailed fields, rule naming/removal and diagnostics open on demand.
+
+The editor maps these two blocks to the existing action contract: TODO requires
+manual or automatic continuation; Inbox/Done means no launch. Choosing a prompt
+sets TODO, and choosing no launch from TODO sets Inbox. Switching modes retains
+the draft prompt, while stale-version and explicit save/activation guards remain.
+Panel Escape restores focus to its trigger and leaves the task selected; an open
+chip menu consumes its own Escape first. Colors, server configuration, polling
+execution and frozen requests are unchanged.

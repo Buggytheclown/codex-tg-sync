@@ -376,3 +376,18 @@ For live Telegram QA, verify:
   lazy legacy conversion, stale drafts, keyboard saves and independent source
   versus child conditions. Browser fixtures check source/task editing and readback
   at desktop and 1024/736/375/320 px; page color tokens must stay unchanged.
+
+## Compact polling cards
+
+- `ui/src/PollingRules.test.tsx`: closed When/Then summaries; source frequency and
+  prompt settings in separate disclosures; destination/launch invariants; prompt
+  retention across mode switches; AND/OR editing; cron add/remove; source-child
+  placeholders; local Escape and focus restoration.
+- Workflow/App integration retains atomic saves, guarded activation, native
+  keyboard validation, task selection, version conflicts and source-child copies
+  through the new disclosure controls.
+- Browser fixtures check PR/cron source settings, status and launch menus,
+  same-form save/readback, nested Escape, source-child copying, error/conflict
+  drafts and 1024/736/375/320 px wrapping. OR stays with the following group.
+  Install the checked UI assets and verify exact live asset readback; no daemon
+  restart is needed for this presentation-only change.

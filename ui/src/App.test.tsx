@@ -504,13 +504,15 @@ it("retains unsaved Polling settings and its tab when reopening the dismissed ca
   render(<App />);
   await screen.findByLabelText("Title");
   fireEvent.click(screen.getByRole("tab", { name: "Polling" }));
-  const prID = screen.getByLabelText("PR ID");
+  const prID = ruleSource();
   fireEvent.change(prID, { target: { value: "456" } });
   fireEvent.keyDown(prID, { key: "Escape" });
+  expect(screen.queryByLabelText("PR ID")).toBeNull();
+  fireEvent.keyDown(screen.getAllByRole("button", { name: "Rule source" })[0], { key: "Escape" });
   await screen.findByText("Select a card to see its details.");
   fireEvent.click(screen.getByRole("button", { name: /CHAT Review the next revision/ }));
   await screen.findByRole("tab", { name: "Polling", selected: true });
-  expect((screen.getByLabelText("PR ID") as HTMLInputElement).value).toBe("456");
+  expect((ruleSource() as HTMLInputElement).value).toBe("456");
   expect(calls.every(call => call.method === "GET")).toBe(true);
 });
 it("keeps failed Overview drafts reachable after dismissal", async () => {
@@ -844,7 +846,7 @@ it("keeps Overview a native editable brief while polling diagnostics and frozen 
   expect(detail.getByRole("link", { name: /Open source/ }).getAttribute("href")).toBe("https://example.com/source");
   expect(detail.getByRole("link", { name: "Created by source" }).getAttribute("href")).toBe("?task=source-1");
   fireEvent.click(detail.getByRole("tab", { name: "Polling" }));
-  expect(detail.getByLabelText("PR ID")).toBeTruthy();
+  expect(ruleSource()).toBeTruthy();
   expect(detail.getByText("Last attempt")).toBeTruthy();
   expect(detail.queryByLabelText("Move to Done when PR is merged")).toBeNull();
   fireEvent.click(detail.getByRole("tab", { name: "History" }));
@@ -1260,7 +1262,7 @@ it("copies optional waiting defaults inactive with one continuation instruction"
   const save = vi.fn(async (polling: Polling, _enabled: boolean, version: number) => makeTask({ polling, version: version + 1 }));
   render(<SourceEditor task={sourceTask()} busy={false} onSave={save} />);
   fireEvent.click(screen.getByLabelText("Waiting settings for new tasks"));
-  fireEvent.change(screen.getByLabelText("Continuation prompt"), {
+  fireEvent.change(rulePrompt(), {
     target: { value: "Review the new revision" },
   });
   fireEvent.click(screen.getByRole("button", { name: "Save source" }));
@@ -1297,11 +1299,11 @@ it("preserves a PR waiting draft when switching to cron and requires explicit PR
   fireEvent.click(screen.getByRole("button", { name: "Save source" }));
   expect(await screen.findByText(/explicit positive PR ID/)).toBeTruthy();
   expect(save).not.toHaveBeenCalled();
-  expect((screen.getByLabelText("PR ID") as HTMLInputElement).value).toBe(
+  expect((ruleSource() as HTMLInputElement).value).toBe(
     "{{pr_id}}",
   );
 
-  fireEvent.change(screen.getByLabelText("PR ID"), {
+  fireEvent.change(ruleSource(), {
     target: { value: "123" },
   });
   fireEvent.click(screen.getByRole("button", { name: "Save source" }));
@@ -1327,7 +1329,7 @@ it("starts a new cron waiting definition with blank PR ID and author", async () 
     target: { value: "cron" },
   });
   fireEvent.click(screen.getByLabelText("Waiting settings for new tasks"));
-  expect((screen.getByLabelText("PR ID") as HTMLInputElement).value).toBe("");
+  expect((ruleSource() as HTMLInputElement).value).toBe("");
   expect((screen.getByLabelText("PR author") as HTMLInputElement).value).toBe(
     "",
   );
@@ -1461,7 +1463,7 @@ it("edits overview text preserving execution/source and exposes History", async 
   expect(screen.getByLabelText("Source URL")).toBeTruthy();
   expect(screen.getByLabelText("Initial prompt")).toBeTruthy();
   expect(screen.queryByLabelText("Title")).toBeNull();
-  fireEvent.change(screen.getByLabelText("PR ID"), { target: { value: "123" } });
+  fireEvent.change(ruleSource(), { target: { value: "123" } });
   fireEvent.change(screen.getByLabelText("Initial prompt"), { target: { value: "Changed prompt" } });
   await waitFor(() => expect((screen.getByRole("button", { name: "Save settings" }) as HTMLButtonElement).disabled).toBe(false));
   await waitFor(() => expect(screen.queryByRole("button", { name: "Reload latest settings" })).toBeNull());
@@ -1473,7 +1475,7 @@ it("edits overview text preserving execution/source and exposes History", async 
   fireEvent.click(screen.getByRole("button", { name: "Save settings" }));
   await waitFor(() => expect(rows[0].polling?.config.rules?.[0].config.pr_id).toBe("123"));
   fireEvent.change(screen.getByLabelText("Initial prompt"), { target: { value: "Another draft" } });
-  fireEvent.change(screen.getByLabelText("PR ID"), { target: { value: "456" } });
+  fireEvent.change(ruleSource(), { target: { value: "456" } });
   await waitFor(() => expect((screen.getByRole("button", { name: "Save settings" }) as HTMLButtonElement).disabled).toBe(false));
   await waitFor(() => expect(screen.queryByRole("button", { name: "Reload latest settings" })).toBeNull());
   fireEvent.click(screen.getByRole("button", { name: "Save settings" }));
@@ -1534,14 +1536,14 @@ it("does not bless a concurrent unified workflow save reply", async () => {
   const concurrent = { ...t, version: 3, polling: { ...initial, config: { ...initial.config, pr_id: "44" } } };
   const save = vi.fn(async () => concurrent);
   const { rerender } = render(<WorkflowForm task={t} busy={false} onSave={save} onActivate={vi.fn()} onLink={vi.fn()} />);
-  fireEvent.change(screen.getByLabelText("PR ID"), { target: { value: "43" } });
+  fireEvent.change(ruleSource(), { target: { value: "43" } });
   fireEvent.click(screen.getByRole("button", { name: "Save settings" }));
   await waitFor(() => expect(save).toHaveBeenCalledTimes(1));
   rerender(<WorkflowForm task={concurrent} busy={false} onSave={save} onActivate={vi.fn()} onLink={vi.fn()} />);
   await screen.findByRole("button", { name: "Reload latest settings" });
   fireEvent.click(screen.getByRole("button", { name: "Save settings" }));
   expect(save).toHaveBeenCalledTimes(1);
-  expect((screen.getByLabelText("PR ID") as HTMLInputElement).value).toBe("43");
+  expect((ruleSource() as HTMLInputElement).value).toBe("43");
 });
 it("saves header priority with Cmd+Enter and links an existing chat from its card", async () => {
   rows = [makeTask({ thread_id: "", priority: "normal" })];
@@ -1589,13 +1591,13 @@ it("Cmd+Enter saves the focused polling section and respects native validation",
   expect(calls.filter(c => c.method === "PUT")).toHaveLength(0);
   await waitFor(() => expect((screen.getByRole("button", { name: "Save settings" }) as HTMLButtonElement).disabled).toBe(false));
   fireEvent.click(screen.getByRole("button", { name: "Configure waiting" }));
-  fireEvent.change(screen.getByLabelText("PR ID"), { target: { value: "43" } });
+  fireEvent.change(ruleSource(), { target: { value: "43" } });
   expect(screen.queryByLabelText("Your Arcanum login")).toBeNull();
-  fireEvent.keyDown(screen.getByLabelText("PR ID"), { key: "Enter", metaKey: true });
+  fireEvent.keyDown(ruleSource(), { key: "Enter", metaKey: true });
   await waitFor(() => expect(rows[0].polling?.config.rules?.[0].config.pr_id).toBe("43"));
   expect(rows[0].polling?.type).toBe("rules");
   await waitFor(() => expect((screen.getByRole("button", { name: "Save settings" }) as HTMLButtonElement).disabled).toBe(false));
-  fireEvent.keyDown(screen.getByLabelText("PR ID"), { key: "Enter", metaKey: true });
+  fireEvent.keyDown(ruleSource(), { key: "Enter", metaKey: true });
   await waitFor(() => expect(rows[0].polling?.config.rules?.[0].config.pr_id).toBe("43"));
 });
 it("preserves new overview typing during an ordinary save and saves sources with Cmd+Enter", async () => {
@@ -1854,13 +1856,14 @@ it("adds a merged Done rule and preserves its conflicting draft", async () => {
   const save = vi.fn(async input => ({ ...t, ...input, version: 2 }));
   const view = render(<WorkflowForm task={t} busy={false} onSave={save} onActivate={vi.fn()} onLink={vi.fn()} />);
   fireEvent.click(screen.getByRole('button', { name: '+ Add rule' }));
-  const ids = screen.getAllByLabelText('PR ID');
-  fireEvent.change(ids[1], { target: { value: '123' } });
+  fireEvent.change(ruleSource(1), { target: { value: '123' } });
   const cards = document.querySelectorAll('.polling-rule');
   const card = within(cards[1] as HTMLElement);
+  fireEvent.click(card.getAllByRole('button', { name: 'Rule events' })[0]);
   fireEvent.change(card.getByLabelText('Event 1.1'), { target: { value: 'pr_merged' } });
   fireEvent.click(card.getByRole('button', { name: 'Remove event 2.1' }));
-  fireEvent.change(card.getByLabelText('Move to'), { target: { value: 'done' } });
+  fireEvent.click(card.getByRole('combobox', { name: 'After-event status' }));
+  fireEvent.click(screen.getByRole('option', { name: 'Done' }));
   fireEvent.click(screen.getByRole('button', { name: 'Save settings' }));
   await waitFor(() => expect(save).toHaveBeenCalledOnce());
   expect(save.mock.calls[0][0].polling.config.rules[1]).toMatchObject({ config: { condition_groups: [['pr_merged']] }, action: { type: 'return_task', column: 'done' } });
@@ -1876,7 +1879,7 @@ it.each(['pr_review_source', 'pr_changes_source', 'cron'])('copies independent c
   const save = vi.fn(async (polling: Polling) => makeTask({ polling, version: 4 }));
   render(<SourceEditor task={task} busy={false} onSave={save} />);
   fireEvent.click(screen.getByLabelText('Waiting settings for new tasks'));
-  if (type === 'cron') fireEvent.change(screen.getByLabelText('PR ID'), { target: { value: '123' } });
+  if (type === 'cron') fireEvent.change(ruleSource(), { target: { value: '123' } });
   fireEvent.click(screen.getByRole('button', { name: 'Save source' }));
   await waitFor(() => expect(save).toHaveBeenCalledOnce());
   const waiting = save.mock.calls[0][0].action.child_definition!.polling!;
@@ -1907,8 +1910,8 @@ it('copies PR feedback waiting defaults with an editable detected PR placeholder
   const save = vi.fn(async (polling: Polling, _enabled: boolean, version: number) => makeTask({ polling, version: version + 1 }));
   render(<SourceEditor task={t} busy={false} onSave={save} />);
   fireEvent.click(screen.getByLabelText('Waiting settings for new tasks'));
-  fireEvent.change(screen.getByLabelText('Continuation prompt'), { target: { value: 'Follow up' } });
-  const id = screen.getAllByLabelText('PR ID')[0] as HTMLInputElement;
+  fireEvent.change(rulePrompt(), { target: { value: 'Follow up' } });
+  const id = ruleSource() as HTMLInputElement;
   expect(id.value).toBe('{{pr_id}}'); expect(id.readOnly).toBe(false);
   expect(screen.queryByRole('link', { name: /Open PR/ })).toBeNull();
   fireEvent.click(screen.getByRole('button', { name: 'Save source' }));
@@ -1947,12 +1950,24 @@ it("keeps feedback discovery and child event expressions independent", async () 
   fireEvent.change(screen.getByLabelText('Event 2.1'), { target: { value: 'merge_checks_failed' } });
   fireEvent.click(screen.getByLabelText('Waiting settings for new tasks'));
   const card = within(document.querySelector('.polling-rule') as HTMLElement);
+  fireEvent.click(card.getAllByRole('button', { name: 'Rule events' })[0]);
   fireEvent.click(card.getByRole('button', { name: '+ OR event' }));
   fireEvent.change(card.getByLabelText('Event 3.1'), { target: { value: 'merge_checks_failed' } });
-  fireEvent.change(screen.getByLabelText('Continuation prompt'), { target: { value: 'Inspect PR feedback and merge checks' } });
+  fireEvent.change(rulePrompt(), { target: { value: 'Inspect PR feedback and merge checks' } });
   fireEvent.click(screen.getByRole('button', { name: 'Save source' }));
   await waitFor(() => expect(save).toHaveBeenCalledOnce());
   expect(save.mock.calls[0][0].config.condition_groups).toEqual([['request_changes'], ['merge_checks_failed']]);
   expect(save.mock.calls[0][0].action.child_definition?.polling?.config.rules?.[0].config.condition_groups).toContainEqual(['merge_checks_failed']);
   expect(original.polling.config.check_merge_failures).toBeUndefined();
 });
+
+function ruleSource(index=0) {
+ const trigger=screen.getAllByRole('button',{name:'Rule source'})[index];
+ if(trigger.getAttribute('aria-expanded')!=='true')fireEvent.click(trigger);
+ return within(trigger.closest('.polling-rule') as HTMLElement).getByLabelText('PR ID');
+}
+function rulePrompt(index=0) {
+ const trigger=screen.getAllByRole('button',{name:'Prompt action'})[index];
+ if(trigger.getAttribute('aria-expanded')!=='true')fireEvent.click(trigger);
+ return within(trigger.closest('.polling-rule') as HTMLElement).getByLabelText('Continuation prompt');
+}

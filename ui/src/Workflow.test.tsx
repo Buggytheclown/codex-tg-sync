@@ -21,9 +21,9 @@ it('uses the configured PR target and saves config and waiting together before s
   const t = task({ thread_id: 'chat', config: { ...emptyConfig(), continuation_prompt: 'Continue' }, polling: polling() });
   const save = vi.fn(async (input) => ({ ...t, ...input, version: 2 })); const activate = vi.fn(async (saved) => ({ ...saved, version: 3, column: 'polling' as const }));
   const view = render(<WorkflowForm task={t} busy={false} onSave={save} onActivate={activate} onLink={vi.fn()} />);
-  fireEvent.change(screen.getByLabelText('PR ID'), { target: { value: '456' } });
+  fireEvent.change(ruleSource(), { target: { value: '456' } });
   expect(screen.getByRole('link', { name: '#456 Open PR' }).getAttribute('href')).toBe('https://a.yandex-team.ru/review/456');
-  fireEvent.change(screen.getByLabelText('Continuation prompt'), { target: { value: 'Follow up' } });
+  fireEvent.change(rulePrompt(), { target: { value: 'Follow up' } });
   fireEvent.click(screen.getByRole('button', { name: 'Save settings' }));
   await waitFor(() => expect(save).toHaveBeenCalledOnce());
   expect(save.mock.calls[0][0]).toMatchObject({ expected_version: 1, polling: { config: { rules: [{ config: { pr_id: '456' }, action: { prompt: 'Follow up', column: 'todo' } }] } } });
@@ -43,27 +43,28 @@ it('requires chat for continuation, offers attachment outside the settings form 
   fireEvent.change(chat, { target: { value: 'chat' } });
   fireEvent.click(screen.getByRole('button', { name: 'Attach chat' }));
   await waitFor(() => expect(link).toHaveBeenCalledWith('chat', 1));
-  fireEvent.click(screen.getByRole('combobox', { name: 'After event' }));
-  fireEvent.click(screen.getByRole('option', { name: 'Move task · no model launch' }));
+  rulePrompt();
+  fireEvent.click(screen.getByRole('combobox', { name: 'Prompt launch' }));
+  fireEvent.click(screen.getByRole('option', { name: 'No launch' }));
   expect(screen.queryByText('Codex chat required')).toBeNull();
-  expect(screen.getByLabelText('Move to')).toBeTruthy();
+  expect(screen.getByRole('combobox', { name: 'After-event status' }).textContent).toContain('Inbox');
 });
 it('retains and fences the workflow draft after external changes', async () => {
   const t = task({ polling: polling() }); const save = vi.fn();
   const view = render(<WorkflowForm task={t} busy={false} onSave={save} onActivate={vi.fn()} onLink={vi.fn()} />);
-  fireEvent.change(screen.getByLabelText('PR ID'), { target: { value: '456' } });
+  fireEvent.change(ruleSource(), { target: { value: '456' } });
   view.rerender(<WorkflowForm task={{ ...t, version: 2, config: { ...t.config, initial_prompt: 'External' } }} busy={false} onSave={save} onActivate={vi.fn()} onLink={vi.fn()} />);
   fireEvent.click(screen.getByRole('button', { name: 'Save settings' }));
   expect(save).not.toHaveBeenCalled();
-  expect((screen.getByLabelText('PR ID') as HTMLInputElement).value).toBe('456');
+  expect((ruleSource() as HTMLInputElement).value).toBe('456');
   fireEvent.click(screen.getByRole('button', { name: 'Reload latest settings' }));
-  expect((screen.getByLabelText('PR ID') as HTMLInputElement).value).toBe('123');
+  expect((ruleSource() as HTMLInputElement).value).toBe('123');
 });
 it('saves an incomplete inactive continuation while activation stays blocked', async () => {
   const t = task({ polling: polling() }); const save = vi.fn(async (input) => ({ ...t, ...input, version: 2 }));
   render(<WorkflowForm task={t} busy={false} onSave={save} onActivate={vi.fn()} onLink={vi.fn()} />);
-  expect((screen.getByLabelText('Continuation prompt') as HTMLTextAreaElement).required).toBe(false);
-  fireEvent.change(screen.getByLabelText('PR ID'), { target: { value: '789' } });
+  expect((rulePrompt() as HTMLTextAreaElement).required).toBe(false);
+  fireEvent.change(ruleSource(), { target: { value: '789' } });
   fireEvent.click(screen.getByRole('button', { name: 'Save settings' }));
   await waitFor(() => expect(save).toHaveBeenCalledOnce());
   expect(save.mock.calls[0][0]).toMatchObject({ polling: { config: { rules: [{ config: { pr_id: '789' }, action: { prompt: '' } }] } } });
@@ -72,15 +73,15 @@ it('saves an incomplete inactive continuation while activation stays blocked', a
 it('preserves workflow drafts while attaching the required chat', async () => {
   const t = task({ polling: polling() }); const link = vi.fn(async () => ({ ...t, thread_id: 'chat', version: 2 }));
   const view = render(<WorkflowForm task={t} busy={false} onSave={vi.fn()} onActivate={vi.fn()} onLink={link} />);
-  fireEvent.change(screen.getByLabelText('PR ID'), { target: { value: '456' } });
-  fireEvent.change(screen.getByLabelText('Continuation prompt'), { target: { value: 'My follow up' } });
+  fireEvent.change(ruleSource(), { target: { value: '456' } });
+  fireEvent.change(rulePrompt(), { target: { value: 'My follow up' } });
   fireEvent.click(screen.getByRole('button', { name: 'Link chat' }));
   fireEvent.change(screen.getByLabelText('Codex chat for Review'), { target: { value: 'chat' } });
   fireEvent.click(screen.getByRole('button', { name: 'Attach chat' }));
   await waitFor(() => expect(link).toHaveBeenCalledOnce());
   view.rerender(<WorkflowForm task={await link.mock.results[0].value} busy={false} onSave={vi.fn()} onActivate={vi.fn()} onLink={link} />);
-  expect((screen.getByLabelText('PR ID') as HTMLInputElement).value).toBe('456');
-  expect((screen.getByLabelText('Continuation prompt') as HTMLTextAreaElement).value).toBe('My follow up');
+  expect((ruleSource() as HTMLInputElement).value).toBe('456');
+  expect((rulePrompt() as HTMLTextAreaElement).value).toBe('My follow up');
   expect(screen.queryByText('Codex chat required')).toBeNull();
   expect(screen.queryByRole('button', { name: 'Reload latest settings' })).toBeNull();
 });
@@ -88,6 +89,7 @@ it('saves failed merge checks as an independent ANY condition', async () => {
   const t = task({ polling: polling() });
   const save = vi.fn(async input => ({ ...t, ...input, version: 2 }));
   render(<WorkflowForm task={t} busy={false} onSave={save} onActivate={vi.fn()} onLink={vi.fn()} />);
+  fireEvent.click(screen.getAllByRole('button', { name: 'Rule events' })[0]);
   fireEvent.click(screen.getByRole('button', { name: '+ OR event' }));
   fireEvent.change(screen.getByLabelText('Event 3.1'), { target: { value: 'merge_checks_failed' } });
   fireEvent.click(screen.getByRole('button', { name: 'Save settings' }));
@@ -95,3 +97,14 @@ it('saves failed merge checks as an independent ANY condition', async () => {
   expect(save.mock.calls[0][0].polling.config.rules[0].config.condition_groups).toContainEqual(['merge_checks_failed']);
   expect(save.mock.calls[0][0].polling.config.rules).toHaveLength(1);
 });
+
+function ruleSource() {
+ const trigger=screen.getAllByRole('button',{name:'Rule source'})[0];
+ if(trigger.getAttribute('aria-expanded')!=='true')fireEvent.click(trigger);
+ return screen.getByLabelText('PR ID');
+}
+function rulePrompt() {
+ const trigger=screen.getAllByRole('button',{name:'Prompt action'})[0];
+ if(trigger.getAttribute('aria-expanded')!=='true')fireEvent.click(trigger);
+ return screen.getByLabelText('Continuation prompt');
+}

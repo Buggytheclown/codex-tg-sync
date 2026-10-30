@@ -73,8 +73,7 @@ export function WorkflowForm({ task, busy, onSave, onActivate, onLink, configure
   };
   return <>
     <form className="workflow-editor" onSubmit={e => void save(e)}>
-      <h2>Workflow steps</h2>
-      <p className="note">Save settings, then activate waiting. ⌘/Ctrl + Enter saves.</p>
+      {!waiting && <h2>Polling</h2>}
       {waiting ? <PollingRules value={waiting} onChange={setWaiting} /> : <><p className="note">No waiting configured.</p><button type="button" disabled={disabled} onClick={() => setWaiting(newRules())}>Configure waiting</button></>}
       {missingChat && <div className="readiness-banner" role="status"><strong>Codex chat required</strong><p>Prompt rules continue this task’s linked chat.</p><button type="button" disabled={disabled} onClick={() => setShowChat(true)}>Link chat</button></div>}
       <details className="form-section"><summary>Execution settings for prompts</summary><ExecutionFields compact value={config.execution} onChange={execution => setConfig({ ...config, execution })} /></details>
@@ -88,7 +87,7 @@ export function WorkflowForm({ task, busy, onSave, onActivate, onLink, configure
       {message && <p className="info-note" role="status">{message}</p>}
       <div className="form-actions workflow-footer"><button className="primary" disabled={disabled}>Save settings</button>
         <button type="button" disabled={disabled || stale || dirty || !!readiness || task.column === 'polling'} title={dirty ? 'Save settings before activating waiting.' : readiness || undefined} onClick={() => void activate()}>Activate waiting</button></div>
-      <PollingDiagnostics task={task} />
+      <details className="form-section"><summary>Polling status</summary><PollingDiagnostics task={task} /></details>
     </form>
     {showChat && !task.thread_id && <div className="workflow-chat"><TaskChatForm task={task} busy={disabled} onLink={onLink} inline onCancel={() => setShowChat(false)} submitLabel="Attach chat" /></div>}
   </>;

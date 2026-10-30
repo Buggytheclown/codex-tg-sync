@@ -517,22 +517,47 @@ small { font-size: 12px; line-height: 1.6; color: var(--muted); }
 .done-drop-target small { font-size: 10px; line-height: 1.3; color: var(--muted); }
 .done-drop-target.drop-active { background: var(--blue-soft); border-style: solid; }
 
-/* Rule cards reuse the board's existing colors and controls. */
+/* Rule summaries keep the same board palette; editors open on demand. */
 .polling-rules { display: grid; gap: 14px; min-width: 0; }
-.polling-rule > summary { display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: center; }
-.polling-rule .section-content { display: grid; gap: 14px; }
-.rule-heading { display: flex; align-items: center; gap: 10px; }
-.rule-heading .field { flex: 1; min-width: 0; }
-.rule-after { border-top: 1px solid var(--border); padding-top: 14px; display: grid; gap: 10px; }
+.polling-rules-heading { display: flex; gap: 12px; align-items: center; }
+.polling-rules-heading h3 { margin: 0; font-size: 16px; font-weight: 500; }
+.polling-rules-heading h3 span { margin-left: 6px; color: var(--muted); font-size: 12px; }
+.polling-rules-heading > button { margin-left: auto; border: 0; padding: 3px 0; color: var(--blue); background: transparent; }
+.polling-rule { border: 1px solid var(--border-soft); border-radius: var(--radius); min-width: 0; }
+.rule-card-heading { display: flex; gap: 8px; align-items: center; padding: 11px 14px; border-bottom: 1px solid var(--border-soft); }
+.rule-card-heading strong { flex: 1; min-width: 0; overflow-wrap: anywhere; font-size: 13px; font-weight: 500; }
+.rule-card-heading .rule-settings-button { border: 0; background: transparent; color: var(--muted); padding: 0 3px; min-height: 24px; }
+.rule-card-body { display: grid; gap: 13px; padding: 14px; }
+.rule-card-row { display: grid; grid-template-columns: 34px minmax(0, 1fr); gap: 10px; align-items: start; }
+.rule-row-label { color: var(--muted); font-size: 12px; padding-top: 5px; }
+.rule-blocks { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; min-width: 0; }
+.rule-blocks .rule-block { display: inline-flex; gap: 8px; align-items: center; padding: 4px 8px; min-height: 30px; border: 1px solid var(--border-soft); border-radius: 6px; background: transparent; font-size: 12px; text-align: left; white-space: normal; max-width: 100%; overflow-wrap: anywhere; }
+.rule-blocks .rule-block:hover, .rule-blocks .rule-block[aria-expanded="true"] { background: var(--soft); border-color: var(--border-hover); }
+.rule-chevron { color: var(--muted); font-size: 11px; }
+.rule-condition-group { display: inline-flex; gap: 6px; align-items: center; min-width: 0; max-width: 100%; }
+.rule-event-block { flex-wrap: wrap; }
+.polling-rule .chip-select { min-width: 0; max-width: 100%; }
+.polling-rule .chip-select-trigger { min-height: 30px; padding: 4px 8px; font-size: 12px; max-width: 100%; white-space: normal; text-align: left; }
+.rule-target .chip-select-trigger { background: var(--soft); }
+.polling-rule .chip-select-menu { min-width: min(220px, 100%); width: max-content; max-width: min(310px, calc(100vw - 68px)); }
+.polling-rule .chip-select-option { white-space: normal; }
+.rule-editor { display: grid; gap: 12px; margin: 0 14px 14px 58px; padding: 14px; border: 1px solid var(--border-soft); border-radius: var(--radius); background: var(--soft); min-width: 0; }
+.rule-editor-heading { display: flex; align-items: center; gap: 8px; font-size: 12px; }
+.rule-editor-heading strong { flex: 1; font-weight: 500; }
+.rule-editor-heading button { border: 0; padding: 0; background: transparent; color: var(--blue); min-height: 24px; }
+.rule-editor .field { margin: 0; }
+.rule-editor .pr-id-row { flex-wrap: wrap; }
+.rule-editor .pr-id-row .field { flex: 1 1 110px; }
+.rule-stop-note { margin: 4px 0 0; }
 .event-groups, .event-terms { display: grid; gap: 8px; min-width: 0; }
 .event-term { display: flex; gap: 8px; align-items: center; min-width: 0; }
-.event-term select { flex: 1; min-width: 0; }
-.event-operator { font-size: 11px; font-weight: 700; opacity: .65; }
-.event-group { display: grid; gap: 6px; }
-.polling-rule .chip-select { max-width: 100%; }
-.polling-rule .chip-select-trigger { max-width: 100%; text-align: left; white-space: normal; }
-.polling-rule h4 { margin: 0; }
-.polling-rules > .polling-rule { margin: 0; }
-.event-term select { border: 1px solid var(--border); border-radius: var(--radius); padding: 8px; min-height: 36px; font: inherit; color: var(--text); background: transparent; }
-.event-terms > button { justify-self: start; }
-.event-groups > button { justify-self: start; }
+.event-term select { flex: 1; min-width: 0; border: 1px solid var(--border); border-radius: var(--radius); padding: 8px; min-height: 36px; font: inherit; color: var(--text); background: transparent; }
+.event-operator { font-size: 11px; font-weight: 500; color: var(--muted); }
+.event-group { display: grid; gap: 6px; min-width: 0; }
+.event-terms > button, .event-groups > button { justify-self: start; }
+@media (max-width: 520px) {
+  .rule-card-heading { padding: 10px 11px; }
+  .rule-card-body { padding: 12px 11px; }
+  .rule-card-row { grid-template-columns: 31px minmax(0, 1fr); gap: 8px; }
+  .rule-editor { margin: 0 10px 12px; padding: 12px; }
+}
