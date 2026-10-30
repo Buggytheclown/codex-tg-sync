@@ -57,6 +57,8 @@ Open the dev server using that exact origin. No wildcard CORS is used.
   Sources create new Inbox tasks and require Telegram launch approval.
 - Move cards by dragging them or using the editable column badge in the task header (accessible as **Move task**).
   Reading a card never moves it. An invalid move to Polling opens its form.
+  With Done hidden, dragging turns **Show Done** into a taller drop target of the
+  same width. Dropping moves the card without opening Done or shifting columns.
 - **No polling**, **Configured · paused**, and **Waiting** are separate labels.
   Settings are active only while the card is in Polling. Diagnostics show next
   check, last attempt, last success and an error when present.
@@ -76,7 +78,9 @@ Open the dev server using that exact origin. No wildcard CORS is used.
 - **Esc** or a click outside the details panel clears its visible selection and
   shows a static, noninteractive placeholder. Reopening the same card restores
   its tab and unsaved explicit-save settings. Overview keeps its normal blur
-  autosave; Esc during a drag first cancels the drag.
+  autosave; Esc during a drag first cancels the drag. The inspector's column and
+  priority chips open checked menus with keyboard navigation. Escape closes an
+  open menu first, preserving task selection.
 
 `npm test` covers these boundaries and the PR condition validation. The Go
 controlapi suite checks Host/Origin/JSON admission, conflicts, SSE invalidation,

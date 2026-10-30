@@ -322,3 +322,22 @@ For live Telegram QA, verify:
   do not emit collaboration presets; explicit mode serialization stays covered.
 - `internal/daemon/retirement_test.go`: ordinary input never reasserts cached model
   metadata. Initial external launch coverage checks the same native override path.
+
+## Inspector selector dismissal
+
+- `ui/src/App.test.tsx` covers chip menu open/choose/cancel,
+  Escape in column/priority selectors, preserved task URL/selection, and outside
+  pointer dismissal including source drafts and destination actions.
+- Browser acceptance: open and cancel the column/priority popup without losing
+  details; change a column on an isolated task; dismiss with an outside pointer
+  press and reopen.
+
+- `ui/src/ChipSelect.test.tsx` covers checked current values, keyboard choice,
+  local Escape, focus/form ownership, outside close, blur boundaries and disabled
+  controls. Existing inspector tests retain priority autosave/version protection.
+- `ui/src/drag.test.tsx` covers hidden Done drop/cancel/conflict rollback and
+  expanded Done behavior without changing visibility preferences.
+- Browser QA measures Show Done versus its drag target: equal width/position,
+  increased height and identical board/column bounds; perform a real mouse drag
+  to Done and check the existing move command, hidden column and restored toggle.
+  Check chip menus at desktop/narrow widths and that page color tokens stay intact.

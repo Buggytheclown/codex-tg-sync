@@ -29,6 +29,9 @@ import { TicketControl } from "./TicketControl";
 import { PRControl } from "./PRControl";
 import { DetailPlaceholder } from "./DetailPlaceholder";
 import { DescriptionField } from "./DescriptionField";
+import { ChipSelect } from "./ChipSelect";
+const columnOptions = columns.map((value, index) => ({ value, label: labels[value], icon: ["↓", "●", "◷", "✓"][index] }));
+const priorityOptions = [{ value: "low", label: "Low", icon: "↓" }, { value: "normal", label: "Normal", icon: "—" }, { value: "high", label: "High", icon: "↑" }] as const;
 type Tab = "overview" | "polling" | "history";
 type OverviewValues = { title: string; description: string; priority: Priority };
 const overviewValues = (task: Task): OverviewValues => ({ title: task.title, description: task.description, priority: task.priority || "normal" });
@@ -421,18 +424,21 @@ export function App() {
         if (queuedRefresh.current) void refresh();
         return;
       }
+      // Escape belongs to the native selector popup while it owns focus.
+      if (e.target instanceof HTMLSelectElement) return;
       dismissDetails();
     };
-    const outsideClick = (e: MouseEvent) => {
+    const outsidePointerDown = (e: PointerEvent) => {
       if (e.button !== 0 || dragRef.current || !(e.target instanceof Node)) return;
       if (!detailPanel.current?.contains(e.target)) dismissDetails();
     };
     window.addEventListener("keydown", escape);
-    // Clear the old selection before the destination's normal click action.
-    window.addEventListener("click", outsideClick, true);
+    // Native select popups can retarget click to the page. Dismiss only for
+    // an actual pointer press outside, before the destination click runs.
+    window.addEventListener("pointerdown", outsidePointerDown, true);
     return () => {
       window.removeEventListener("keydown", escape);
-      window.removeEventListener("click", outsideClick, true);
+      window.removeEventListener("pointerdown", outsidePointerDown, true);
     };
   }, [dismissDetails, refresh]);
   const select = (task: Card) => {
@@ -831,20 +837,36 @@ export function App() {
               />
               <kbd>⌕</kbd>
             </label>
-            <button
-              aria-pressed={showDone}
-              onClick={() => {
-                const visible = !showDone;
-                setShowDone(visible);
-                try {
-                  window.localStorage.setItem("codex-tg.show-done", String(visible));
-                } catch {
-                  // The toggle still works when browser storage is unavailable.
-                }
-              }}
-            >
-              {showDone ? "Hide Done" : "Show Done"}
-            </button>
+            <span className="done-toggle-slot">
+              <span className="done-toggle-size" aria-hidden="true">{showDone ? "Hide Done" : "Show Done"}</span>
+              <button
+                className={`done-toggle${drag && !showDone ? " done-drop-target" : ""}${insertion?.column === "done" && !showDone ? " drop-active" : ""}`}
+                aria-label={drag && !showDone ? "Drop task in Done" : showDone ? "Hide Done" : "Show Done"}
+                aria-pressed={showDone}
+                onDragOver={e => {
+                  if (showDone || !dragRef.current || pendingMove.current) return;
+                  e.preventDefault();
+                  e.dataTransfer.dropEffect = "move";
+                  setInsertion({ column: "done", beforeID: "" });
+                }}
+                onDragLeave={e => {
+                  if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setInsertion(null);
+                }}
+                onDrop={e => { if (!showDone && dragRef.current) drop(e, "done"); }}
+                onClick={() => {
+                  if (dragRef.current) return;
+                  const visible = !showDone;
+                  setShowDone(visible);
+                  try {
+                    window.localStorage.setItem("codex-tg.show-done", String(visible));
+                  } catch {
+                    // The toggle still works when browser storage is unavailable.
+                  }
+                }}
+              >
+                {drag && !showDone ? <><span className="done-drop-icon" aria-hidden="true">✓</span><span>Done</span><small>Drop here</small></> : showDone ? "Hide Done" : "Show Done"}
+              </button>
+            </span>
           </div>
         </div>
         {error && (
@@ -990,7 +1012,7 @@ export function App() {
       <aside ref={detailPanel} className={`detail-panel${panel === "details" && (detailDismissed || !selectedCard) ? " detail-panel-empty" : ""}`} aria-label="Task details and settings" onKeyDown={(e) => {
         if (e.key !== "Enter" || !(e.metaKey || e.ctrlKey) || e.repeat || e.nativeEvent.isComposing) return;
         const target = e.target as HTMLElement;
-        const form = target.closest("form") || (target instanceof HTMLTextAreaElement || target instanceof HTMLSelectElement || target instanceof HTMLInputElement ? target.form : null);
+        const form = target.closest("form") || (target instanceof HTMLTextAreaElement || target instanceof HTMLSelectElement || target instanceof HTMLInputElement || target instanceof HTMLButtonElement ? target.form : null);
         if (!form) return;
         if (form.matches(".overview-form")) {
           e.preventDefault();
@@ -1086,10 +1108,8 @@ export function App() {
                 {tab === "overview" ? title : <span className="detail-title-text">{titleText}</span>}
               </h2>
               <div className="detail-badges">
-                <select className="pill column-select" aria-label="Move task" value={selected.column} disabled={busy}
-                  onChange={e => void move(compactTask(selected), e.target.value as Column)}>
-                  {columns.map(c => <option key={c} value={c}>{labels[c]}</option>)}
-                </select>
+                <ChipSelect className="column-select" label="Move task" value={selected.column} options={columnOptions} disabled={busy}
+                  onChange={column => void move(compactTask(selected), column)} />
                 {executionLabel(selected) && (
                   <span className={`pill execution ${executionLabel(selected).toLowerCase()}`}>{executionLabel(selected)}</span>
                 )}
@@ -1212,6 +1232,8 @@ function TaskReferences({ task }: { task: Task }) {
   </ul>;
 }
 function PriorityField({ value, onChange, form, onBlur }: { value: Priority; onChange: (priority: Priority) => void; form?: string; onBlur?: () => void }) {
+  if (form) return <div className="field header-priority"><ChipSelect label="Priority" value={value} options={priorityOptions} form={form}
+    align="end" onBlur={onBlur} onChange={onChange} /></div>;
   return <Field label="Priority"><select value={value} form={form} onBlur={onBlur} onChange={(e) => onChange(e.target.value as Priority)}>
     <option value="low">↓ Low</option><option value="normal">— Normal</option><option value="high">↑ High</option>
   </select></Field>;

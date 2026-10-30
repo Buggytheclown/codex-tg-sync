@@ -281,3 +281,56 @@ it("uses the full linked card height for placeholders and midpoint insertion", a
   expect(order()).toEqual(["placeholder", "a", "b", "c"]);
   expect(screen.getByLabelText("Drop task here").style.minHeight).toBe("110px");
 });
+
+it("offers hidden Done in place of its toggle and moves without revealing the column", async () => {
+  render(<App />);
+  const toggle = screen.getByRole("button", { name: "Show Done" });
+  const dataTransfer = await startDrag();
+  const target = screen.getByRole("button", { name: "Drop task in Done" });
+  expect(target).toBe(toggle);
+  expect(screen.queryByRole("region", { name: "Done column" })).toBeNull();
+  dragEvent(target, "dragover", 5, dataTransfer);
+  expect(target.classList.contains("drop-active")).toBe(true);
+  expect(screen.queryByLabelText("Drop task here")).toBeNull();
+  dragEvent(target, "drop", 5, dataTransfer);
+  await waitFor(() => expect(rows.find(t => t.id === "c")?.column).toBe("done"));
+  expect(writes).toEqual([{ path: "/v1/tasks/c/move", body: { expected_version: 1, column: "done", before_task_id: "" } }]);
+  expect(screen.queryByRole("region", { name: "Done column" })).toBeNull();
+  expect(screen.getByRole("button", { name: "Show Done" })).toBe(toggle);
+  expect(window.localStorage.getItem("codex-tg.show-done")).not.toBe("true");
+});
+it("restores the Done toggle after cancellation without moving or changing visibility", async () => {
+  render(<App />);
+  const dataTransfer = await startDrag();
+  const target = screen.getByRole("button", { name: "Drop task in Done" });
+  dragEvent(target, "dragover", 5, dataTransfer);
+  fireEvent.keyDown(window, { key: "Escape" });
+  dragEvent(target, "drop", 5, dataTransfer);
+  expect(writes).toHaveLength(0);
+  expect(screen.getByRole("button", { name: "Show Done" })).toBe(target);
+  expect(order()).toEqual(["a", "b", "c"]);
+});
+it("rolls back a failed hidden Done drop and keeps the error actionable", async () => {
+  render(<App />);
+  const move = deferred<Reply>(); heldMove = move.promise;
+  const dataTransfer = await startDrag();
+  const target = screen.getByRole("button", { name: "Drop task in Done" });
+  dragEvent(target, "dragover", 5, dataTransfer);
+  dragEvent(target, "drop", 5, dataTransfer);
+  await act(async () => move.resolve(reply({ error: "Move rejected" }, 409)));
+  expect(order()).toEqual(["a", "b", "c"]);
+  expect(screen.getByRole("alert").textContent).toContain("retry your move");
+  expect(screen.queryByRole("region", { name: "Done column" })).toBeNull();
+});
+it("keeps an expanded Done column and its Hide Done toggle during drag", async () => {
+  window.localStorage.setItem("codex-tg.show-done", "true");
+  render(<App />);
+  const dataTransfer = await startDrag();
+  expect(screen.getByRole("region", { name: "Done column" })).toBeTruthy();
+  expect(screen.getByRole("button", { name: "Hide Done" })).toBeTruthy();
+  expect(screen.queryByRole("button", { name: "Drop task in Done" })).toBeNull();
+  dragEvent(screen.getByRole("region", { name: "Done column" }), "drop", 5, dataTransfer);
+  await waitFor(() => expect(rows.find(t => t.id === "c")?.column).toBe("done"));
+  expect(screen.getByRole("region", { name: "Done column" })).toBeTruthy();
+  expect(window.localStorage.getItem("codex-tg.show-done")).toBe("true");
+});

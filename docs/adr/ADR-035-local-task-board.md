@@ -145,3 +145,28 @@ Initial launches use the same native override path. Ordinary Sync input omits
 model/effort rather than reasserting cached thread metadata. Explicit collaboration
 mode requests retain their existing preset behavior. Frozen requests, prompts,
 permissions, thread identity, writer ownership and no-replay fences are unchanged.
+
+## Native selector dismissal
+
+Inspector dismissal observes a primary pointer press outside the panel rather than
+an outside click. Native selector popups may retarget their final click to the
+page; that click must not clear the selected task. Escape on a native select is
+reserved for its popup. Outside pointer presses still blur/autosave the editor
+before the destination action, and Escape during a drag still cancels it first.
+
+## Chip selectors and hidden Done drop target
+
+The inspector column and priority use compact chips with an anchored listbox,
+current-value checkmark and keyboard selection. Escape closes the open list before
+it can dismiss details; focus stays on the trigger. Priority keeps its Overview
+form ownership and blur/Cmd+Enter autosave, including on other inspector tabs.
+Creation forms and card priority controls retain native selectors. These controls
+reuse the current color tokens without changing the page palette.
+
+During an internal card drag with Done hidden, the existing Show Done button becomes
+a taller Done drop target at the same position and width. An in-flow sizing slot
+preserves the original header footprint; the target grows over the board without
+resizing columns or revealing Done. Drop uses the existing version-guarded move
+command. Cancel, success and failure restore the toggle, retaining the user's Done
+visibility preference and existing rollback/conflict behavior. Expanded Done keeps
+its ordinary column target. Only static UI assets change.

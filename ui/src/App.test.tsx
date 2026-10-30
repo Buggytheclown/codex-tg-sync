@@ -32,6 +32,11 @@ const makeTask = (extra: Partial<Task> = {}): Task => ({
   requests: [],
   ...extra,
 });
+function chooseChip(control: HTMLElement, value: string) {
+  fireEvent.click(control);
+  const names: Record<string, string> = { inbox: "Inbox", todo: "TODO", polling: "Polling", done: "Done", low: "Low", normal: "Normal", high: "High" };
+  fireEvent.click(screen.getByRole("option", { name: names[value] }));
+}
 let rows: Task[], calls: { path: string; method: string; body: unknown }[];
 it("keeps compact task controls above the tabs without an inspector connection footer", async () => {
   rows = [makeTask({ source_key: "arcanum_changes:123" })];
@@ -55,7 +60,7 @@ it("keeps compact task controls above the tabs without an inspector connection f
     expect(detail.getByRole("combobox", { name: "Move task" })).toBe(column);
     expect(detail.getByRole("combobox", { name: "Priority" })).toBe(priority);
   }
-  fireEvent.change(column, { target: { value: "inbox" } });
+  chooseChip(column, "inbox");
   await waitFor(() => expect(rows[0].column).toBe("inbox"));
 });
 it("shows long descriptions without collapse controls and preserves editing and autosave", async () => {
@@ -321,12 +326,12 @@ it("saves header priority on blur and Cmd+Enter", async () => {
   render(<App />);
   await screen.findByLabelText("Title");
   const detail = within(screen.getByRole("complementary", { name: "Task details and settings" }));
-  const priority = detail.getByLabelText("Priority") as HTMLSelectElement;
+  const priority = detail.getByLabelText("Priority") as HTMLButtonElement;
   expect(priority.form).not.toBeNull();
-  fireEvent.change(priority, { target: { value: "high" } });
+  chooseChip(priority, "high");
   fireEvent.blur(priority);
   await waitFor(() => expect(rows[0].priority).toBe("high"));
-  fireEvent.change(priority, { target: { value: "low" } });
+  chooseChip(priority, "low");
   fireEvent.keyDown(priority, { key: "Enter", metaKey: true });
   await waitFor(() => expect(rows[0].priority).toBe("low"));
   expect(calls.filter(call => call.method === "PATCH")).toHaveLength(2);
@@ -440,7 +445,7 @@ it("dismisses on an outside click while preserving inside clicks and destination
   await screen.findByLabelText("Title");
   fireEvent.click(screen.getByLabelText("Description"));
   expect(screen.getByLabelText("Title")).toBeTruthy();
-  fireEvent.click(document.body);
+  fireEvent(document.body, new MouseEvent("pointerdown", { bubbles: true, button: 0 }));
   await screen.findByText("Select a card to see its details.");
   fireEvent.click(screen.getByRole("button", { name: /CHAT Review the next revision/ }));
   await screen.findByLabelText("Title");
@@ -452,6 +457,24 @@ it("dismisses on an outside click while preserving inside clicks and destination
   fireEvent.keyDown(window, { key: "Escape" });
   expect(screen.getByText("Something to work on")).toBeTruthy();
   expect(calls.every(call => call.method === "GET")).toBe(true);
+});
+it("keeps details selected when opening, choosing and cancelling chip selectors", async () => {
+  window.history.replaceState(null, "", "/?task=task-1");
+  render(<App />);
+  await screen.findByLabelText("Title");
+  for (const name of ["Move task", "Priority"]) {
+    const selector = within(screen.getByRole("complementary", { name: "Task details and settings" }))
+      .getByRole("combobox", { name });
+    fireEvent.click(selector);
+    expect(selector.getAttribute("aria-expanded")).toBe("true");
+    fireEvent.keyDown(selector, { key: "Escape" });
+    expect(screen.getByRole("textbox", { name: "Title" })).toBeTruthy();
+    expect(new URLSearchParams(window.location.search).get("task")).toBe("task-1");
+  }
+  chooseChip(screen.getByRole("combobox", { name: "Move task" }), "inbox");
+  await waitFor(() => expect(rows[0].column).toBe("inbox"));
+  expect(screen.getByRole("textbox", { name: "Title" })).toBeTruthy();
+  expect(new URLSearchParams(window.location.search).get("task")).toBe("task-1");
 });
 it("blurs and saves Overview on Escape without reopening details when the save completes", async () => {
   window.history.replaceState(null, "", "/?task=task-1");
@@ -518,7 +541,7 @@ it("retains a source's unsaved child definition across outside dismissal", async
   render(<App />);
   const childTitle = await screen.findByLabelText("Task title");
   fireEvent.change(childTitle, { target: { value: "Unsaved child title" } });
-  fireEvent.click(document.body);
+  fireEvent(document.body, new MouseEvent("pointerdown", { bubbles: true, button: 0 }));
   await screen.findByText("Select a card to see its details.");
   fireEvent.click(screen.getByRole("button", { name: /PR source/ }));
   expect((await screen.findByLabelText("Task title") as HTMLInputElement).value).toBe("Unsaved child title");
@@ -556,7 +579,7 @@ it("autosaves changed Overview fields on blur without an explicit save button or
   fireEvent.blur(title);
   expect(calls.filter(call => call.method === "PATCH")).toHaveLength(1);
   const priority = screen.getByLabelText("Priority");
-  fireEvent.change(priority, { target: { value: "high" } });
+  chooseChip(priority, "high");
   fireEvent.blur(priority);
   await waitFor(() => expect(rows[0].priority).toBe("high"));
 });
@@ -710,8 +733,8 @@ it("uses the owned autosave version for the first Move command", async () => {
   fireEvent.change(title, { target: { value: "Moved saved task" } });
   fireEvent.blur(title);
   const move = screen.getByLabelText("Move task");
-  expect((move as HTMLSelectElement).disabled).toBe(false);
-  fireEvent.change(move, { target: { value: "inbox" } });
+  expect((move as HTMLButtonElement).disabled).toBe(false);
+  chooseChip(move, "inbox");
   expect(calls.some(call => call.path.endsWith("/move") && call.method === "POST")).toBe(false);
   release();
   await waitFor(() => expect(rows[0].column).toBe("inbox"));
@@ -976,9 +999,7 @@ describe("board operator flows", () => {
     });
     fireEvent.click(card);
     await screen.findByRole("combobox", { name: "Move task" });
-    fireEvent.change(screen.getByRole("combobox", { name: "Move task" }), {
-      target: { value: "polling" },
-    });
+    chooseChip(screen.getByRole("combobox", { name: "Move task" }), "polling");
     await screen.findByText(
       "Add a polling configuration before moving to Polling.",
     );
@@ -1536,7 +1557,7 @@ it("saves header priority with Cmd+Enter and links an existing chat from its car
   render(<App />);
   const title = await screen.findByLabelText("Title");
   fireEvent.change(title, { target: { value: "Keyboard saved" } });
-  fireEvent.change(screen.getByLabelText("Priority"), { target: { value: "high" } });
+  chooseChip(screen.getByLabelText("Priority"), "high");
   fireEvent.keyDown(title, { key: "Enter", metaKey: true, isComposing: true });
   fireEvent.keyDown(title, { key: "Enter", metaKey: true, repeat: true });
   expect(calls.filter(c => c.method === "PATCH")).toHaveLength(0);

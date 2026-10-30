@@ -492,3 +492,27 @@ small { font-size: 12px; line-height: 1.6; color: var(--muted); }
   .card-top { padding-right: 0; padding-top: 28px; }
 }
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+
+/* Compact inspector selects reuse the existing page palette. */
+.chip-select { position: relative; min-width: 0; }
+.chip-select-trigger { display: inline-flex; align-items: center; gap: 7px; padding: 5px 10px; min-height: 32px; border-color: var(--border); font-size: 12px; white-space: nowrap; }
+.chip-select-trigger[aria-expanded="true"] { border-color: var(--blue); }
+.chip-select-icon { width: 13px; flex-shrink: 0; text-align: center; color: var(--secondary); }
+.chip-select-chevron { width: 6px; height: 6px; margin: -3px 1px 0 7px; border-right: 1px solid var(--muted); border-bottom: 1px solid var(--muted); transform: rotate(45deg); }
+.chip-select-menu { position: absolute; top: calc(100% + 6px); left: 0; z-index: 30; min-width: 180px; padding: 5px; border: 1px solid var(--border-hover); border-radius: 8px; background: var(--surface); box-shadow: 0 8px 24px #0004; }
+.chip-select-menu.align-end { left: auto; right: 0; }
+.chip-select-option { display: flex; align-items: center; gap: 9px; width: 100%; padding: 9px 10px; min-height: 36px; text-align: left; border: 0; background: transparent; font-size: 13px; }
+.chip-select-option.active, .chip-select-option:hover { background: var(--hover); }
+.chip-select-option[aria-selected="true"] { color: var(--blue); }
+.chip-select-check { margin-left: auto; color: var(--blue); }
+.detail-badges .column-select { padding: 0; min-width: 0; }
+.detail-badges .header-priority { margin-left: auto; }
+
+/* Only the drop target grows: its in-flow slot keeps the toggle's footprint. */
+.done-toggle-slot { position: relative; display: inline-grid; flex-shrink: 0; }
+.done-toggle-size { visibility: hidden; grid-area: 1 / 1; padding: 5px 10px; border: 1px solid transparent; min-height: 30px; font-size: 13px; white-space: nowrap; }
+.done-toggle { grid-area: 1 / 1; width: 100%; }
+.done-toggle.done-drop-target { position: absolute; inset: 0 0 auto; height: 88px; z-index: 10; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px; padding: 7px 4px; border-style: dashed; border-color: var(--blue); color: var(--text); background: var(--surface); }
+.done-drop-icon { font-size: 20px; color: var(--blue); line-height: 1; }
+.done-drop-target small { font-size: 10px; line-height: 1.3; color: var(--muted); }
+.done-drop-target.drop-active { background: var(--blue-soft); border-style: solid; }
