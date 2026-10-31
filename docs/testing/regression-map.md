@@ -468,3 +468,7 @@ For live Telegram QA, verify:
   identity/association; real inputs and FormData remain intact; obsolete animation
   completion cannot remove a new transition; reversal, unmount and reduced motion
   clean up without modifying the editor's draft.
+
+- Check that the shared active-tab capsule follows both content directions, stays
+  aligned on resize and handles rapid reversal and reduced motion without adding
+  focus targets or changing selected-tab semantics.

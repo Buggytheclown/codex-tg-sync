@@ -352,3 +352,7 @@ existing lifecycle. The body clips only during the transition so menus retain
 normal overflow afterward. Rapid reversals cancel old pictures/animations and
 restore automatic height. Card pulses do not affect insertion measurements and
 are cancelled before dragging; viewport changes discard old placement coordinates.
+
+The active tab uses one sliding capsule behind the three labels, with the same
+210 ms timing/easing as the body transition. Interrupted selection continues
+from its current position; reduced motion moves it immediately.

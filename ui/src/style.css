@@ -267,9 +267,14 @@ small { font-size: 12px; line-height: 1.6; color: var(--muted); }
 .detail-badges .field select { width: auto; min-height: 30px; padding: 4px 6px; font-size: 12px; background: var(--surface); border-color: var(--border-soft); }
 .pill { font-size: 11px; color: var(--muted); background: var(--soft); border: 0; border-radius: 5px; padding: 4px 8px; }
 /* Segmented tabs keep all three views in the same inspector. */
-.tabs { display: flex; gap: 0; margin: 10px 22px 12px; padding: 4px; border-radius: 12px; background: #ffffff07; }
+.tabs { position: relative; display: flex; gap: 0; margin: 10px 22px 12px; padding: 4px; border-radius: 12px; background: #ffffff07; }
 .tabs :is(button, .placeholder-tab) { flex: 1; min-width: 0; min-height: 30px; border: 0; border-radius: 9px; font-size: 13px; font-weight: 400; padding: 5px 8px; color: var(--muted); background: transparent; }
-.tabs button[aria-selected="true"] { color: var(--text); background: var(--surface); box-shadow: 0 2px 4px #0000001c; }
+.tabs[role="tablist"]::before { content: ""; position: absolute; left: 4px; top: 4px; bottom: 4px; width: calc((100% - 8px) / 3); border-radius: 9px; background: var(--surface); box-shadow: 0 2px 4px #0000001c; pointer-events: none; transform: translateX(0); transition: transform 210ms cubic-bezier(.2,.8,.2,1); }
+.tabs[data-active="polling"]::before { transform: translateX(100%); }
+.tabs[data-active="history"]::before { transform: translateX(200%); }
+.tabs[role="tablist"] button { position: relative; z-index: 1; }
+.tabs button[aria-selected="true"] { color: var(--text); }
+@media (prefers-reduced-motion: reduce) { .tabs[role="tablist"]::before { transition: none; } }
 .tabs button:not([aria-selected="true"]):hover { color: var(--text); background: var(--hover); }
 .detail-content > .info-note { margin: 16px 22px 0; }
 

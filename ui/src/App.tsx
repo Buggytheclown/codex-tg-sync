@@ -1080,7 +1080,7 @@ export function App() {
                 {priority}
               </div>
             </div>
-            <div className="tabs" role="tablist">
+            <div className="tabs" role="tablist" data-active={tab}>
               {(["overview", "polling", "history"] as Tab[]).map(
                 (t) => (
                   <button
