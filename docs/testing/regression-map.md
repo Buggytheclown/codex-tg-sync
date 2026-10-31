@@ -458,3 +458,13 @@ For live Telegram QA, verify:
   rapid close/reopen and switching, long-description scroll during exit, and
   reduced motion. Check 1440/1024/736/375/320 px and source/new-task editor layout.
   Install static assets and verify exact live readback; no daemon restart.
+
+- Directional motion browser QA checks card activation upward, detail entry from
+  above and exit upward, and both tab directions while the header stays fixed.
+  Confirm text-free placeholders, rapid reversal cleanup, no overflow while moving
+  at 320/375/736/1024/1440 px, menus after transition, reduced motion and dragging
+  immediately after selection without an extra slot or position jump.
+- `ui/src/useTabSlide.test.tsx`: outgoing pictures are inert and stripped of form
+  identity/association; real inputs and FormData remain intact; obsolete animation
+  completion cannot remove a new transition; reversal, unmount and reduced motion
+  clean up without modifying the editor's draft.

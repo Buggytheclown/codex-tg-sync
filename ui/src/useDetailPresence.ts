@@ -20,11 +20,11 @@ export function useDetailPresence(ref: RefObject<HTMLElement | null>, visible: b
       if (!visible) setPresent(false);
       return;
     }
-    const from = visible && changed ? { opacity: "0", transform: "translateY(4px)" }
-      : visual.current || { opacity: visible ? "0" : "1", transform: visible ? "translateY(4px)" : "none" };
-    const to = { opacity: visible ? "1" : "0", transform: visible ? "none" : "translateY(4px)" };
+    const from = visible && changed ? { opacity: "0", transform: "translateY(-12px)" }
+      : visual.current || { opacity: visible ? "0" : "1", transform: visible ? "translateY(-12px)" : "none" };
+    const to = { opacity: visible ? "1" : "0", transform: visible ? "none" : "translateY(-10px)" };
     const animation = node.animate([from, to], {
-      duration: visible ? 180 : 120, easing: "cubic-bezier(.2,.8,.2,1)", fill: "both",
+      duration: visible ? 220 : 140, easing: "cubic-bezier(.2,.8,.2,1)", fill: "both",
     });
     animation.onfinish = () => {
       if (generation.current !== current) return;

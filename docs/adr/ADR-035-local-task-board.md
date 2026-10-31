@@ -330,14 +330,25 @@ existing move operation; neither endpoints nor persistence contracts change.
 
 The empty inspector shares the real heading spacing, one-line title, status and
 priority capsules, segmented tabs and description alignment. It remains a static,
-noninteractive outline without an instruction caption or duplicate footer.
+noninteractive outline made only of bars and shapes, without visible labels,
+an instruction caption or a duplicate footer.
 
-The inspector keeps its editor mounted while fading out for 120 ms, then shows
-the placeholder. Opening or switching cards fades and shifts the view by 4 px over
-180 ms. Closed controls immediately become inert and hidden from assistive
+The inspector keeps its editor mounted while fading and moving 10 px upward for
+140 ms, then shows the placeholder. Opening or selecting a card enters from
+12 px above over 220 ms, coordinated with a 6 px upward pulse of the chosen card.
+Closed controls immediately become inert and hidden from assistive
 technology; animation does not delay selection, URL changes or draft autosave.
 Interrupted animations are cancelled and fenced so an old close cannot hide a
 new selection. Background refreshes and typing do not replay entry animation.
 Card/source presses replace the view directly instead of dismissing it before
 click; explicit outside presses and Escape retain their dismissal behavior.
 A new view starts at the top, and reduced motion changes presence immediately.
+
+Inspector tabs follow their visual order: moving right brings content from the
+right and sends the old view left, and moving left reverses that direction. Only
+the body moves; the heading and tab controls remain still. A short inert outgoing
+picture is stripped of IDs and form associations; live editors retain their
+existing lifecycle. The body clips only during the transition so menus retain
+normal overflow afterward. Rapid reversals cancel old pictures/animations and
+restore automatic height. Card pulses do not affect insertion measurements and
+are cancelled before dragging; viewport changes discard old placement coordinates.

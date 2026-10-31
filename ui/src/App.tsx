@@ -31,6 +31,7 @@ import { TicketControl } from "./TicketControl";
 import { PRControl } from "./PRControl";
 import { DetailPlaceholder } from "./DetailPlaceholder";
 import { useDetailPresence } from "./useDetailPresence";
+import { useTabSlide } from "./useTabSlide";
 import { DescriptionField } from "./DescriptionField";
 import { ChipSelect } from "./ChipSelect";
 const columnOptions = columns.map((value, index) => ({ value, label: labels[value], icon: ["↓", "●", "◷", "✓"][index] }));
@@ -280,9 +281,15 @@ export function App() {
   const motion = useRef<BoardMotion | null>(null);
   if (!motion.current) motion.current = new BoardMotion();
   useLayoutEffect(() => { motion.current!.layout(); });
-  useEffect(() => () => motion.current!.dispose(), []);
+  useEffect(() => {
+    const resize = () => motion.current!.layout();
+    window.addEventListener("resize", resize);
+    return () => { window.removeEventListener("resize", resize); motion.current!.dispose(); };
+  }, []);
   const detailPanel = useRef<HTMLElement>(null);
   const detailContent = useRef<HTMLDivElement>(null);
+  const tabStage = useRef<HTMLDivElement>(null);
+  const [selectionPulse, setSelectionPulse] = useState(0);
   // Keep the last editor mounted while dismissed so explicit-save drafts survive.
   const [detailDismissed, setDetailDismissed] = useState(false);
   const overviewDrafts = useRef(new Map<string, OverviewDraft>());
@@ -378,7 +385,8 @@ export function App() {
   };
   const selectedCard = tasks.find((t) => t.id === selectedID);
   const detailVisible = panel !== "details" || (!detailDismissed && !!selectedCard);
-  const detailPresent = useDetailPresence(detailContent, detailVisible, `${panel}:${selectedID}`);
+  const detailPresent = useDetailPresence(detailContent, detailVisible, `${panel}:${selectedID}:${selectionPulse}`);
+  const captureTab = useTabSlide(tabStage, ["overview", "polling", "history"].indexOf(tab), selectedID, detailVisible && panel === "details");
   const visibleSelection = panel === "details" && !detailDismissed ? selectedID : "";
   const [detail, setDetail] = useState<Task>();
   const [detailError, setDetailError] = useState("");
@@ -454,6 +462,8 @@ export function App() {
     };
   }, [dismissDetails, refresh]);
   const select = (task: Card) => {
+    motion.current!.pulseSelection(task.id);
+    setSelectionPulse(value => value + 1);
     detailVersion.current = 0;
     setSelectedID(task.id);
     setPanel("details");
@@ -1078,6 +1088,7 @@ export function App() {
                     role="tab"
                     aria-selected={tab === t}
                     onClick={() => {
+                      if (tab !== t) captureTab();
                       setTab(t);
                       setInfo("");
                       setActivationRequested(false);
@@ -1093,6 +1104,7 @@ export function App() {
                 {info}
               </p>
             )}
+            <div ref={tabStage} className="detail-tab-stage">
             <div className="panel-body">
               {feedback}
               <div hidden={tab !== "overview"}>
@@ -1112,6 +1124,7 @@ export function App() {
               ) : tab === "history" ? (
                 <History task={selected} />
               ) : null}
+            </div>
             </div>
           </>}
           </OverviewForm>

@@ -14,11 +14,11 @@ export function DetailPlaceholder() {
         </div>
       </div>
       <div className="tabs placeholder-tabs">
-        <span className="placeholder-tab selected">Overview</span><span className="placeholder-tab">Polling</span><span className="placeholder-tab">History</span>
+        <span className="placeholder-tab selected"><Bar width="48px" height={8} /></span><span className="placeholder-tab"><Bar width="40px" height={8} /></span><span className="placeholder-tab"><Bar width="40px" height={8} /></span>
       </div>
       <div className="panel-body">
         <div className="field placeholder-description">
-          <span className="placeholder-label">Description</span>
+          <span className="placeholder-label-row"><Bar width="76px" height={8} /></span>
           <div className="placeholder-lines">
             {["96%", "88%", "94%", "59%"].map(width => <Bar key={width} width={width} />)}
           </div>

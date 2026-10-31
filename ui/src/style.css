@@ -278,7 +278,7 @@ small { font-size: 12px; line-height: 1.6; color: var(--muted); }
 .detail-placeholder * { animation: none; transition: none; }
 .placeholder-layout { pointer-events: none; }
 .placeholder-bar { display: block; flex-shrink: 0; border-radius: 4px; background: var(--placeholder-fill); }
-.placeholder-label { display: block; font-size: 12px; font-weight: 500; color: var(--placeholder-label); }
+.placeholder-label-row { display: flex; align-items: center; min-height: 14px; }
 .placeholder-priority { margin-left: auto; }
 .placeholder-tabs .placeholder-tab { display: grid; place-items: center; color: var(--placeholder-label); }
 .placeholder-tabs .placeholder-tab.selected { background: var(--placeholder-fill); }
@@ -573,3 +573,8 @@ body.board-dragging .board .card-with-link { transform: none; transition: border
 .card-with-link.drag-preview { position: fixed; z-index: 1000; margin: 0; pointer-events: none; overflow: hidden; opacity: 1; visibility: visible; transform: scale(1.025) rotate(1deg); transform-origin: 50% 50%; border-color: #a06aff88; box-shadow: 0 18px 36px #0006, 0 3px 8px #0004; transition: none; }
 .drag-preview .task-card { cursor: grabbing; }
 @media (prefers-reduced-motion: reduce) { .card-with-link.drag-preview { transform: none; } }
+
+/* Tabs move horizontally inside their own clipped stage, leaving the header still. */
+.detail-tab-stage { position: relative; min-width: 0; }
+.detail-tab-stage.is-sliding { overflow: clip; }
+.tab-exit-view { position: absolute; left: 0; top: 0; width: 100%; margin: 0; pointer-events: none; }

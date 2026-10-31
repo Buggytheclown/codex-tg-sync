@@ -19,8 +19,32 @@ export class BoardMotion {
   private target: DropPosition | null = null;
   private landing: { id: string; done: boolean; destination?: DOMRect; animation?: Animation } | null = null;
   private layouts = new Map<string, Layout>();
+  private viewportWidth = 0;
   private frame = 0;
+  private pulse: { element: HTMLElement; animation: Animation } | null = null;
   private suppressed: { id: string; until: number } | null = null;
+
+  pulseSelection(id: string) {
+    this.stopPulse();
+    if (reduced() || this.gesture || this.landing) return;
+    const button = Array.from(document.querySelectorAll<HTMLElement>(".board [data-task-id]")).find(el => el.dataset.taskId === id);
+    const element = button?.closest<HTMLElement>(".card-slot");
+    if (!element?.animate) return;
+    const animation = element.animate([
+      { transform: "translateY(0)" }, { transform: "translateY(-6px)", offset: .35 }, { transform: "translateY(0)" },
+    ], { duration: 220, easing: "cubic-bezier(.2,.8,.2,1)" });
+    this.pulse = { element, animation };
+    animation.onfinish = () => { if (this.pulse?.animation === animation) this.pulse = null; };
+  }
+
+  private stopPulse() { this.pulse?.animation.cancel(); this.pulse = null; }
+
+  private unpulsedRect(element: HTMLElement) {
+    const rect = element.getBoundingClientRect();
+    if (!this.pulse || !this.pulse.element.contains(element)) return rect;
+    const transform = new DOMMatrix(getComputedStyle(this.pulse.element).transform);
+    return new DOMRect(rect.x - transform.m41, rect.y - transform.m42, rect.width, rect.height);
+  }
 
   pointerDown(event: PointerEvent, id: string, button: HTMLElement, disabled: boolean) {
     if (event.button !== 0 || event.isPrimary === false) return;
@@ -28,6 +52,7 @@ export class BoardMotion {
     if (event.pointerType === "touch" && !(event.target as Element).closest(".card-grip")) return;
     event.preventDefault(); // Suppress the browser's competing native drag image.
     if (disabled || this.gesture || this.landing) return;
+    this.stopPulse();
     button.focus({ preventScroll: true });
     const element = button.closest<HTMLElement>(".card-with-link")!;
     const rect = element.getBoundingClientRect();
@@ -159,7 +184,7 @@ export class BoardMotion {
 
   // WAAPI moves the visible card; midpoint decisions use its unanimated layout.
   layoutRect(element: HTMLElement): DOMRect {
-    const rect = element.getBoundingClientRect();
+    const rect = this.unpulsedRect(element);
     const id = element.querySelector<HTMLElement>("[data-task-id]")?.dataset.taskId;
     if (!id || !this.layouts.get(id)?.animation) return rect;
     const transform = new DOMMatrix(getComputedStyle(element).transform);
@@ -167,6 +192,11 @@ export class BoardMotion {
   }
 
   layout() {
+    if (this.viewportWidth !== window.innerWidth) {
+      for (const layout of this.layouts.values()) layout.animation?.cancel();
+      this.layouts.clear();
+      this.viewportWidth = window.innerWidth;
+    }
     const seen = new Set<string>();
     for (const button of document.querySelectorAll<HTMLElement>(".board [data-task-id]")) {
       const id = button.dataset.taskId!;
@@ -182,7 +212,7 @@ export class BoardMotion {
         }
         previous.animation.cancel();
       }
-      const rect = element.getBoundingClientRect();
+      const rect = this.unpulsedRect(element);
       const record: Layout = { element, rect };
       this.layouts.set(id, record);
       if (id === this.gesture?.id || id === this.landing?.id) continue;
@@ -246,6 +276,7 @@ export class BoardMotion {
     window.removeEventListener("blur", this.pointerCancel);
   }
   dispose() {
+    this.stopPulse();
     this.unlisten();
     this.gesture = null;
     this.finishLanding();

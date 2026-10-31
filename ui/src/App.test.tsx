@@ -426,6 +426,7 @@ it("shows a noninteractive empty inspector when no card is selected", async () =
   render(<App />);
   await screen.findByRole("img", { name: "No task selected" });
   const panel = within(screen.getByRole("complementary", { name: "Task details and settings" }));
+  expect(screen.getByRole("img", { name: "No task selected" }).textContent?.trim()).toBe("");
   expect(panel.queryByRole("button")).toBeNull();
   expect(panel.queryByRole("textbox")).toBeNull();
   expect(panel.queryByRole("tab")).toBeNull();
