@@ -103,6 +103,5 @@ export function PollingRules({ value, onChange, child = false, variables = true,
     <div className="polling-rules-heading"><h3>Rules <span>{rules.length}</span></h3><button type="button" disabled={rules.length >= 20} onClick={() => update([...rules, defaultRule()])}>+ Add rule</button></div>
     {rules.map((rule, i) => <RuleCard key={rule.id} rule={rule} index={i} child={child} variables={variables} promptSettings={promptSettings}
       onChange={next => update(rules.map((old, j) => j === i ? next : old))} onRemove={() => update(rules.filter((_, j) => j !== i))} />)}
-    {!child && <p className="note rule-stop-note">Any action leaves Polling and stops all task rules. Done wins simultaneous matches; otherwise rule order applies.</p>}
   </div>;
 }

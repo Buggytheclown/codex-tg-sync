@@ -417,11 +417,15 @@ For live Telegram QA, verify:
 
 - Existing UI suites retain task selection, source icons, priorities, footer
   actions, full descriptions, explicit workflow saves, nested Escape and drag
-  behavior. No markup, API or state changes accompany the CSS update.
+  behavior. Quiet empty placeholders keep accessible empty/loading labels.
+  Collapsed Sources retain clickable icons, status dots and name/status tooltips;
+  the source can be opened and edited while the rail stays collapsed.
 - Browser fixtures check cards, inspector tabs, source/prompt panels and polling
   rules at 1440/1024/736/375/320 px without horizontal page overflow. Check original
   service icons, linked/empty footer actions, request hints and source provenance.
-- A mouse drag to collapsed Done must keep the board and toggle slot unchanged;
+- Check hover lift, pointer-press feedback and selected-card lift; freeze all
+  card transforms during drag/save, and disable motion with reduced motion.
+  A mouse drag to collapsed Done must keep the board and toggle slot unchanged;
   only the target height grows from 30 to 88 px. Reduced motion disables style
   transitions and the existing running animation. Install static assets and
   verify exact live byte readback; no daemon restart is required.

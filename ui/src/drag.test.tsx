@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { App } from "./App";
 import { compactTask, defaultPolling, emptyConfig } from "./model";
 import type { Task } from "./model";
@@ -79,7 +79,7 @@ it("uses the first Escape to cancel a drag and the next Escape to dismiss detail
   expect(screen.queryByLabelText("Drop task here")).toBeNull();
   expect(screen.getByLabelText("Title")).toBeTruthy();
   fireEvent.keyDown(window, { key: "Escape" });
-  await screen.findByText("Select a card to see its details.");
+  await screen.findByRole("img", { name: "No task selected" });
   expect(screen.queryByRole("textbox", { name: "Title" })).toBeNull();
   expect(writes).toHaveLength(0);
 });
@@ -161,19 +161,19 @@ it.each([500, 409])("rolls back a failed save (%s), reconciles, and retains the 
   expect(card("c").getAttribute("aria-busy")).toBe("false");
 });
 
-it("refreshes queued changes after cancellation and replaces empty-column text with a placeholder", async () => {
+it("refreshes queued changes after cancellation and replaces the empty-column illustration with a drop placeholder", async () => {
   render(<App />);
   const dataTransfer = await startDrag();
   const column = screen.getByRole("region", { name: "Inbox column" });
   dragEvent(column, "dragover", 5, dataTransfer);
   expect(order("Inbox")).toEqual(["placeholder"]);
-  expect(screen.queryByText("Nothing incoming")).toBeNull();
+  expect(within(column).queryByRole("img", { name: "Inbox is empty" })).toBeNull();
   rows = [...rows, task("d")];
   act(() => invalidate());
   expect(screen.queryByText("Task d")).toBeNull();
   dragEvent(card("c"), "dragend", 5, dataTransfer);
   await screen.findByText("Task d");
-  expect(screen.getByText("Nothing incoming")).toBeTruthy();
+  expect(within(column).getByRole("img", { name: "Inbox is empty" })).toBeTruthy();
 });
 
 it("inserts across columns on valid Polling drop and rejects unconfigured Polling", async () => {

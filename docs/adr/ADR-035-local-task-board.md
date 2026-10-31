@@ -288,9 +288,17 @@ keeps discovering events after creating a task. No backend contracts change.
 The board uses rounded column outlines and title capsules, softer task-card
 borders with a purple selection ring, tinted source-icon backings, capsule
 selectors and primary buttons, and segmented inspector tabs. Existing palette
-tokens, service icons, footer links, data, controls and behaviors are retained.
+tokens, service branding, footer links, data, controls and behaviors are retained.
 Task details keep their provenance without duplicating the card footer.
 
-The change is CSS-only. Hover changes borders and surfaces without translating
-cards or changing insertion geometry; the collapsed Done drop target retains its
-fixed slot and width. Existing focus indicators and reduced-motion rules apply.
+Cards lift slightly on hover and selection and depress on pointer press. Motion
+stops for the whole board during drag/save, keeping insertion geometry stable;
+the collapsed Done drop target retains its fixed slot and width. Focus indicators
+remain visible, and reduced motion disables movement as well as transitions.
+
+Explanatory workspace, sidebar, column and workflow captions are omitted. Empty
+columns use a small decorative card stack with an accessible empty/loading label;
+the inspector keeps its noninteractive outline without a visible caption.
+Feedback uses a simple speech bubble and schedules a larger outlined clock.
+Collapsed Sources retain every source button, its active/paused status dot and a
+name/status tooltip and accessible label; opening and editing a source is unchanged.

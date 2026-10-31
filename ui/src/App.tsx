@@ -20,7 +20,7 @@ import {
   taskSourceKind,
 } from "./model";
 import { Field, PromptFields, TaskChatForm } from "./forms";
-import { EditIcon, ServiceIcon, SourceIcon } from "./ServiceIcons";
+import { EditIcon, ScheduleIcon, ServiceIcon, SourceIcon } from "./ServiceIcons";
 
 type Panel = "details" | "new-task" | "new-source" | "add-chat";
 import { SourceEditor } from "./SourceEditor";
@@ -731,7 +731,6 @@ export function App() {
           <span className="brand-mark">c</span>
           <div>
             <strong>Codex</strong>
-            <span>Local task board</span>
           </div>
         </div>
         <div className="header-status">
@@ -739,7 +738,6 @@ export function App() {
             className={`connection-dot ${connection === "Live" ? "live" : ""}`}
           />
           {connection}
-          <span className="local-label">Local workspace</span>
         </div>
         <button onClick={() => open("add-chat")}>Add chat</button>
         <button className="primary" onClick={() => open("new-task")}>
@@ -757,65 +755,37 @@ export function App() {
             {collapsed ? "›" : "‹"}
           </button>
         </div>
-        {collapsed ? (
-          <button
-            className="source-add icon-button"
-            aria-label="Add source"
-            onClick={() => open("new-source")}
-          >
-            ＋
-          </button>
-        ) : (
-          <>
-            <p className="sidebar-note">Create tasks as work arrives.</p>
-            <button className="source-add" onClick={() => open("new-source")}>
-              ＋ Add source
-            </button>
-            <div className="source-list">
-              {sources.map((source) => (
-                <button
-                  key={source.id}
-                  className={`source-item ${visibleSelection === source.id ? "selected" : ""}`}
-                  onClick={() => select(source)}
-                >
-                  <span
-                    className={`source-symbol ${source.column === "polling" ? "active" : ""}`}
-                  >
-                    {taskSourceKind(source) ? <SourceIcon kind={taskSourceKind(source)!} /> : source.polling?.type === "cron" ? "◷" : "↗"}
-                  </span>
-                  <span>
-                    <strong>{source.title}</strong>
-                    <small>
-                      {source.column === "polling"
-                        ? "Polling"
-                        : `Paused · ${labels[source.column]}`}
-                    </small>
-                  </span>
-                  <i
-                    className={`source-dot ${source.column === "polling" ? "active" : ""}`}
-                  />
-                </button>
-              ))}
-              {!sources.length && (
-                <p className="empty-sources">
-                  Connect a PR inbox or a schedule.
-                </p>
-              )}
-            </div>
-            <div className="sidebar-footer">
-              <span className="tiny-label">HOW IT WORKS</span>
-              <p>
-                Sources create tasks in Inbox. Each new task gets its own launch
-                request.
-              </p>
-            </div>
-          </>
-        )}
+        <button
+          className={`source-add${collapsed ? " icon-button" : ""}`}
+          aria-label="Add source"
+          onClick={() => open("new-source")}
+        >
+          {collapsed ? "＋" : "＋ Add source"}
+        </button>
+        <div className="source-list">
+          {sources.map((source) => {
+            const status = source.column === "polling" ? "Polling" : `Paused · ${labels[source.column]}`;
+            const kind = taskSourceKind(source);
+            return <button
+              key={source.id}
+              className={`source-item ${visibleSelection === source.id ? "selected" : ""}`}
+              aria-label={`${source.title} · ${status}`}
+              title={`${source.title} · ${status}`}
+              onClick={() => select(source)}
+            >
+              <span className="source-symbol">
+                {kind ? <SourceIcon kind={kind} /> : source.polling?.type === "cron" ? <ScheduleIcon /> : "↗"}
+              </span>
+              {!collapsed && <span><strong>{source.title}</strong><small>{status}</small></span>}
+              <i className={`source-dot ${source.column === "polling" ? "active" : ""}`} aria-hidden="true" />
+            </button>;
+          })}
+          {!collapsed && !sources.length && <p className="empty-sources">Connect a PR inbox or a schedule.</p>}
+        </div>
       </aside>
       <main className="board">
         <div className="board-heading">
           <div>
-            <p className="eyebrow">YOUR WORKSPACE</p>
             <h1>
               Task board{" "}
               <span>
@@ -916,15 +886,6 @@ export function App() {
                     {labels[column]}{" "}
                     <span className="count">{list.length}</span>
                   </h2>
-                  <span className="column-hint">
-                    {column === "inbox"
-                      ? "Incoming"
-                      : column === "todo"
-                        ? "Next up"
-                        : column === "polling"
-                          ? "Waiting"
-                          : "Finished"}
-                  </span>
                 </div>
                 <div className="column-cards">
                   {list.map((task) => (
@@ -963,33 +924,7 @@ export function App() {
                   ))}
                   {insertion?.beforeID === "" && placeholder}
                   {!list.length && !placeholder && (
-                    <div className="empty-column">
-                      <span>
-                        {column === "inbox"
-                          ? "↓"
-                          : column === "todo"
-                            ? "＋"
-                            : column === "polling"
-                              ? "◷"
-                              : "✓"}
-                      </span>
-                      <p>
-                        {!loaded
-                          ? "Loading…"
-                          : column === "inbox"
-                            ? "Nothing incoming"
-                            : column === "todo"
-                              ? "Room for your next task"
-                              : column === "polling"
-                                ? "No tasks waiting"
-                                : "Your finished work"}
-                      </p>
-                      <small>
-                        {column === "polling"
-                          ? "Add conditions to start waiting."
-                          : "Drag a task here or use Move."}
-                      </small>
-                    </div>
+                    <div className="empty-column" role="img" aria-label={loaded ? `${labels[column]} is empty` : `Loading ${labels[column]}`} aria-busy={!loaded} />
                   )}
                 </div>
                 {column === "todo" && (
@@ -1004,10 +939,6 @@ export function App() {
             );
           })}
         </div>
-        <footer className="board-footer">
-          <span>Reading a card leaves its state unchanged.</span>
-          <span>Prompt rules choose Telegram approval or automatic start.</span>
-        </footer>
       </main>
       <aside ref={detailPanel} className={`detail-panel${panel === "details" && (detailDismissed || !selectedCard) ? " detail-panel-empty" : ""}`} aria-label="Task details and settings" onKeyDown={(e) => {
         if (e.key !== "Enter" || !(e.metaKey || e.ctrlKey) || e.repeat || e.nativeEvent.isComposing) return;

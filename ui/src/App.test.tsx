@@ -357,7 +357,7 @@ it("opens a card chat attachment and preserves its draft across inspector tabs a
   fireEvent.click(detail.getByRole("tab", { name: "Overview" }));
   expect(screen.getByLabelText("Codex chat for Review the next revision")).toBe(chat);
   fireEvent.keyDown(chat, { key: "Escape" });
-  await screen.findByText("Select a card to see its details.");
+  await screen.findByRole("img", { name: "No task selected" });
   fireEvent.click(screen.getByRole("button", { name: /TASK Review the next revision/ }));
   expect((screen.getByLabelText("Codex chat for Review the next revision") as HTMLInputElement).value).toBe("codex://threads/header-chat");
   fireEvent.click(screen.getByRole("button", { name: rows[0].thread_id ? "Save chat" : "Link chat" }));
@@ -411,9 +411,20 @@ it.each(["blur", "Enter", "CmdEnter"])("saves the header title with %s through t
   expect(calls.filter(call => call.method === "PATCH")).toHaveLength(1);
   expect(rows[0].description).toBe("Check comments");
 });
+it("keeps the board quiet while retaining task and empty-column affordances", async () => {
+  render(<App />);
+  await screen.findByRole("button", { name: /CHAT Review the next revision/ });
+  for (const text of ["YOUR WORKSPACE", "Local workspace", "Local task board", "Create tasks as work arrives.", "HOW IT WORKS", "Incoming", "Next up", "Reading a card leaves its state unchanged.", "Prompt rules choose Telegram approval or automatic start.", "Select a card to see its details."]) {
+    expect(screen.queryByText(text)).toBeNull();
+  }
+  const empty = within(screen.getByRole("region", { name: "Inbox column" })).getByRole("img", { name: "Inbox is empty" });
+  expect(empty.textContent).toBe("");
+  expect(screen.getByRole("button", { name: "＋ Add a task" })).toBeTruthy();
+  expect(calls.every(call => call.method === "GET")).toBe(true);
+});
 it("shows a noninteractive empty inspector when no card is selected", async () => {
   render(<App />);
-  await screen.findByText("Select a card to see its details.");
+  await screen.findByRole("img", { name: "No task selected" });
   const panel = within(screen.getByRole("complementary", { name: "Task details and settings" }));
   expect(panel.queryByRole("button")).toBeNull();
   expect(panel.queryByRole("textbox")).toBeNull();
@@ -428,7 +439,7 @@ it("dismisses details with Escape, clears only the task URL parameter and reopen
   fireEvent.keyDown(title, { key: "Escape", isComposing: true });
   expect(screen.getByLabelText("Title")).toBeTruthy();
   fireEvent.keyDown(title, { key: "Escape" });
-  await screen.findByText("Select a card to see its details.");
+  await screen.findByRole("img", { name: "No task selected" });
   expect(window.location.search).toBe("?view=board");
   expect(window.location.hash).toBe("#queue");
   expect(screen.queryByRole("textbox", { name: "Title" })).toBeNull();
@@ -446,7 +457,7 @@ it("dismisses on an outside click while preserving inside clicks and destination
   fireEvent.click(screen.getByLabelText("Description"));
   expect(screen.getByLabelText("Title")).toBeTruthy();
   fireEvent(document.body, new MouseEvent("pointerdown", { bubbles: true, button: 0 }));
-  await screen.findByText("Select a card to see its details.");
+  await screen.findByRole("img", { name: "No task selected" });
   fireEvent.click(screen.getByRole("button", { name: /CHAT Review the next revision/ }));
   await screen.findByLabelText("Title");
   fireEvent.click(screen.getByRole("button", { name: /CHAT Other task/ }));
@@ -490,7 +501,7 @@ it("blurs and saves Overview on Escape without reopening details when the save c
   title.focus();
   fireEvent.change(title, { target: { value: "Saved while dismissed" } });
   fireEvent.keyDown(title, { key: "Escape" });
-  await screen.findByText("Select a card to see its details.");
+  await screen.findByRole("img", { name: "No task selected" });
   release();
   await waitFor(() => expect(rows[0].title).toBe("Saved while dismissed"));
   expect(screen.queryByRole("textbox", { name: "Title" })).toBeNull();
@@ -509,7 +520,7 @@ it("retains unsaved Polling settings and its tab when reopening the dismissed ca
   fireEvent.keyDown(prID, { key: "Escape" });
   expect(screen.queryByLabelText("PR ID")).toBeNull();
   fireEvent.keyDown(screen.getAllByRole("button", { name: "Rule source" })[0], { key: "Escape" });
-  await screen.findByText("Select a card to see its details.");
+  await screen.findByRole("img", { name: "No task selected" });
   fireEvent.click(screen.getByRole("button", { name: /CHAT Review the next revision/ }));
   await screen.findByRole("tab", { name: "Polling", selected: true });
   expect((ruleSource() as HTMLInputElement).value).toBe("456");
@@ -546,7 +557,7 @@ it("retains a source's unsaved child definition across outside dismissal", async
   const childTitle = screen.getByLabelText("Task title");
   fireEvent.change(childTitle, { target: { value: "Unsaved child title" } });
   fireEvent(document.body, new MouseEvent("pointerdown", { bubbles: true, button: 0 }));
-  await screen.findByText("Select a card to see its details.");
+  await screen.findByRole("img", { name: "No task selected" });
   fireEvent.click(screen.getByRole("button", { name: /PR source/ }));
   expect((await screen.findByLabelText("Task title") as HTMLInputElement).value).toBe("Unsaved child title");
   expect(calls.every(call => call.method === "GET")).toBe(true);
@@ -564,7 +575,7 @@ it("ignores detail responses that finish after dismissal", async () => {
   await screen.findByText("Loading details…");
   fireEvent.keyDown(window, { key: "Escape" });
   release();
-  await screen.findByText("Select a card to see its details.");
+  await screen.findByRole("img", { name: "No task selected" });
   await waitFor(() => expect(calls.some(call => call.path === "/v1/tasks/task-1")).toBe(true));
   expect(screen.queryByRole("textbox", { name: "Title" })).toBeNull();
   expect(new URLSearchParams(window.location.search).has("task")).toBe(false);
@@ -1053,6 +1064,12 @@ describe("board operator flows", () => {
     await screen.findByText("Paused · Done");
     fireEvent.click(screen.getByRole("button", { name: "Collapse sources" }));
     expect(screen.queryByText("Paused · Done")).toBeNull();
+    const source = screen.getByRole("button", { name: /Paused · Done/ });
+    expect(source.querySelector('.origin-icon')).not.toBeNull();
+    expect(source.querySelector('.source-dot')).not.toBeNull();
+    expect(source.getAttribute('title')).toContain('Paused · Done');
+    fireEvent.click(source);
+    await screen.findByRole('button', { name: 'Source settings' });
     fireEvent.click(screen.getByRole("button", { name: "Expand sources" }));
     expect(screen.getByText("Paused · Done")).toBeTruthy();
   });

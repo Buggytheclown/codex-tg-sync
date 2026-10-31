@@ -3,7 +3,7 @@ function Bar({ width, height = 10 }: { width: string; height?: number }) {
 }
 
 export function DetailPlaceholder() {
-  return <div className="detail-placeholder">
+  return <div className="detail-placeholder" role="img" aria-label="No task selected">
     <div className="placeholder-layout" aria-hidden="true">
       <div className="detail-heading">
         <div className="placeholder-title"><Bar width="94%" height={20} /><Bar width="64%" height={20} /></div>
@@ -21,6 +21,5 @@ export function DetailPlaceholder() {
         </div>
       </div>
     </div>
-    <p className="placeholder-caption">Select a card to see its details.</p>
   </div>;
 }
