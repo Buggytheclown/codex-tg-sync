@@ -419,7 +419,7 @@ it("keeps the board quiet while retaining task and empty-column affordances", as
   }
   const empty = within(screen.getByRole("region", { name: "Inbox column" })).getByRole("img", { name: "Inbox is empty" });
   expect(empty.textContent).toBe("");
-  expect(screen.getByRole("button", { name: "＋ Add a task" })).toBeTruthy();
+  expect(screen.getByRole("button", { name: "Add a task" })).toBeTruthy();
   expect(calls.every(call => call.method === "GET")).toBe(true);
 });
 it("shows a noninteractive empty inspector when no card is selected", async () => {

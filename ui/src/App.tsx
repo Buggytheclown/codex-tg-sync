@@ -914,6 +914,11 @@ export function App() {
                     {labels[column]}{" "}
                     <span className="count">{list.length}</span>
                   </h2>
+                  {column === "todo" && (
+                    <button className="column-add" type="button" aria-label="Add a task" title="Add a task" onClick={() => open("new-task")}>
+                      <svg width="16" height="16" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" aria-hidden="true"><path d="M10 4v12M4 10h12" /></svg>
+                    </button>
+                  )}
                 </div>
                 <div className="column-cards">
                   {list.map((task) => (
@@ -946,14 +951,6 @@ export function App() {
                     <div className="empty-column" role="img" aria-label={loaded ? `${labels[column]} is empty` : `Loading ${labels[column]}`} aria-busy={!loaded} />
                   )}
                 </div>
-                {column === "todo" && (
-                  <button
-                    className="column-add"
-                    onClick={() => open("new-task")}
-                  >
-                    ＋ Add a task
-                  </button>
-                )}
               </section>
             );
           })}

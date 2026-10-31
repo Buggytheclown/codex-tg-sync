@@ -148,8 +148,8 @@ small { font-size: 12px; line-height: 1.6; color: var(--muted); }
 .board-columns { display: grid; grid-template-columns: repeat(var(--board-column-count, 4), minmax(180px, 1fr)); gap: 12px; flex: 1 0 auto; min-height: 380px; }
 .board-columns.done-hidden { --board-column-count: 3; }
 .column { display: flex; flex-direction: column; min-width: 0; border: 1px solid #ffffff08; border-radius: 16px; padding: 14px 9px 8px; background: #ffffff04; }
-.column-heading { display: flex; flex-direction: column; gap: 5px; margin: 0 3px 14px; }
-.column-heading h2 { align-self: flex-start; max-width: 100%; min-height: 29px; padding: 5px 9px; border-radius: 999px; background: #ffffff08; font-size: 14px; display: flex; align-items: center; gap: 7px; font-weight: 500; }
+.column-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 32px; margin: 0 3px 14px; }
+.column-heading h2 { min-width: 0; max-width: 100%; min-height: 29px; padding: 5px 9px; border-radius: 999px; background: #ffffff08; font-size: 14px; display: flex; align-items: center; gap: 7px; font-weight: 500; }
 .column-dot { height: 7px; width: 7px; border-radius: 50%; background: var(--action); }
 .todo .column-dot, .done .column-dot { background: var(--muted); }
 .polling .column-dot { background: var(--amber); }
@@ -241,7 +241,9 @@ small { font-size: 12px; line-height: 1.6; color: var(--muted); }
 .empty-column::before, .empty-column::after { content: ""; grid-area: 1 / 1; width: 46px; height: 32px; border: 1px solid #ffffff1c; border-radius: 7px; background: var(--background); }
 .empty-column::before { transform: translate(-4px, -4px) rotate(-6deg); }
 .empty-column::after { transform: translate(4px, 4px) rotate(3deg); background: var(--surface); }
-.column-add { border: 0; background: transparent; color: var(--blue); font-size: 12px; text-align: left; padding: 10px 3px; margin-top: 8px; }
+.column-add { position: relative; display: grid; place-items: center; flex: 0 0 32px; width: 32px; min-height: 32px; padding: 0; border: 1px solid transparent; border-radius: 10px; background: #ffffff04; color: var(--muted); }
+.column-add:hover { color: var(--action-hover); border-color: #a06aff44; background: #a06aff12; }
+@media (pointer: coarse) { .column-heading { min-height: 44px; } .column-add::before { content: ""; position: absolute; inset: -6px; } }
 
 /* Inspector surfaces, native form controls and readable task brief. */
 .detail-panel { background: var(--background); border-left: 1px solid var(--border); display: flex; flex-direction: column; overflow: auto; min-height: 0; min-width: 0; }
