@@ -1,19 +1,23 @@
-function Bar({ width, height = 10 }: { width: string; height?: number }) {
-  return <span className="placeholder-bar" style={{ width, height }} />;
+function Bar({ width, height = 10, className = "" }: { width: string; height?: number; className?: string }) {
+  return <span className={`placeholder-bar ${className}`} style={{ width, height }} />;
 }
 
 export function DetailPlaceholder() {
   return <div className="detail-placeholder" role="img" aria-label="No task selected">
     <div className="placeholder-layout" aria-hidden="true">
       <div className="detail-heading">
-        <div className="placeholder-title"><Bar width="94%" height={20} /><Bar width="64%" height={20} /></div>
-        <div className="detail-badges"><Bar width="60px" height={26} /><Bar width="68px" height={26} /><span className="placeholder-priority"><Bar width="112px" height={26} /></span></div>
+        <div className="placeholder-title"><Bar width="68%" height={20} /></div>
+        <div className="detail-badges">
+          <Bar className="placeholder-select" width="96px" height={32} />
+          <Bar className="placeholder-execution" width="58px" height={24} />
+          <Bar className="placeholder-select placeholder-priority" width="103px" height={32} />
+        </div>
       </div>
-      <div className="placeholder-tabs">
-        <span>Overview</span><span>Polling</span><span>History</span>
+      <div className="tabs placeholder-tabs">
+        <span className="placeholder-tab selected">Overview</span><span className="placeholder-tab">Polling</span><span className="placeholder-tab">History</span>
       </div>
       <div className="panel-body">
-        <div className="placeholder-description">
+        <div className="field placeholder-description">
           <span className="placeholder-label">Description</span>
           <div className="placeholder-lines">
             {["96%", "88%", "94%", "59%"].map(width => <Bar key={width} width={width} />)}

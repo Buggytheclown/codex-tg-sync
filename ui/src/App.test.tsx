@@ -432,6 +432,20 @@ it("shows a noninteractive empty inspector when no card is selected", async () =
   expect(panel.queryByRole("status")).toBeNull();
   expect(calls.every(call => call.method === "GET")).toBe(true);
 });
+it("replaces a selected card directly without dismissing details on the next pointer press", async () => {
+  rows.push(makeTask({ id: "task-2", title: "Other task" }));
+  window.history.replaceState(null, "", "/?task=task-1");
+  render(<App />);
+  await screen.findByRole("textbox", { name: "Title" });
+  const other = screen.getByRole("button", { name: /CHAT Other task/ });
+  fireEvent(other, new MouseEvent("pointerdown", { bubbles: true, button: 0 }));
+  expect((screen.getByRole("textbox", { name: "Title" }) as HTMLTextAreaElement).value).toBe("Review the next revision");
+  expect(screen.queryByRole("img", { name: "No task selected" })).toBeNull();
+  fireEvent.pointerUp(window);
+  fireEvent.click(other);
+  await screen.findByDisplayValue("Other task");
+  expect(calls.every(call => call.method === "GET")).toBe(true);
+});
 it("dismisses details with Escape, clears only the task URL parameter and reopens the card", async () => {
   window.history.replaceState(null, "", "/?task=task-1&view=board#queue");
   render(<App />);

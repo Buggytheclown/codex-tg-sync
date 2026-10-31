@@ -247,9 +247,8 @@ small { font-size: 12px; line-height: 1.6; color: var(--muted); }
 
 /* Inspector surfaces, native form controls and readable task brief. */
 .detail-panel { background: var(--background); border-left: 1px solid var(--border); display: flex; flex-direction: column; overflow: auto; min-height: 0; min-width: 0; }
-.detail-content { display: contents; }
+.detail-content { display: block; min-width: 0; }
 .detail-content[hidden] { display: none; }
-.detail-panel-empty > .panel-header { border-bottom-color: transparent; }
 .panel-header { height: 48px; flex-shrink: 0; display: flex; align-items: center; justify-content: space-between; padding: 0 22px; border-bottom: 1px solid var(--border-soft); }
 .panel-header .eyebrow { font-size: 10px; }
 .panel-body { padding: 18px 22px 26px; }
@@ -269,22 +268,26 @@ small { font-size: 12px; line-height: 1.6; color: var(--muted); }
 .pill { font-size: 11px; color: var(--muted); background: var(--soft); border: 0; border-radius: 5px; padding: 4px 8px; }
 /* Segmented tabs keep all three views in the same inspector. */
 .tabs { display: flex; gap: 0; margin: 10px 22px 12px; padding: 4px; border-radius: 12px; background: #ffffff07; }
-.tabs button { flex: 1; min-width: 0; min-height: 30px; border: 0; border-radius: 9px; font-size: 13px; font-weight: 400; padding: 5px 8px; color: var(--muted); background: transparent; }
+.tabs :is(button, .placeholder-tab) { flex: 1; min-width: 0; min-height: 30px; border: 0; border-radius: 9px; font-size: 13px; font-weight: 400; padding: 5px 8px; color: var(--muted); background: transparent; }
 .tabs button[aria-selected="true"] { color: var(--text); background: var(--surface); box-shadow: 0 2px 4px #0000001c; }
 .tabs button:not([aria-selected="true"]):hover { color: var(--text); background: var(--hover); }
 .detail-content > .info-note { margin: 16px 22px 0; }
 
 /* A static, noninteractive outline of the inspector when selection is cleared. */
-.detail-placeholder { --placeholder-fill: #ffffff0b; --placeholder-label: #ffffff40; }
+.detail-placeholder { --placeholder-fill: #ffffff0b; --placeholder-label: #ffffff40; animation: detail-placeholder-in 160ms ease-out; }
 .detail-placeholder * { animation: none; transition: none; }
 .placeholder-layout { pointer-events: none; }
 .placeholder-bar { display: block; flex-shrink: 0; border-radius: 4px; background: var(--placeholder-fill); }
-.placeholder-label { display: block; font-size: 12px; font-weight: 500; line-height: 18px; color: var(--placeholder-label); }
+.placeholder-label { display: block; font-size: 12px; font-weight: 500; color: var(--placeholder-label); }
 .placeholder-priority { margin-left: auto; }
-.placeholder-tabs { padding: 0 22px 10px; display: flex; gap: 0; }
-.placeholder-tabs > span { height: 30px; display: flex; align-items: center; padding: 5px 13px; font-size: 13px; color: var(--placeholder-label); border-radius: 5px; }
-.placeholder-title { display: flex; flex-direction: column; gap: 9px; min-height: 58px; }
-.placeholder-lines { display: flex; flex-direction: column; gap: 13px; min-height: 91px; margin-top: 16px; padding-left: 5px; }
+.placeholder-tabs .placeholder-tab { display: grid; place-items: center; color: var(--placeholder-label); }
+.placeholder-tabs .placeholder-tab.selected { background: var(--placeholder-fill); }
+.placeholder-select { border-radius: 999px; }
+.placeholder-execution { border-radius: 5px; }
+.placeholder-title { display: flex; align-items: center; min-height: 29px; }
+.placeholder-lines { display: flex; flex-direction: column; gap: 12px; margin-top: 5px; padding: 5px; }
+@keyframes detail-placeholder-in { from { opacity: 0; } to { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { .detail-placeholder { animation: none; } }
 .field { display: flex; flex-direction: column; gap: 6px; margin-bottom: 16px; min-width: 0; }
 .field > label { font-size: 12px; font-weight: 500; color: var(--secondary); }
 .field input, .field select, .field textarea { width: 100%; min-width: 0; border: 1px solid var(--border); border-radius: var(--radius); padding: 8px 10px; font-size: 13px; color: var(--text); background: transparent; min-height: 36px; line-height: 1.5; }

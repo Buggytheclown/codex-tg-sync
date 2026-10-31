@@ -445,3 +445,16 @@ For live Telegram QA, verify:
   Check 1440/1024/736/375/320 px wrapping and original footer/control data. Only
   fixture writes are used; install assets and read them back without restarting
   the daemon or dispatching Telegram/LLM work.
+
+## Inspector placeholder and transitions
+
+- `ui/src/useDetailPresence.test.tsx`: keep the same editor/input through exit,
+  hide closing controls from assistive technology, reject an obsolete animation
+  completion after reopening/switching, and clean up on unmount/reduced motion.
+- App integration covers direct card replacement without an intermediate empty
+  inspector, together with existing Escape/outside handling, autosave and retained
+  Overview/Polling/source drafts.
+- Browser QA compares actual versus placeholder tab bounds, inert exit controls,
+  rapid close/reopen and switching, long-description scroll during exit, and
+  reduced motion. Check 1440/1024/736/375/320 px and source/new-task editor layout.
+  Install static assets and verify exact live readback; no daemon restart.

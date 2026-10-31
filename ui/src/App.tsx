@@ -30,6 +30,7 @@ import { WorkflowForm } from "./Workflow";
 import { TicketControl } from "./TicketControl";
 import { PRControl } from "./PRControl";
 import { DetailPlaceholder } from "./DetailPlaceholder";
+import { useDetailPresence } from "./useDetailPresence";
 import { DescriptionField } from "./DescriptionField";
 import { ChipSelect } from "./ChipSelect";
 const columnOptions = columns.map((value, index) => ({ value, label: labels[value], icon: ["↓", "●", "◷", "✓"][index] }));
@@ -281,6 +282,7 @@ export function App() {
   useLayoutEffect(() => { motion.current!.layout(); });
   useEffect(() => () => motion.current!.dispose(), []);
   const detailPanel = useRef<HTMLElement>(null);
+  const detailContent = useRef<HTMLDivElement>(null);
   // Keep the last editor mounted while dismissed so explicit-save drafts survive.
   const [detailDismissed, setDetailDismissed] = useState(false);
   const overviewDrafts = useRef(new Map<string, OverviewDraft>());
@@ -375,6 +377,8 @@ export function App() {
     if (reconcile && queuedRefresh.current) void refresh();
   };
   const selectedCard = tasks.find((t) => t.id === selectedID);
+  const detailVisible = panel !== "details" || (!detailDismissed && !!selectedCard);
+  const detailPresent = useDetailPresence(detailContent, detailVisible, `${panel}:${selectedID}`);
   const visibleSelection = panel === "details" && !detailDismissed ? selectedID : "";
   const [detail, setDetail] = useState<Task>();
   const [detailError, setDetailError] = useState("");
@@ -435,6 +439,9 @@ export function App() {
     };
     const outsidePointerDown = (e: PointerEvent) => {
       if (e.button !== 0 || dragRef.current || !(e.target instanceof Node)) return;
+      // Selecting another card/source replaces the view directly, without an
+      // empty-panel flash between pointerdown and click (or during a drag).
+      if (e.target instanceof Element && e.target.closest(".task-card, .source-item")) return;
       if (!detailPanel.current?.contains(e.target)) dismissDetails();
     };
     window.addEventListener("keydown", escape);
@@ -972,7 +979,9 @@ export function App() {
         e.preventDefault();
         form.requestSubmit(submitter);
       }}>
-        {(panel !== "details" || (!detailDismissed && selected && isSource(selected))) && <div className="panel-header">
+        {panel === "details" && !detailPresent && <DetailPlaceholder />}
+        <div ref={detailContent} className="detail-content" hidden={!detailPresent} aria-hidden={!detailVisible} inert={!detailVisible}>
+        {(panel !== "details" || (selected && isSource(selected))) && <div className="panel-header">
           <span className="eyebrow">
             {panel === "details"
               ? "SOURCE SETTINGS"
@@ -992,8 +1001,6 @@ export function App() {
             </button>
           )}
         </div>}
-        {panel === "details" && detailDismissed && <DetailPlaceholder />}
-        <div className="detail-content" hidden={panel === "details" && detailDismissed}>
         {panel === "details" && selected && detailError && (
           <div className="panel-body">
             <p role="alert" className="error-note">{detailError}</p>
@@ -1108,9 +1115,7 @@ export function App() {
             </div>
           </>}
           </OverviewForm>
-        ) : panel === "details" ? (
-          !detailDismissed && <DetailPlaceholder />
-        ) : panel === "new-task" ? (
+        ) : panel === "details" ? null : panel === "new-task" ? (
           <NewTask
             busy={busy}
             onSave={async (input) =>
