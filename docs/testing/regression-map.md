@@ -423,9 +423,25 @@ For live Telegram QA, verify:
 - Browser fixtures check cards, inspector tabs, source/prompt panels and polling
   rules at 1440/1024/736/375/320 px without horizontal page overflow. Check original
   service icons, linked/empty footer actions, request hints and source provenance.
-- Check hover lift, pointer-press feedback and selected-card lift; freeze all
-  card transforms during drag/save, and disable motion with reduced motion.
+- Check hover lift, pointer-press feedback and selected-card lift; pause those
+  effects while drag/save placement animations own position. Disable motion with
+  reduced motion.
   A mouse drag to collapsed Done must keep the board and toggle slot unchanged;
   only the target height grows from 30 to 88 px. Reduced motion disables style
   transitions and the existing running animation. Install static assets and
   verify exact live byte readback; no daemon restart is required.
+
+## Smooth card dragging
+
+- `ui/src/drag.test.tsx`: a single original slot, no same-position write, full-card
+  pointer preview including live priority/footer, activation threshold, suppression
+  of the release click, touch grip versus scrolling, mismatched pointers, outside
+  release, Escape/blur/pointer cancellation and cleanup on unmount. Existing
+  reorder, stale-read, failed-save, Polling validation and hidden Done cases share
+  the move path and retain version/draft coverage in App integration.
+- Browser fixtures verify full-height cards of different sizes, neighbor movement,
+  cross-column landing, a delayed save failure returning the preview, zero leftover
+  hidden cards/previews, fixed Done geometry, edge scrolling and reduced motion.
+  Check 1440/1024/736/375/320 px wrapping and original footer/control data. Only
+  fixture writes are used; install assets and read them back without restarting
+  the daemon or dispatching Telegram/LLM work.

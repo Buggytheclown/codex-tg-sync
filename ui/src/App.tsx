@@ -1,7 +1,9 @@
-import { useCallback, useEffect, useId, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import type { FormEvent, ReactNode } from "react";
 import { api, APIError } from "./api";
 import { compareTasks, placeTask } from "./taskOrder";
+import { BoardMotion } from "./boardMotion";
+import type { DropPosition } from "./boardMotion";
 import type { Column, Polling, Priority, Task, TaskCard as Card, TaskEvent, SourceKind } from "./model";
 import {
   compactTask,
@@ -186,6 +188,7 @@ export function TaskCard({
   disabled = false,
   onDragStart,
   onDragEnd,
+  onPointerDown,
 }: {
   task: Card;
   sourceKind?: SourceKind;
@@ -201,6 +204,7 @@ export function TaskCard({
   disabled?: boolean;
   onDragStart?: (e: React.DragEvent<HTMLButtonElement>) => void;
   onDragEnd?: () => void;
+  onPointerDown?: (e: React.PointerEvent<HTMLButtonElement>) => void;
 }) {
   const polling = pollingLabel(task);
   const pollingTone = polling === "Waiting" ? "active" : polling === "No polling" ? "" : "warning";
@@ -213,6 +217,7 @@ export function TaskCard({
       data-task-id={task.id}
       aria-busy={saving}
       onClick={onSelect}
+      onPointerDown={onPointerDown}
       draggable={!disabled}
       onDragEnd={onDragEnd}
       onDragStart={(e) => {
@@ -222,7 +227,6 @@ export function TaskCard({
       }}
       aria-pressed={selected}
     >
-      {grabbed && <span className="drag-badge">Moving</span>}
       {saving && (
         <span className="save-badge" role="status">
           Saving position…
@@ -272,6 +276,10 @@ export function TaskCard({
   );
 }
 export function App() {
+  const motion = useRef<BoardMotion | null>(null);
+  if (!motion.current) motion.current = new BoardMotion();
+  useLayoutEffect(() => { motion.current!.layout(); });
+  useEffect(() => () => motion.current!.dispose(), []);
   const detailPanel = useRef<HTMLElement>(null);
   // Keep the last editor mounted while dismissed so explicit-save drafts survive.
   const [detailDismissed, setDetailDismissed] = useState(false);
@@ -418,10 +426,7 @@ export function App() {
       if (e.key !== "Escape" || e.isComposing || e.repeat || e.defaultPrevented) return;
       if (dragRef.current) {
         cancelledDrag.current = true;
-        dragRef.current = null;
-        setDrag(null);
-        setInsertion(null);
-        if (queuedRefresh.current) void refresh();
+        if (!motion.current!.cancel()) clearDrag();
         return;
       }
       // Escape belongs to the native selector popup while it owns focus.
@@ -683,21 +688,24 @@ export function App() {
     const candidates = Array.from(element.querySelectorAll<HTMLElement>("[data-task-id]"))
       .filter((card) => card.dataset.taskId !== dragRef.current);
     const before = candidates.find((card) => {
-      const rect = (card.closest(".card-with-link") || card).getBoundingClientRect();
+      const rect = motion.current!.layoutRect(card.closest<HTMLElement>(".card-with-link") || card);
       return y < rect.top + rect.height / 2;
     });
     return { column, beforeID: before?.dataset.taskId || "" };
   };
+  const finishDrag = (target: DropPosition | null) => {
+    const task = tasks.find(t => t.id === dragRef.current);
+    clearDrag(false);
+    const original = cards.filter(t => t.column === task?.column).sort(compareTasks);
+    const next = original[original.findIndex(t => t.id === task?.id) + 1]?.id || "";
+    if (task && target && !(task.column === target.column && next === target.beforeID)) {
+      void move(task, target.column, target.beforeID);
+    } else if (queuedRefresh.current) void refresh();
+  };
   const drop = (e: React.DragEvent<HTMLElement>, column: Column) => {
     e.preventDefault();
-    if (cancelledDrag.current || pendingMove.current) return;
-    const task = tasks.find((t) => t.id === (dragRef.current || e.dataTransfer.getData("text/task-id")));
-    // The visible placeholder is the release target. With no prior dragover,
-    // derive it from the release point (also supports dropping into empty columns).
-    const target = insertion?.column === column ? insertion : insertionAt(e.currentTarget, e.clientY, column);
-    clearDrag(false);
-    if (task) void move(task, column, target.beforeID);
-    else if (queuedRefresh.current) void refresh();
+    if (cancelledDrag.current || pendingMove.current || !dragRef.current) return;
+    finishDrag(insertion?.column === column ? insertion : insertionAt(e.currentTarget, e.clientY, column));
   };
   const created = (task: Task) => {
     setDetailDismissed(false);
@@ -723,6 +731,25 @@ export function App() {
           .toLowerCase()
           .includes(query.toLowerCase()),
     );
+  const beginDrag = (id: string, height: number) => {
+    const task = cards.find(t => t.id === id);
+    if (!task || busy) return false;
+    cancelledDrag.current = false;
+    dragRef.current = id;
+    queuedRefresh.current = true;
+    ++refreshID.current;
+    const list = cards.filter(t => t.column === task.column).sort(compareTasks);
+    const beforeID = list[list.findIndex(t => t.id === id) + 1]?.id || "";
+    setDrag({ id, height });
+    setInsertion({ column: task.column, beforeID });
+    return true;
+  };
+  motion.current.callbacks = {
+    start: beginDrag,
+    over: insertionAt,
+    target: target => setInsertion(old => old?.column === target?.column && old?.beforeID === target?.beforeID ? old : target),
+    drop: finishDrag,
+  };
   const selectedSourceKind = selected ? taskSourceKind(selected, sources.find(source => source.id === selected.source_task_id)) : undefined;
   return (
     <div className={`app ${collapsed ? "sources-collapsed" : ""}`}>
@@ -783,7 +810,9 @@ export function App() {
           {!collapsed && !sources.length && <p className="empty-sources">Connect a PR inbox or a schedule.</p>}
         </div>
       </aside>
-      <main className="board">
+      <main className="board" onClickCapture={e => {
+        if (motion.current!.suppressClick(e.nativeEvent)) { e.preventDefault(); e.stopPropagation(); }
+      }}>
         <div className="board-heading">
           <div>
             <h1>
@@ -860,14 +889,13 @@ export function App() {
                 role="status"
                 aria-label="Drop task here"
                 style={{ minHeight: drag.height || 100 }}
-              >
-                Drop here
-              </div>
+              />
             ) : null;
             return (
               <section
                 key={column}
                 className={`column ${column}`}
+                data-column={column}
                 aria-label={`${labels[column]} column`}
                 onDragOver={(e) => {
                   if (!dragRef.current || pendingMove.current) return;
@@ -889,7 +917,7 @@ export function App() {
                 </div>
                 <div className="column-cards">
                   {list.map((task) => (
-                    <div className="card-slot" key={task.id}>
+                    <div className={`card-slot${drag?.id === task.id ? " drag-origin" : ""}`} key={task.id}>
                       {insertion?.beforeID === task.id && placeholder}
                       <TaskCard
                         task={task}
@@ -904,19 +932,10 @@ export function App() {
                         onTicket={(url, version) => saveTicket(task, url, version)}
                         onPR={(url, version) => savePR(task, url, version)}
                         onLink={(thread_id, expected_version) => mutate<Task>(`/v1/tasks/${task.id}/chat`, "POST", { expected_version, thread_id })}
-                        onDragStart={(e) => {
-                          if (busy) {
-                            e.preventDefault();
-                            return;
-                          }
-                          cancelledDrag.current = false;
-                          dragRef.current = task.id;
-                          queuedRefresh.current = true;
-                          ++refreshID.current;
-                          setDrag({
-                            id: task.id,
-                            height: (e.currentTarget.closest(".card-with-link") || e.currentTarget).getBoundingClientRect().height,
-                          });
+                        onPointerDown={e => motion.current!.pointerDown(e.nativeEvent, task.id, e.currentTarget, busy)}
+                        onDragStart={e => {
+                          if (busy) { e.preventDefault(); return; }
+                          beginDrag(task.id, (e.currentTarget.closest(".card-with-link") || e.currentTarget).getBoundingClientRect().height);
                         }}
                         onDragEnd={() => clearDrag()}
                       />

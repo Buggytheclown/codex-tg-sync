@@ -1033,9 +1033,9 @@ describe("board operator flows", () => {
     await screen.findByRole("button", {
       name: /CHAT Review the next revision/,
     });
-    fireEvent.drop(screen.getByRole("region", { name: "Polling column" }), {
-      dataTransfer: { getData: () => rows[0].id },
-    });
+    const dataTransfer = { setData() {}, getData: () => rows[0].id };
+    fireEvent.dragStart(document.querySelector('[data-task-id]')!, { dataTransfer });
+    fireEvent.drop(screen.getByRole("region", { name: "Polling column" }), { dataTransfer });
     await screen.findByRole("tab", { name: "Polling", selected: true });
     expect(calls.some((c) => c.method !== "GET")).toBe(false);
   });
@@ -1433,11 +1433,11 @@ it("preserves an unsaved source prompt when background details refresh fails and
   expect(initialPrompt()).toBe(prompt);
 });
 it("does not promote stale full settings to the compact reorder version", async () => {
-  rows = [makeTask({ config: { ...emptyConfig(), initial_prompt: "Old settings" } })];
+  rows = [makeTask({ config: { ...emptyConfig(), initial_prompt: "Old settings" } }), makeTask({ id: "task-2" })];
   window.history.replaceState(null, "", "/?task=task-1");
   render(<App />);
   await screen.findByRole("combobox", { name: "Move task" });
-  rows = [makeTask({ version: 2, config: { ...emptyConfig(), initial_prompt: "External settings" } })];
+  rows = [makeTask({ version: 2, config: { ...emptyConfig(), initial_prompt: "External settings" } }), makeTask({ id: "task-2" })];
   const original = vi.mocked(fetch).getMockImplementation()!;
   let resolve!: (value: Response) => void;
   const held = new Promise<Response>((done) => { resolve = done; });
@@ -1455,7 +1455,8 @@ it("does not promote stale full settings to the compact reorder version", async 
   const card = document.querySelector('[data-task-id="task-1"]')!;
   const dataTransfer = { setData() {}, getData: () => "task-1", effectAllowed: "", dropEffect: "" };
   fireEvent.dragStart(card, { dataTransfer });
-  fireEvent.drop(screen.getByRole("region", { name: "TODO column" }), { dataTransfer, clientY: 0 });
+  fireEvent.dragOver(screen.getByRole("region", { name: "TODO column" }), { dataTransfer, clientY: 100 });
+  fireEvent.drop(screen.getByRole("region", { name: "TODO column" }), { dataTransfer, clientY: 100 });
   await waitFor(() => expect(rows[0].version).toBe(3));
   await waitFor(() => expect(detailReads).toBeGreaterThan(2));
   resolve({ ok: true, status: 200, json: async () => makeTask({ version: 2, config: { ...emptyConfig(), initial_prompt: "Delayed obsolete settings" } }) } as Response);

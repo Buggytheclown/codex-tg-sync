@@ -28,6 +28,7 @@ function card(id: string) { return document.querySelector<HTMLElement>(`[data-ta
 function order(column = "TODO") {
   return Array.from(screen.getByRole("region", { name: `${column} column` })
     .querySelectorAll<HTMLElement>("[data-task-id], .drop-placeholder"))
+    .filter(element => !element.closest(".drag-origin"))
     .map((element) => element.dataset.taskId || "placeholder");
 }
 async function startDrag() {
@@ -42,8 +43,15 @@ async function startDrag() {
   dragEvent(card("c"), "dragstart", 320, dataTransfer);
   return dataTransfer;
 }
+let hitTarget: Element | null = null;
 beforeEach(() => {
   rows = [task("a"), task("b"), task("c")]; writes = [];
+  hitTarget = null;
+  Object.defineProperty(document, "elementFromPoint", { configurable: true, value: () => hitTarget });
+  vi.stubGlobal("PointerEvent", class extends MouseEvent {
+    pointerId: number; pointerType: string; isPrimary = true;
+    constructor(type: string, init: PointerEventInit) { super(type, init); this.pointerId = init.pointerId || 1; this.pointerType = init.pointerType || "mouse"; }
+  });
   heldRead = heldMove = null;
   window.localStorage.clear();
   window.history.replaceState(null, "", "/");
@@ -67,7 +75,7 @@ beforeEach(() => {
     return reply([]);
   }));
 });
-afterEach(() => { cleanup(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
+afterEach(() => { cleanup(); delete (document as Partial<Document>).elementFromPoint; vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 
 it("uses the first Escape to cancel a drag and the next Escape to dismiss details", async () => {
   window.history.replaceState(null, "", "/?task=c");
@@ -88,13 +96,14 @@ it("marks the grabbed card and reserves its height at midpoint insertion; reorde
   render(<App />);
   const dataTransfer = await startDrag();
   expect(card("c").classList.contains("grabbed")).toBe(true);
-  expect(screen.getByText("Moving")).toBeTruthy();
+  expect(screen.queryByText("Moving")).toBeNull();
+  expect(order()).toEqual(["a", "b", "placeholder"]);
   const column = screen.getByRole("region", { name: "TODO column" });
   dragEvent(column, "dragover", 160, dataTransfer);
-  expect(order()).toEqual(["a", "placeholder", "b", "c"]);
+  expect(order()).toEqual(["a", "placeholder", "b"]);
   expect(screen.getByLabelText("Drop task here").style.minHeight).toBe("80px");
   dragEvent(column, "dragover", 110, dataTransfer);
-  expect(order()).toEqual(["placeholder", "a", "b", "c"]);
+  expect(order()).toEqual(["placeholder", "a", "b"]);
   dragEvent(column, "drop", 110, dataTransfer);
   await waitFor(() => expect(order()).toEqual(["c", "a", "b"]));
   expect(vi.mocked(fetch).mock.calls.some(([path]) => /^\/v1\/tasks\/[^/]+$/.test(String(path)))).toBe(false);
@@ -104,6 +113,19 @@ it("marks the grabbed card and reserves its height at midpoint insertion; reorde
   cleanup(); render(<App />);
   await screen.findByText("Task c");
   expect(order()).toEqual(["c", "a", "b"]);
+});
+
+it("keeps just the original slot on lift and skips a same-position drop", async () => {
+  render(<App />);
+  const dataTransfer = await startDrag();
+  expect(order()).toEqual(["a", "b", "placeholder"]);
+  expect(document.querySelectorAll('.drop-placeholder')).toHaveLength(1);
+  expect(card("c").closest('.drag-origin')).not.toBeNull();
+  const column = screen.getByRole("region", { name: "TODO column" });
+  dragEvent(column, "dragover", 330, dataTransfer);
+  dragEvent(column, "drop", 330, dataTransfer);
+  expect(order()).toEqual(["a", "b", "c"]);
+  expect(writes).toEqual([]);
 });
 
 it.each(["dragend", "Escape"])("clears grabbed card and placeholder on %s without a write", async (cancel) => {
@@ -278,7 +300,7 @@ it("uses the full linked card height for placeholders and midpoint insertion", a
   const dataTransfer = transfer();
   dragEvent(card("c"), "dragstart", 320, dataTransfer);
   dragEvent(screen.getByRole("region", { name: "TODO column" }), "dragover", 145, dataTransfer);
-  expect(order()).toEqual(["placeholder", "a", "b", "c"]);
+  expect(order()).toEqual(["placeholder", "a", "b"]);
   expect(screen.getByLabelText("Drop task here").style.minHeight).toBe("110px");
 });
 
@@ -333,4 +355,91 @@ it("keeps an expanded Done column and its Hide Done toggle during drag", async (
   await waitFor(() => expect(rows.find(t => t.id === "c")?.column).toBe("done"));
   expect(screen.getByRole("region", { name: "Done column" })).toBeTruthy();
   expect(window.localStorage.getItem("codex-tg.show-done")).toBe("true");
+});
+
+it("uses a whole-card pointer overlay, ignores tiny motion, and saves one drop without a click-through", async () => {
+  rows[2] = task("c", { thread_id: "chat-c", source_url: "https://a.yandex-team.ru/review/42" });
+  render(<App />);
+  await screen.findByRole("button", { name: /Task c/ });
+  const column = screen.getByRole("region", { name: "Inbox column" });
+  hitTarget = column;
+  fireEvent.pointerDown(card("c"), { pointerId: 7, button: 0, clientX: 20, clientY: 320 });
+  fireEvent.pointerMove(window, { pointerId: 7, clientX: 22, clientY: 322 });
+  expect(document.querySelector('.drag-preview')).toBeNull();
+  expect(screen.queryByLabelText("Drop task here")).toBeNull();
+  fireEvent.pointerMove(window, { pointerId: 7, clientX: 40, clientY: 340 });
+  const overlay = document.querySelector('.drag-preview')!;
+  expect(overlay.querySelector('.card-controls')).not.toBeNull();
+  expect(overlay.querySelector('[data-task-id]')).toBeNull();
+  expect(overlay.getAttribute('aria-hidden')).toBe('true');
+  expect((overlay.querySelector('select') as HTMLSelectElement).value).toBe("normal");
+  expect(order("Inbox")).toEqual(["placeholder"]);
+  fireEvent.pointerUp(window, { pointerId: 7, clientX: 40, clientY: 340 });
+  await waitFor(() => expect(writes).toHaveLength(1));
+  fireEvent.click(card("c"), { detail: 1 });
+  expect(new URLSearchParams(window.location.search).has('task')).toBe(false);
+  await waitFor(() => expect(document.querySelector('.drag-preview')).toBeNull());
+  expect(rows.find(t => t.id === "c")?.column).toBe("inbox");
+});
+
+it.each(["pointercancel", "blur", "Escape"])("cancels a pointer gesture on %s without saving or leaving an overlay", async reason => {
+  render(<App />);
+  await screen.findByRole("button", { name: /Task c/ });
+  hitTarget = screen.getByRole("region", { name: "Inbox column" });
+  fireEvent.pointerDown(card("c"), { pointerId: 3, button: 0, clientX: 20, clientY: 320 });
+  fireEvent.pointerMove(window, { pointerId: 3, clientX: 40, clientY: 340 });
+  expect(document.querySelector('.drag-preview')).not.toBeNull();
+  if (reason === 'Escape') fireEvent.keyDown(window, { key: 'Escape' });
+  else if (reason === 'blur') fireEvent.blur(window);
+  else fireEvent.pointerCancel(window, { pointerId: 3 });
+  fireEvent.pointerUp(window, { pointerId: 3 });
+  await waitFor(() => expect(document.querySelector('.drag-preview')).toBeNull());
+  expect(order()).toEqual(["a", "b", "c"]);
+  expect(writes).toEqual([]);
+});
+
+it("lets touch scroll over the card body and starts touch dragging only from its existing grip", async () => {
+  render(<App />);
+  await screen.findByRole("button", { name: /Task c/ });
+  hitTarget = screen.getByRole("region", { name: "Inbox column" });
+  fireEvent.pointerDown(card("c"), { pointerId: 3, pointerType: 'touch', button: 0, clientX: 20, clientY: 320 });
+  fireEvent.pointerMove(window, { pointerId: 3, clientX: 40, clientY: 340 });
+  expect(document.querySelector('.drag-preview')).toBeNull();
+  fireEvent.pointerDown(card("c").querySelector('.card-grip')!, { pointerId: 3, pointerType: 'touch', button: 0, clientX: 20, clientY: 320 });
+  fireEvent.pointerMove(window, { pointerId: 3, clientX: 40, clientY: 340 });
+  expect(document.querySelector('.drag-preview')).not.toBeNull();
+  fireEvent.pointerCancel(window, { pointerId: 3 });
+  await waitFor(() => expect(document.querySelector('.drag-preview')).toBeNull());
+  expect(writes).toEqual([]);
+});
+
+it("ignores another pointer and cancels release outside the board", async () => {
+  render(<App />);
+  await screen.findByRole("button", { name: /Task c/ });
+  hitTarget = screen.getByRole("region", { name: "Inbox column" });
+  fireEvent.pointerDown(card("c"), { pointerId: 7, button: 0, clientX: 20, clientY: 320 });
+  fireEvent.pointerMove(window, { pointerId: 7, clientX: 40, clientY: 340 });
+  fireEvent.pointerCancel(window, { pointerId: 8 });
+  fireEvent.pointerUp(window, { pointerId: 8 });
+  expect(document.querySelector('.drag-preview')).not.toBeNull();
+  expect(writes).toEqual([]);
+  hitTarget = null;
+  fireEvent.pointerUp(window, { pointerId: 7, clientX: 800, clientY: 500 });
+  await waitFor(() => expect(document.querySelector('.drag-preview')).toBeNull());
+  expect(order()).toEqual(["a", "b", "c"]);
+  expect(writes).toEqual([]);
+});
+
+it("removes the pointer overlay and global drag state on unmount", async () => {
+  const view = render(<App />);
+  await screen.findByRole("button", { name: /Task c/ });
+  hitTarget = screen.getByRole("region", { name: "Inbox column" });
+  fireEvent.pointerDown(card("c"), { pointerId: 7, button: 0, clientX: 20, clientY: 320 });
+  fireEvent.pointerMove(window, { pointerId: 7, clientX: 40, clientY: 340 });
+  expect(document.querySelector('.drag-preview')).not.toBeNull();
+  view.unmount();
+  expect(document.querySelector('.drag-preview')).toBeNull();
+  expect(document.body.classList.contains('board-dragging')).toBe(false);
+  fireEvent.pointerUp(window, { pointerId: 7 });
+  expect(writes).toEqual([]);
 });

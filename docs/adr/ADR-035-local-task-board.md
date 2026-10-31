@@ -292,9 +292,10 @@ tokens, service branding, footer links, data, controls and behaviors are retaine
 Task details keep their provenance without duplicating the card footer.
 
 Cards lift slightly on hover and selection and depress on pointer press. Motion
-stops for the whole board during drag/save, keeping insertion geometry stable;
-the collapsed Done drop target retains its fixed slot and width. Focus indicators
-remain visible, and reduced motion disables movement as well as transitions.
+for hover and press pauses during drag/save while placement animation owns the
+card position; the collapsed Done drop target retains its fixed slot and width.
+Focus indicators remain visible, and reduced motion disables movement as well as
+transitions.
 
 Explanatory workspace, sidebar, column and workflow captions are omitted. Empty
 columns use a small decorative card stack with an accessible empty/loading label;
@@ -302,3 +303,25 @@ the inspector keeps its noninteractive outline without a visible caption.
 Feedback uses a simple speech bubble and schedules a larger outlined clock.
 Collapsed Sources retain every source button, its active/paused status dot and a
 name/status tooltip and accessible label; opening and editing a source is unchanged.
+
+## Smooth card dragging amendment
+
+Pointer dragging uses a 6 px activation threshold and a noninteractive full-card
+preview that retains the footer and live form values. The original card stays
+mounted outside flow and a single, text-free slot starts at its original position.
+Moving the slot does not duplicate the original footprint. Neighbors animate to
+new layout positions; hit testing excludes their visual translation. Native drag
+handlers retain the same ordering/validation path as a fallback.
+
+Release commits the existing optimistic move immediately while the preview lands
+with a small settling motion. It retargets to the real card position if validation
+or an asynchronous save failure restores the original location. A hidden Done
+accepts a shrinking preview without revealing the column or changing its slot.
+A same-position release, outside release, Escape, blur or pointer cancellation
+performs no write. The gesture's synthetic click cannot open a task afterward.
+
+Touch scrolling remains available on card bodies; the existing grip starts touch
+dragging. Edge scrolling, focus controls and reduced-motion settings are retained.
+The rendering layer cleans up previews, listeners and animations on unmount.
+Version fencing, draft settlement, queued refreshes and rollback stay in the
+existing move operation; neither endpoints nor persistence contracts change.

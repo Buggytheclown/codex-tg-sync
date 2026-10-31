@@ -234,8 +234,8 @@ small { font-size: 12px; line-height: 1.6; color: var(--muted); }
 .card-chat-form .field, .ticket-form .field { margin-bottom: 8px; }
 .card-chat-form .form-actions, .ticket-form .form-actions { margin: 10px 0 0; }
 .card-with-link > .error-note { margin: 0 10px 10px; }
-.drag-badge, .save-badge { color: var(--blue); font-size: 11px; font-weight: 500; padding-right: 92px; }
-.drop-placeholder { display: grid; place-items: center; border: 2px dashed var(--blue); border-radius: var(--radius); background: var(--blue-soft); color: var(--blue); font-size: 13px; font-weight: 500; pointer-events: none; }
+.save-badge { color: var(--blue); font-size: 11px; font-weight: 500; padding-right: 92px; }
+.drop-placeholder { display: grid; place-items: center; border: 1px solid #a06aff44; border-radius: 15px; background: #a06aff0a; pointer-events: none; }
 /* A small stack of blank cards keeps empty columns quiet and droppable. */
 .empty-column { position: relative; display: grid; place-items: center; min-height: 140px; border: 1px dashed #ffffff18; border-radius: 14px; background: #ffffff02; pointer-events: none; }
 .empty-column::before, .empty-column::after { content: ""; grid-area: 1 / 1; width: 46px; height: 32px; border: 1px solid #ffffff1c; border-radius: 7px; background: var(--background); }
@@ -556,3 +556,15 @@ small { font-size: 12px; line-height: 1.6; color: var(--muted); }
   .card-with-link:has(> .task-card:active) { transform: translateY(1px); }
   .board-columns:has(.grabbed, .saving) .card-with-link { transform: none; transition: none; }
 }
+
+/* One in-flow slot, one pointer-following card. Footer controls stay mounted. */
+.column-cards { position: relative; }
+.card-slot.drag-origin { position: absolute; width: 100%; visibility: hidden; pointer-events: none; }
+.save-badge { position: absolute; inset: -10px auto auto 12px; z-index: 2; padding: 1px 6px; border: 1px solid var(--blue-border); border-radius: 999px; background: var(--surface); white-space: nowrap; pointer-events: none; }
+.card-grip { touch-action: none; }
+body.board-dragging { cursor: grabbing; user-select: none; }
+body.board-dragging .board .card-with-link { transform: none; transition: border-color .2s, box-shadow .2s; }
+.card-with-link.drag-landing { visibility: hidden; }
+.card-with-link.drag-preview { position: fixed; z-index: 1000; margin: 0; pointer-events: none; overflow: hidden; opacity: 1; visibility: visible; transform: scale(1.025) rotate(1deg); transform-origin: 50% 50%; border-color: #a06aff88; box-shadow: 0 18px 36px #0006, 0 3px 8px #0004; transition: none; }
+.drag-preview .task-card { cursor: grabbing; }
+@media (prefers-reduced-motion: reduce) { .card-with-link.drag-preview { transform: none; } }
