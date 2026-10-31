@@ -412,3 +412,16 @@ For live Telegram QA, verify:
   narrow wrapping. Verify 320/375/736/1024 px, existing palette, no permissions,
   and separate Cron source / scheduled event. Install assets and verify live
   byte readback without dispatching Telegram or LLM work.
+
+## Friendly visual style
+
+- Existing UI suites retain task selection, source icons, priorities, footer
+  actions, full descriptions, explicit workflow saves, nested Escape and drag
+  behavior. No markup, API or state changes accompany the CSS update.
+- Browser fixtures check cards, inspector tabs, source/prompt panels and polling
+  rules at 1440/1024/736/375/320 px without horizontal page overflow. Check original
+  service icons, linked/empty footer actions, request hints and source provenance.
+- A mouse drag to collapsed Done must keep the board and toggle slot unchanged;
+  only the target height grows from 30 to 88 px. Reduced motion disables style
+  transitions and the existing running animation. Install static assets and
+  verify exact live byte readback; no daemon restart is required.

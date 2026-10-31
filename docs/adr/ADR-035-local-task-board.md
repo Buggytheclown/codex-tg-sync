@@ -282,3 +282,15 @@ variables, trusted authors and execution settings live in the launch panel; the
 configuration stays shared with child continuation prompts. Child waiting rules
 remain an independent copied definition and require manual activation. The source
 keeps discovering events after creating a task. No backend contracts change.
+
+## Friendly visual style amendment
+
+The board uses rounded column outlines and title capsules, softer task-card
+borders with a purple selection ring, tinted source-icon backings, capsule
+selectors and primary buttons, and segmented inspector tabs. Existing palette
+tokens, service icons, footer links, data, controls and behaviors are retained.
+Task details keep their provenance without duplicating the card footer.
+
+The change is CSS-only. Hover changes borders and surfaces without translating
+cards or changing insertion geometry; the collapsed Done drop target retains its
+fixed slot and width. Existing focus indicators and reduced-motion rules apply.
