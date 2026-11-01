@@ -2868,6 +2868,7 @@ func TestSyncProjectPickerCreatesThreadThenTopicThenDurableBinding(t *testing.T)
 func TestSyncProjectTopicCreationPrunesOldestInactiveTopic(t *testing.T) {
 	service := activeSyncService(t)
 	ctx := context.Background()
+	cwd := t.TempDir()
 	for index := 0; index < 8; index++ {
 		topicID := int64(13 + index)
 		if err := service.store.UpsertSyncTopic(ctx, model.SyncTopic{SessionID: "s", ChatID: -1001,
@@ -2877,8 +2878,8 @@ func TestSyncProjectTopicCreationPrunesOldestInactiveTopic(t *testing.T) {
 		}
 	}
 	for _, thread := range []model.Thread{
-		{ID: "thread-1", Title: "Topic", CWD: "/tmp/project", UpdatedAt: time.Now().Add(-48 * time.Hour).Unix()},
-		{ID: "thread-2", Title: "Topic", CWD: "/tmp/project", UpdatedAt: time.Now().Unix()},
+		{ID: "thread-1", Title: "Topic", CWD: cwd, UpdatedAt: time.Now().Add(-48 * time.Hour).Unix()},
+		{ID: "thread-2", Title: "Topic", CWD: cwd, UpdatedAt: time.Now().Unix()},
 	} {
 		if err := service.store.UpsertThread(ctx, thread); err != nil {
 			t.Fatal(err)

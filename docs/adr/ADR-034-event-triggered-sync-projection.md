@@ -103,6 +103,38 @@ Source reads and transport health notifications continue independently of
 Status presentation. Per-thread event-clock bookkeeping used only by the former
 heartbeat display is removed.
 
+### Connection-scoped subscriptions
+
+A connected Telegram topic does not load its Codex thread. Reconciliation reads
+metadata and the latest turn first. Only active or waiting external work gets a
+poll subscription; a live writer lease already provides that subscription.
+Successful resume schedules a coalesced catch-up read. A failed resume remains
+recorded as an unconfirmed subscription, since the server may have accepted it.
+Later active reads retry it; idle cleanup explicitly unsubscribes it.
+
+Subscription decisions retain the original runtime status, separate from legacy
+turn-derived presentation status. Contradictory idle/notLoaded metadata and a live
+last turn trigger one bounded metadata recheck before detaching. Unknown state or
+read failure is not evidence that an existing subscription can be released.
+
+Terminal projection persistence must succeed before delivery and lease cleanup.
+Active/waiting/ownership-unknown work remains protected. Idle subscriptions are
+explicitly removed on their owning connection, independently of Telegram delivery
+retries. Writer cleanup failures use the existing periodic pass, and old cleanup
+cannot unsubscribe a new turn on the same thread or cross writer generations.
+A delivered Final does not bypass a still-pending terminal ownership update.
+
+Removed topics and Sync off also release unnecessary poll subscriptions. Reconnect
+rebuilds only needed subscriptions from fresh reads; it never replays prompts.
+Graceful shutdown attempts cleanup within a bounded deadline before closing the
+connections. The App Server controls actual unload: the last subscriber and
+30-minute inactivity grace period matter, and other clients can retain a thread.
+
+A desktop turn starting after idle may first appear on the next periodic pass
+(default 60 seconds), plus read/delivery latency. A short turn that completes
+between sweeps still participates in normal latest-turn catch-up. No extra polling
+loop, configuration, persistent subscription table or migration is introduced.
+
 ## Consequences
 
 - Normal traffic is proportional to meaningful activity, not tracked-thread
@@ -137,3 +169,7 @@ heartbeat display is removed.
   plan, or state delivers the latest accumulated metadata. Failed edits retry
   after reopening the store, and unchanged confirmed content stays deduplicated.
 - Legacy active cards refresh once; completed cards keep their delivery state.
+
+Subscription regressions live in `internal/daemon/sync_subscriptions_test.go` and
+`internal/appserver/client_unsubscribe_test.go`. SQLite failure fixtures verify
+that resource cleanup cannot overtake a durable Final or terminal receipt.

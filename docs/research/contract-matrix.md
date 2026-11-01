@@ -82,6 +82,14 @@ Retired SQLite keys such as `codex.model` and `codex.reasoning_effort` do not af
 | `[Final]` | authoritative terminal result | long results split safely; multipart chunks are numbered `Final 1/N` through `Final N/N` |
 | `[Launch request]` | durable request ingestion | edited across pending, starting, active, failed, closed |
 
+Idle chats are read without resume. Only active/waiting work keeps a temporary
+connection-scoped subscription; writer ownership and subscription ownership remain
+separate. Terminal snapshots must be durable before cleanup, while delivery retries
+use the saved projection. Cleanup and reconnect do not replay user input. A desktop
+turn beginning after idle can take the existing safety interval (default 60 seconds)
+to be detected, plus read/delivery latency. Actual thread/MCP unload also depends on
+App Server's 30-minute grace period and other subscribers.
+
 Important App Server events invalidate a thread and coalesce into one bounded latest-turn read. A rare summary sweep covers startup, reconnects, event gaps, and missed notifications. Telegram delivery resolves the latest persisted projection at execution time. Final delivery does not wait for a terminal Status edit; editing the existing Status does not move it behind Final.
 
 A newly observed Codex-origin turn is presented only after its authoritative

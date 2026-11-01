@@ -129,6 +129,7 @@ type stubSession struct {
 	collaborationModes     []appserver.CollaborationModeOption
 	threadReadErr          error
 	threadResumeErr        error
+	threadUnsubscribeErr   error
 	threadStartErr         error
 	threadStartResult      map[string]any
 	turnStartErr           error
@@ -138,6 +139,7 @@ type stubSession struct {
 	threadStartOptions     []appserver.ThreadStartOptions
 	threadSetNameCalls     []threadSetNameCall
 	threadResumeCalls      []threadResumeCall
+	threadUnsubscribeCalls []string
 	turnSteerCalls         []turnCall
 	turnStartCalls         []turnCall
 	turnInterruptCalls     []turnCall
@@ -177,6 +179,10 @@ func (s *stubSession) ThreadRead(_ context.Context, threadID string, includeTurn
 func (s *stubSession) ThreadResume(_ context.Context, threadID, cwd string) (map[string]any, error) {
 	s.threadResumeCalls = append(s.threadResumeCalls, threadResumeCall{threadID, cwd})
 	return nil, s.threadResumeErr
+}
+func (s *stubSession) ThreadUnsubscribe(_ context.Context, threadID string) error {
+	s.threadUnsubscribeCalls = append(s.threadUnsubscribeCalls, threadID)
+	return s.threadUnsubscribeErr
 }
 func (s *stubSession) ThreadStart(_ context.Context, cwd string, options appserver.ThreadStartOptions) (map[string]any, error) {
 	s.threadStartCalls = append(s.threadStartCalls, cwd)

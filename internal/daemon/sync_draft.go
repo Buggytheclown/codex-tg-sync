@@ -55,6 +55,7 @@ func (s *Service) startClaimedSyncDraftLocked(ctx context.Context, draft model.S
 			_ = s.store.MarkSyncTopicDraftUnknown(ctx, draft, receipt)
 			return &DirectResponse{Text: "Sync thread creation outcome is unknown. This Telegram message will never be replayed automatically."}, nil
 		}
+		s.unsubscribeSyncWriterLeaseLocked(ctx, lease)
 		_ = s.syncWriter.Abort(lease)
 		_ = s.store.ResetSyncTopicDraftMessage(ctx, draft, receipt)
 		return &DirectResponse{Text: fmt.Sprintf("Sync rejected thread creation; send a new message to retry: %v", startErr)}, nil
@@ -103,6 +104,7 @@ func (s *Service) startClaimedSyncDraftLocked(ctx context.Context, draft model.S
 		}
 		delete(s.syncLeases, thread.ID)
 		delete(s.boardContinuationLeases, thread.ID)
+		s.unsubscribeSyncWriterLeaseLocked(ctx, lease)
 		_ = s.syncWriter.Abort(lease)
 		if err := s.store.DematerializeSyncTopicDraft(ctx, draft, receipt, thread.ID, draft.Title, lease.Generation); err != nil {
 			return nil, err

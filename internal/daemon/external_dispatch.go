@@ -194,6 +194,7 @@ func (s *Service) dispatchExternalContinuationLocked(ctx context.Context, reques
 	abort := func() {
 		delete(s.syncLeases, threadID)
 		delete(s.boardContinuationLeases, threadID)
+		s.unsubscribeSyncWriterLeaseLocked(ctx, lease)
 		_ = s.syncWriter.Abort(lease)
 	}
 	s.syncLeases[threadID] = lease

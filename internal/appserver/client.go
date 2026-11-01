@@ -521,6 +521,19 @@ func (c *Client) ThreadResume(ctx context.Context, threadID, _ string) (map[stri
 	return asMap(result), nil
 }
 
+func (c *Client) ThreadUnsubscribe(ctx context.Context, threadID string) error {
+	result, err := c.Request(ctx, "thread/unsubscribe", map[string]any{"threadId": threadID})
+	if err != nil {
+		return err
+	}
+	switch status := rpcString(asMap(result)["status"]); status {
+	case "unsubscribed", "notSubscribed", "notLoaded":
+		return nil
+	default:
+		return fmt.Errorf("unexpected thread/unsubscribe status %q", status)
+	}
+}
+
 func threadResumeParams(threadID string) map[string]any {
 	return map[string]any{
 		"threadId":     threadID,

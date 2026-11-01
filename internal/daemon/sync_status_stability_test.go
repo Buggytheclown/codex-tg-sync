@@ -86,7 +86,10 @@ func TestSyncLongStatusSurvivesRepeatedSnapshots(t *testing.T) {
 		snapshot.LatestTurnStartedAt = start.Format(time.RFC3339Nano)
 		return snapshot
 	}
-	first, _ := service.persistSyncSnapshot(ctx, topic, read(8))
+	first, _, persistErr := service.persistSyncSnapshot(ctx, topic, read(8))
+	if persistErr != nil {
+		t.Fatal(persistErr)
+	}
 	firstBlocks := syncStatusBlocks(first.DetailItems)
 	if len(firstBlocks) != 8 {
 		t.Fatalf("retained %d commentary blocks, want 8", len(firstBlocks))
@@ -103,7 +106,10 @@ func TestSyncLongStatusSurvivesRepeatedSnapshots(t *testing.T) {
 	}
 	for poll := range 5 {
 		now = now.Add(10 * time.Second)
-		observed, _ := service.persistSyncSnapshot(ctx, topic, read(8))
+		observed, _, persistErr := service.persistSyncSnapshot(ctx, topic, read(8))
+		if persistErr != nil {
+			t.Fatal(persistErr)
+		}
 		if blocks := syncStatusBlocks(observed.DetailItems); !reflect.DeepEqual(blocks, firstBlocks) {
 			t.Fatalf("poll %d changed block order, identity, or timing: %#v", poll, blocks)
 		}
@@ -122,14 +128,20 @@ func TestSyncLongStatusSurvivesRepeatedSnapshots(t *testing.T) {
 		}
 	}
 	now = now.Add(10 * time.Second)
-	appended, _ := service.persistSyncSnapshot(ctx, topic, read(9))
+	appended, _, persistErr := service.persistSyncSnapshot(ctx, topic, read(9))
+	if persistErr != nil {
+		t.Fatal(persistErr)
+	}
 	if blocks := syncStatusBlocks(appended.DetailItems); len(blocks) != 9 || !reflect.DeepEqual(blocks[:8], firstBlocks) {
 		t.Fatalf("append changed previous status blocks: %#v", blocks)
 	}
 	updated := read(9)
 	updated.DetailItems[0].Text = "Updated commentary"
 	now = now.Add(10 * time.Second)
-	observed, _ := service.persistSyncSnapshot(ctx, topic, updated)
+	observed, _, persistErr := service.persistSyncSnapshot(ctx, topic, updated)
+	if persistErr != nil {
+		t.Fatal(persistErr)
+	}
 	if block := syncStatusBlocks(observed.DetailItems)[0]; block.Text != "Updated commentary" || block.StartedAt != firstBlocks[0].StartedAt {
 		t.Fatalf("same-ID update reset timing: %#v", block)
 	}
@@ -137,17 +149,26 @@ func TestSyncLongStatusSurvivesRepeatedSnapshots(t *testing.T) {
 	terminal.LatestTurnStatus = "completed"
 	terminal.Thread.Status = "completed"
 	terminal.LatestTurnUpdatedAt = now.Format(time.RFC3339Nano)
-	finished, _ := service.persistSyncSnapshot(ctx, topic, terminal)
+	finished, _, persistErr := service.persistSyncSnapshot(ctx, topic, terminal)
+	if persistErr != nil {
+		t.Fatal(persistErr)
+	}
 	finishedText := renderSyncStatusAt(finished, now).Text
 	now = now.Add(time.Hour)
-	restarted, _ := service.persistSyncSnapshot(ctx, topic, terminal)
+	restarted, _, persistErr := service.persistSyncSnapshot(ctx, topic, terminal)
+	if persistErr != nil {
+		t.Fatal(persistErr)
+	}
 	if renderSyncStatusAt(restarted, now).Text != finishedText {
 		t.Fatal("terminal status changed after persisted snapshot reload")
 	}
 	newTurn := read(1)
 	newTurn.LatestTurnID = "turn-2"
 	newTurn.LatestTurnStartedAt = now.Format(time.RFC3339Nano)
-	fresh, _ := service.persistSyncSnapshot(ctx, topic, newTurn)
+	fresh, _, persistErr := service.persistSyncSnapshot(ctx, topic, newTurn)
+	if persistErr != nil {
+		t.Fatal(persistErr)
+	}
 	if blocks := syncStatusBlocks(fresh.DetailItems); len(blocks) != 1 || blocks[0].StartedAt != model.TimeString(newTurn.LatestTurnStartedAt) {
 		t.Fatalf("new turn inherited old blocks or timing: %#v", blocks)
 	}

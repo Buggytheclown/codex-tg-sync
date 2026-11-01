@@ -87,7 +87,8 @@ type Service struct {
 	syncEventGeneration          uint64
 	syncEventCancel              context.CancelFunc
 	syncSubscribedPollGeneration uint64
-	syncSubscribedThreads        map[string]struct{}
+	syncSubscribedThreads        map[string]bool
+	syncPendingUnsubscribes      map[string]appserver.WriterLease[Session]
 	syncPollEventProcess         Session
 	syncPollEventGeneration      uint64
 	syncPollEventCancel          context.CancelFunc
@@ -187,7 +188,7 @@ func New(cfg config.Config) (*Service, error) {
 	})
 	service.syncLeases = map[string]appserver.WriterLease[Session]{}
 	service.boardContinuationLeases = map[string]boardContinuationLease{}
-	service.syncSubscribedThreads = map[string]struct{}{}
+	service.syncSubscribedThreads = map[string]bool{}
 	service.poll = service.pollFactory()
 	return service, nil
 }
@@ -212,6 +213,9 @@ func (s *Service) Close() error {
 	syncPollEventCancel := s.syncPollEventCancel
 	s.syncEventCancel = nil
 	s.syncPollEventCancel = nil
+	cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	s.closeSyncSubscriptionsLocked(cleanupCtx)
+	cleanupCancel()
 	s.syncMu.Unlock()
 	if syncEventCancel != nil {
 		syncEventCancel()
@@ -678,7 +682,7 @@ func (s *Service) softResetSyncAfterTransportLoss(ctx context.Context, cause err
 	}
 	s.syncPollEventCancel, s.syncPollEventProcess, s.syncPollEventGeneration = nil, nil, 0
 	s.syncSubscribedPollGeneration = 0
-	s.syncSubscribedThreads = map[string]struct{}{}
+	s.syncSubscribedThreads = map[string]bool{}
 	s.syncLeases = map[string]appserver.WriterLease[Session]{}
 	s.boardContinuationLeases = map[string]boardContinuationLease{}
 	if err := s.syncWriter.ForceClose(); err != nil {

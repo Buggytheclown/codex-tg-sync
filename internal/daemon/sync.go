@@ -244,6 +244,7 @@ func (s *Service) dispatchSyncMessage(ctx context.Context, topic model.SyncTopic
 		return &DirectResponse{Text: fmt.Sprintf("Sync could not reserve this thread: %v", err)}, nil
 	}
 	if err := s.store.MarkSyncStarting(ctx, receipt, lease.Generation); err != nil {
+		s.unsubscribeSyncWriterLeaseLocked(ctx, lease)
 		_ = s.syncWriter.Abort(lease)
 		_ = s.store.MarkSyncReceiptState(ctx, receipt, model.SyncReceiptRejected)
 		return &DirectResponse{Text: "This Sync topic already has unfinished work. The message was not dispatched."}, nil
@@ -259,6 +260,7 @@ func (s *Service) dispatchSyncMessage(ctx context.Context, topic model.SyncTopic
 		delete(s.syncLeases, topic.ThreadID)
 		delete(s.boardContinuationLeases, topic.ThreadID)
 		if isSyncNoRolloutError(err) {
+			s.unsubscribeSyncWriterLeaseLocked(ctx, lease)
 			_ = s.syncWriter.Abort(lease)
 			draft := model.SyncTopicDraft{SessionID: topic.SessionID, ChatID: topic.ChatID, TopicID: topic.TopicID,
 				Rank: topic.Rank, Title: topic.Title, CWD: cwd}
@@ -273,6 +275,7 @@ func (s *Service) dispatchSyncMessage(ctx context.Context, topic model.SyncTopic
 			_ = s.store.MarkSyncDispatchFailure(ctx, receipt, model.SyncReceiptRejected, model.SyncTurnTerminal, lease.Generation)
 			return &DirectResponse{Text: "Sync found an empty pre-migration thread but could not convert it safely. The prompt was not sent."}, nil
 		}
+		s.unsubscribeSyncWriterLeaseLocked(ctx, lease)
 		_ = s.syncWriter.Abort(lease)
 		_ = s.store.MarkSyncDispatchFailure(ctx, receipt, model.SyncReceiptRejected, model.SyncTurnTerminal, lease.Generation)
 		return &DirectResponse{Text: fmt.Sprintf("Sync could not resume the thread; the prompt was not sent: %v", err)}, nil
@@ -315,6 +318,7 @@ func (s *Service) dispatchSyncMessage(ctx context.Context, topic model.SyncTopic
 		}
 		delete(s.syncLeases, topic.ThreadID)
 		delete(s.boardContinuationLeases, topic.ThreadID)
+		s.unsubscribeSyncWriterLeaseLocked(ctx, lease)
 		_ = s.syncWriter.Abort(lease)
 		_ = s.store.MarkSyncDispatchFailure(ctx, receipt, model.SyncReceiptRejected, model.SyncTurnTerminal, lease.Generation)
 		return &DirectResponse{Text: fmt.Sprintf("Sync rejected the prompt before dispatch: %v", turnErr)}, nil
@@ -634,6 +638,7 @@ func (s *Service) deactivateSync(ctx context.Context) (*DirectResponse, error) {
 	if err != nil {
 		return nil, err
 	}
+	s.pruneSyncPollSubscriptionsLocked(ctx)
 	forum := s.getSyncForum()
 	deleted, pending := 0, 0
 	for _, topic := range topics {
@@ -714,6 +719,8 @@ func (s *Service) reconcileSyncCommand(ctx context.Context) (*DirectResponse, er
 }
 
 func (s *Service) reconcileSyncLocked(ctx context.Context) (reconcileSyncResult, error) {
+	s.retrySyncWriterUnsubscribesLocked(ctx)
+	defer s.pruneSyncPollSubscriptionsLocked(ctx)
 	var result reconcileSyncResult
 	if err := s.validateSavedSyncLocked(ctx); err != nil {
 		s.mu.RLock()
@@ -746,7 +753,7 @@ func (s *Service) reconcileSyncLocked(ctx context.Context) (reconcileSyncResult,
 		return result, errors.New("Sync Telegram transport is unavailable")
 	}
 	s.mu.RLock()
-	poll, connected, pollGeneration := s.poll, s.pollConnected, s.pollGeneration
+	poll, connected := s.poll, s.pollConnected
 	s.mu.RUnlock()
 	if !connected || poll == nil {
 		return result, errors.New("App Server poll session is unavailable")
@@ -760,21 +767,27 @@ func (s *Service) reconcileSyncLocked(ctx context.Context) (reconcileSyncResult,
 			continue
 		}
 		result.Connected++
-		if !s.subscribeSyncThreadLocked(ctx, poll, pollGeneration, topic.ThreadID) {
-			result.SubscriptionFailures++
-		}
 		current, readErr := readLatestSyncSummary(ctx, poll, topic.ThreadID)
 		if readErr != nil {
 			result.ReadFailures++
 			continue
 		}
+		if syncSnapshotNeedsSubscription(current) {
+			if err := s.updateSyncPollSubscriptionLocked(ctx, topic, current); err != nil {
+				result.SubscriptionFailures++
+			}
+		}
 		previous, _ := s.store.GetSnapshot(ctx, topic.ThreadID)
-		if isTerminalStatus(current.LatestTurnStatus) && topic.ActiveTurnState != model.SyncTurnUnknown {
+		_, writerOwned := s.syncLeases[topic.ThreadID]
+		if isTerminalStatus(current.LatestTurnStatus) && topic.ActiveTurnState != model.SyncTurnUnknown && !writerOwned {
 			if previous != nil && previous.LastSeenTurnID == current.LatestTurnID && isTerminalStatus(previous.LastSeenTurnStatus) &&
 				syncStoredTerminalPresentationDelivered(previous, topic) {
 				_ = s.store.UpsertThread(ctx, current.Thread)
 				delete(s.syncRecoveryPending, topic.ThreadID)
 				delete(s.syncDrainActive, topic.ThreadID)
+				if err := s.updateSyncPollSubscriptionLocked(ctx, topic, current); err != nil {
+					result.SubscriptionFailures++
+				}
 				continue
 			}
 		}
@@ -984,16 +997,18 @@ func (s *Service) subscribeSyncThreadLocked(ctx context.Context, poll Session, p
 		return true
 	}
 	if s.syncSubscribedThreads == nil || s.syncSubscribedPollGeneration != pollGeneration {
-		s.syncSubscribedThreads = map[string]struct{}{}
+		s.syncSubscribedThreads = map[string]bool{}
 		s.syncSubscribedPollGeneration = pollGeneration
 	}
-	if _, ok := s.syncSubscribedThreads[threadID]; ok {
+	if s.syncSubscribedThreads[threadID] {
 		return true
 	}
+	s.syncSubscribedThreads[threadID] = false
 	if _, err := poll.ThreadResume(ctx, threadID, ""); err != nil {
 		return false
 	}
-	s.syncSubscribedThreads[threadID] = struct{}{}
+	s.syncSubscribedThreads[threadID] = true
+	s.markSyncThreadDirty(threadID)
 	return true
 }
 
@@ -1372,10 +1387,10 @@ func (s *Service) reconcileSyncThread(ctx context.Context, threadID string) {
 	} else {
 		s.processBoardSnapshotLocked(ctx, current)
 	}
-	s.releaseBoardContinuationLeaseLocked(ctx, current)
 }
 
 func (s *Service) processSyncSnapshotLocked(ctx context.Context, state model.SyncState, forum SyncForum, topic model.SyncTopic, current appserver.ThreadReadSnapshot, operation string) {
+	subscriptionSnapshot := current
 	if err := s.syncAccessErrorLocked(ctx); err != nil {
 		return
 	}
@@ -1398,12 +1413,9 @@ func (s *Service) processSyncSnapshotLocked(ctx context.Context, state model.Syn
 	previous, _ := s.store.GetSnapshot(ctx, topic.ThreadID)
 	activeTurnID := strings.TrimSpace(topic.ActiveTurnID)
 	currentTurnID := strings.TrimSpace(current.LatestTurnID)
-	if topic.ActiveTurnState == model.SyncTurnActive && activeTurnID != "" && currentTurnID != "" && currentTurnID != activeTurnID {
-		if !s.usesSharedAppServer() ||
-			!s.releaseSyncTurnLeaseLocked(ctx, state, topic, activeTurnID) {
-			return
-		}
-		topic.ActiveTurnState = model.SyncTurnTerminal
+	superseded := topic.ActiveTurnState == model.SyncTurnActive && activeTurnID != "" && currentTurnID != "" && currentTurnID != activeTurnID
+	if superseded && !s.usesSharedAppServer() {
+		return
 	}
 	if topic.ActiveTurnState == model.SyncTurnActive &&
 		activeTurnID != "" &&
@@ -1414,23 +1426,30 @@ func (s *Service) processSyncSnapshotLocked(ctx context.Context, state model.Syn
 	}
 	current = monotonicSyncSnapshot(previous, current)
 
-	s.queueExternalReplyFromSnapshot(ctx, current)
-	if forum == nil {
-		s.persistSyncSnapshot(ctx, topic, current)
+	observed, observedAt, err := s.persistSyncSnapshot(ctx, topic, current)
+	if err != nil {
+		return
 	}
+	if superseded {
+		if !s.releaseSyncTurnLeaseLocked(ctx, state, topic, activeTurnID) {
+			return
+		}
+		topic.ActiveTurnState = model.SyncTurnTerminal
+	}
+	s.queueExternalReplyFromSnapshot(ctx, observed)
 	if forum != nil {
 		s.mu.RLock()
 		started := s.started
 		s.mu.RUnlock()
 		if started {
-			s.persistSyncSnapshot(ctx, topic, current)
 			s.enqueueSyncDelivery(topic.ThreadID)
 		} else {
-			s.persistAndDeliverSyncSnapshotLocked(ctx, forum, topic, current)
+			s.deliverSyncSnapshot(ctx, forum, topic, observed, observedAt)
 		}
 	}
 	s.completeSyncTurnLocked(ctx, state, topic, current)
 	s.releaseBoardContinuationLeaseLocked(ctx, current)
+	_ = s.updateSyncPollSubscriptionLocked(ctx, topic, subscriptionSnapshot)
 }
 
 func (s *Service) completeSyncTurnLocked(ctx context.Context, state model.SyncState, topic model.SyncTopic, current appserver.ThreadReadSnapshot) {
@@ -1451,6 +1470,7 @@ func (s *Service) releaseSyncTurnLeaseLocked(ctx context.Context, state model.Sy
 	_ = s.store.ExpireSyncCallbackRoutes(ctx, topic.ThreadID, turnID)
 	delete(s.syncLeases, topic.ThreadID)
 	delete(s.boardContinuationLeases, topic.ThreadID)
+	s.unsubscribeSyncWriterLeaseLocked(ctx, lease)
 	if err := s.syncWriter.MarkTerminal(lease); err != nil {
 		return false
 	}
@@ -1461,21 +1481,23 @@ func (s *Service) releaseSyncTurnLeaseLocked(ctx context.Context, state model.Sy
 	return true
 }
 
-func (s *Service) persistAndDeliverSyncSnapshotLocked(ctx context.Context, forum SyncForum, topic model.SyncTopic, current appserver.ThreadReadSnapshot) {
-	observed, observedAt := s.persistSyncSnapshot(ctx, topic, current)
-	s.deliverSyncSnapshot(ctx, forum, topic, observed, observedAt)
-}
-
-func (s *Service) persistSyncSnapshot(ctx context.Context, topic model.SyncTopic, current appserver.ThreadReadSnapshot) (appserver.ThreadReadSnapshot, time.Time) {
-	previous, _ := s.store.GetSnapshot(ctx, topic.ThreadID)
+func (s *Service) persistSyncSnapshot(ctx context.Context, topic model.SyncTopic, current appserver.ThreadReadSnapshot) (appserver.ThreadReadSnapshot, time.Time, error) {
+	previous, err := s.store.GetSnapshot(ctx, topic.ThreadID)
+	if err != nil {
+		return current, time.Time{}, err
+	}
 	current = monotonicSyncSnapshot(previous, current)
 	observedAt := s.now().UTC()
 	compact := appserver.CompactSnapshot(previous, current, observedAt)
 	observed := current
 	_ = json.Unmarshal(compact.CompactJSON, &observed)
-	_ = s.store.UpsertThread(ctx, current.Thread)
-	_ = s.store.UpsertSnapshot(ctx, topic.ThreadID, compact)
-	return observed, observedAt
+	if err = s.store.UpsertThread(ctx, current.Thread); err == nil {
+		err = s.store.UpsertSnapshot(ctx, topic.ThreadID, compact)
+	}
+	if err != nil {
+		s.logLifecycle("sync_snapshot_persist_failed", lifecycleFields{"thread_id": topic.ThreadID, "error": err})
+	}
+	return observed, observedAt, err
 }
 
 func monotonicSyncSnapshot(previous *model.ThreadSnapshotState, current appserver.ThreadReadSnapshot) appserver.ThreadReadSnapshot {

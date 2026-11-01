@@ -60,6 +60,18 @@ Coverage includes:
 - one-second group-write pacing with no more than 20 raw attempts per rolling 60.25 seconds, bounded foreground preference, and shared `retry_after` cooldown.
 - a separate 12-attempt background cap that never prevents an eligible foreground write, plus per-operation queue-wait diagnostics.
 
+Subscription lifecycle coverage:
+
+- `sync_subscriptions_test.go`: 100 idle chats do not resume; active/waiting work
+  subscribes once; terminal cleanup is not undone by the next sweep; ambiguous
+  resume, failed reads, metadata/turn races, reconnect and removed/off topics;
+- independent writer cleanup with parallel turns, retry without losing Final,
+  protection of a new turn/generation, and bounded graceful shutdown;
+- SQLite snapshot and terminal-receipt write failures defer ownership/resource
+  release and recover without duplicate Final, including synced board continuations;
+- `client_unsubscribe_test.go`: exact request, the three idempotent success statuses,
+  unexpected response and RPC failure.
+
 ## Prompt, steer, stop, and lifecycle
 
 Primary suite: `internal/daemon/sync_test.go`.

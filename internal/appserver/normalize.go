@@ -14,6 +14,7 @@ import (
 
 type ThreadReadSnapshot struct {
 	Thread                    model.Thread
+	RuntimeStatus             string
 	LatestTurnID              string
 	LatestTurnStatus          string
 	LatestTurnStartedAt       string
@@ -124,7 +125,7 @@ func SnapshotFromThreadRead(result map[string]any) ThreadReadSnapshot {
 	if nested, ok := result["thread"].(map[string]any); ok && nested != nil {
 		payload = nested
 	}
-	snapshot := ThreadReadSnapshot{Thread: thread}
+	snapshot := ThreadReadSnapshot{Thread: thread, RuntimeStatus: statusText(payload["status"])}
 	if statusHasFlag(thread.Status, "waitingOnApproval") {
 		snapshot.WaitingOnApproval = true
 	}

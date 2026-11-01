@@ -66,7 +66,10 @@ func (s *Service) reconcileBoardThreadsLocked(ctx context.Context) {
 
 func (s *Service) processBoardSnapshotLocked(ctx context.Context, current appserver.ThreadReadSnapshot) {
 	// persistSyncSnapshot owns ADR-034's terminal fence for both presentations.
-	observed, _ := s.persistSyncSnapshot(ctx, model.SyncTopic{ThreadID: current.Thread.ID}, current)
+	observed, _, err := s.persistSyncSnapshot(ctx, model.SyncTopic{ThreadID: current.Thread.ID}, current)
+	if err != nil {
+		return
+	}
 	s.queueExternalReplyFromSnapshot(ctx, observed)
 	s.releaseBoardContinuationLeaseLocked(ctx, observed)
 }
@@ -85,9 +88,23 @@ func (s *Service) releaseBoardContinuationLeaseLocked(ctx context.Context, curre
 	if !ok || !continuation || owned.Lease != lease {
 		return
 	}
+	state, err := s.store.GetSyncState(ctx)
+	if err != nil {
+		return
+	}
+	topic, err := s.store.GetActiveSyncTopicByThread(ctx, state.SessionID, current.Thread.ID)
+	if err != nil {
+		return
+	}
+	// A Sync receipt must become terminal before board cleanup can release its writer.
+	if topic != nil && topic.WriterGeneration == lease.Generation &&
+		(topic.ActiveTurnState == model.SyncTurnActive || topic.ActiveTurnState == model.SyncTurnStarting || topic.ActiveTurnState == model.SyncTurnUnknown) {
+		return
+	}
 	if (current.LatestTurnID == owned.TurnID && isTerminalStatus(current.LatestTurnStatus)) || turnIDAfter(current.LatestTurnID, owned.TurnID) {
 		delete(s.syncLeases, current.Thread.ID)
 		delete(s.boardContinuationLeases, current.Thread.ID)
+		s.unsubscribeSyncWriterLeaseLocked(ctx, lease)
 		_ = s.syncWriter.MarkTerminal(lease)
 	}
 }
