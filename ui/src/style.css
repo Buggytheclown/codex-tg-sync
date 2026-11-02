@@ -559,11 +559,9 @@ small { font-size: 12px; line-height: 1.6; color: var(--muted); }
 /* Move the whole card subtly, but keep drag insertion geometry still. */
 @media (prefers-reduced-motion: no-preference) {
   .card-with-link { transition: transform .18s ease, border-color .2s, box-shadow .2s; }
-  .card-with-link.selected { transform: translateY(-1px); }
   @media (hover: hover) {
     .card-with-link:hover { transform: translateY(-3px); }
   }
-  .card-with-link:has(> .task-card:active) { transform: translateY(1px); }
   .board-columns:has(.grabbed, .saving) .card-with-link { transform: none; transition: none; }
 }
 

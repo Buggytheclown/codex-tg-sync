@@ -291,8 +291,8 @@ selectors and primary buttons, and segmented inspector tabs. Existing palette
 tokens, service branding, footer links, data, controls and behaviors are retained.
 Task details keep their provenance without duplicating the card footer.
 
-Cards lift slightly on hover and selection and depress on pointer press. Motion
-for hover and press pauses during drag/save while placement animation owns the
+Cards lift slightly on hover; pressing or selecting a card adds no movement.
+Hover motion pauses during drag/save while placement animation owns the
 card position; the collapsed Done drop target retains its fixed slot and width.
 Focus indicators remain visible, and reduced motion disables movement as well as
 transitions.
@@ -335,7 +335,8 @@ an instruction caption or a duplicate footer.
 
 The inspector keeps its editor mounted while fading and moving 10 px upward for
 140 ms, then shows the placeholder. Opening or selecting a card enters from
-12 px above over 220 ms, coordinated with a 6 px upward pulse of the chosen card.
+12 px above over 220 ms. Card activation retains its selection ring without an
+upward pulse or press displacement.
 Closed controls immediately become inert and hidden from assistive
 technology; animation does not delay selection, URL changes or draft autosave.
 Interrupted animations are cancelled and fenced so an old close cannot hide a
@@ -350,8 +351,7 @@ the body moves; the heading and tab controls remain still. A short inert outgoin
 picture is stripped of IDs and form associations; live editors retain their
 existing lifecycle. The body clips only during the transition so menus retain
 normal overflow afterward. Rapid reversals cancel old pictures/animations and
-restore automatic height. Card pulses do not affect insertion measurements and
-are cancelled before dragging; viewport changes discard old placement coordinates.
+restore automatic height. Viewport changes discard old placement coordinates.
 
 The active tab uses one sliding capsule behind the three labels, with the same
 210 ms timing/easing as the body transition. Interrupted selection continues

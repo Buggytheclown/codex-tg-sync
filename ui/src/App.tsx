@@ -289,7 +289,7 @@ export function App() {
   const detailPanel = useRef<HTMLElement>(null);
   const detailContent = useRef<HTMLDivElement>(null);
   const tabStage = useRef<HTMLDivElement>(null);
-  const [selectionPulse, setSelectionPulse] = useState(0);
+  const [detailActivation, setDetailActivation] = useState(0);
   // Keep the last editor mounted while dismissed so explicit-save drafts survive.
   const [detailDismissed, setDetailDismissed] = useState(false);
   const overviewDrafts = useRef(new Map<string, OverviewDraft>());
@@ -385,7 +385,7 @@ export function App() {
   };
   const selectedCard = tasks.find((t) => t.id === selectedID);
   const detailVisible = panel !== "details" || (!detailDismissed && !!selectedCard);
-  const detailPresent = useDetailPresence(detailContent, detailVisible, `${panel}:${selectedID}:${selectionPulse}`);
+  const detailPresent = useDetailPresence(detailContent, detailVisible, `${panel}:${selectedID}:${detailActivation}`);
   const captureTab = useTabSlide(tabStage, ["overview", "polling", "history"].indexOf(tab), selectedID, detailVisible && panel === "details");
   const visibleSelection = panel === "details" && !detailDismissed ? selectedID : "";
   const [detail, setDetail] = useState<Task>();
@@ -462,8 +462,7 @@ export function App() {
     };
   }, [dismissDetails, refresh]);
   const select = (task: Card) => {
-    motion.current!.pulseSelection(task.id);
-    setSelectionPulse(value => value + 1);
+    setDetailActivation(value => value + 1);
     detailVersion.current = 0;
     setSelectedID(task.id);
     setPanel("details");
