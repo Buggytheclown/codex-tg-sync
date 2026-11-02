@@ -8,7 +8,7 @@ type Callbacks = {
   drop: (position: DropPosition | null) => void;
 };
 type Gesture = { id: string; pointer: number; x: number; y: number; dx: number; dy: number; element: HTMLElement; started: boolean };
-type Layout = { element: HTMLElement; rect: DOMRect; animation?: Animation };
+type Layout = { element: HTMLElement; rect: DOMRect; scrollX: number; scrollY: number; animation?: Animation };
 const reduced = () => window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
 
 // Owns only the visual gesture. App retains ordering, validation and persistence.
@@ -158,12 +158,13 @@ export class BoardMotion {
     return false;
   }
 
-  // WAAPI moves the visible card; midpoint decisions use its unanimated layout.
+  // Hover and placement move the visible card; measure its stable layout for
+  // both midpoint decisions and subsequent placement animations.
   layoutRect(element: HTMLElement): DOMRect {
     const rect = element.getBoundingClientRect();
-    const id = element.querySelector<HTMLElement>("[data-task-id]")?.dataset.taskId;
-    if (!id || !this.layouts.get(id)?.animation) return rect;
-    const transform = new DOMMatrix(getComputedStyle(element).transform);
+    const value = getComputedStyle(element).transform;
+    if (!value || value === "none") return rect;
+    const transform = new DOMMatrix(value);
     return new DOMRect(rect.x - transform.m41, rect.y - transform.m42, rect.width, rect.height);
   }
 
@@ -173,13 +174,18 @@ export class BoardMotion {
       this.layouts.clear();
       this.viewportWidth = window.innerWidth;
     }
+    // A scroll changes viewport coordinates without moving a card in the list.
+    const board = document.querySelector<HTMLElement>(".board");
+    const scrollX = window.scrollX + (board?.scrollLeft || 0);
+    const scrollY = window.scrollY + (board?.scrollTop || 0);
     const seen = new Set<string>();
     for (const button of document.querySelectorAll<HTMLElement>(".board [data-task-id]")) {
       const id = button.dataset.taskId!;
       const element = button.closest<HTMLElement>(".card-with-link")!;
       seen.add(id);
       const previous = this.layouts.get(id);
-      let oldX = previous?.rect.left, oldY = previous?.rect.top;
+      let oldX = previous && previous.rect.left + previous.scrollX - scrollX;
+      let oldY = previous && previous.rect.top + previous.scrollY - scrollY;
       if (previous?.animation) {
         if (previous.element.isConnected) {
           const transform = new DOMMatrix(getComputedStyle(previous.element).transform);
@@ -188,8 +194,8 @@ export class BoardMotion {
         }
         previous.animation.cancel();
       }
-      const rect = element.getBoundingClientRect();
-      const record: Layout = { element, rect };
+      const rect = this.layoutRect(element);
+      const record: Layout = { element, rect, scrollX, scrollY };
       this.layouts.set(id, record);
       if (id === this.gesture?.id || id === this.landing?.id) continue;
       if (oldX !== undefined && oldY !== undefined && !reduced() && element.animate &&

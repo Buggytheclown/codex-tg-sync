@@ -435,9 +435,13 @@ For live Telegram QA, verify:
 - Browser fixtures check cards, inspector tabs, source/prompt panels and polling
   rules at 1440/1024/736/375/320 px without horizontal page overflow. Check original
   service icons, linked/empty footer actions, request hints and source provenance.
-- Check hover lift, pointer-press feedback and selected-card lift; pause those
-  effects while drag/save placement animations own position. Disable motion with
-  reduced motion.
+- `ui/src/boardMotion.test.ts` checks that hover movement does not change hit
+  testing or trigger placement animations on refresh, including after scrolling;
+  real reordering still animates.
+- Check the full-card keyboard focus ring including the footer, independent footer
+  control focus, and stable board/page scroll during hover at a nonzero scroll
+  position, including background refreshes. Hover lift pauses during drag/save;
+  pressing/selecting adds no movement. Disable motion with reduced motion.
   A mouse drag to collapsed Done must keep the board and toggle slot unchanged;
   only the target height grows from 30 to 88 px. Reduced motion disables style
   transitions and the existing running animation. Install static assets and

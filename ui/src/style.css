@@ -159,13 +159,16 @@ small { font-size: 12px; line-height: 1.6; color: var(--muted); }
 
 /* A card has one boundary; the native priority and footer targets are siblings
    of its selection/drag button. The wrapper is also the insertion geometry. */
-.card-with-link { position: relative; min-width: 0; container: card / inline-size; background: var(--surface); border: 1px solid #ffffff1e; border-radius: 15px; box-shadow: 0 2px 3px #0000000b; transition: border-color .2s, box-shadow .2s; }
+.card-with-link { position: relative; min-width: 0; container: card / inline-size; overflow-anchor: none; background: var(--surface); border: 1px solid #ffffff1e; border-radius: 15px; box-shadow: 0 2px 3px #0000000b; transition: border-color .2s, box-shadow .2s; }
 .card-with-link:hover { border-color: #a06aff66; }
 .card-with-link.selected { border-color: #a06aff88; background: linear-gradient(140deg, #a06aff09, transparent), var(--surface); box-shadow: 0 0 0 3px #a06aff12; }
 .card-with-link.grabbed { opacity: .45; border-color: var(--blue); background: var(--blue-soft); }
 .card-with-link.saving { border-color: var(--blue); }
 .task-card { display: flex; flex-direction: column; gap: 9px; width: 100%; min-height: 0; text-align: left; padding: 12px 12px 10px; background: transparent; border: 0; border-radius: 15px 15px 0 0; cursor: grab; box-shadow: none; }
-.task-card:hover { background: #ffffff04; border-color: transparent; }
+.task-card:hover { background: transparent; border-color: transparent; }
+/* The selection button excludes footer controls; its focus ring covers both. */
+.card-with-link:has(> .task-card:focus-visible) { outline: 2px solid var(--blue); outline-offset: 3px; }
+.task-card:focus-visible { outline: none; }
 .task-card.grabbed { cursor: grabbing; }
 .task-card.saving { cursor: wait; }
 .task-card strong { font-size: 14px; line-height: 1.45; font-weight: 500; overflow-wrap: anywhere; }

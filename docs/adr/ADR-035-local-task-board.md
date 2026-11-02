@@ -294,8 +294,11 @@ Task details keep their provenance without duplicating the card footer.
 Cards lift slightly on hover; pressing or selecting a card adds no movement.
 Hover motion pauses during drag/save while placement animation owns the
 card position; the collapsed Done drop target retains its fixed slot and width.
-Focus indicators remain visible, and reduced motion disables movement as well as
-transitions.
+Keyboard focus on the selection button outlines the entire card, including its
+footer; individual footer controls retain their own focus indicators. Hover and
+placement translations and viewport scroll offsets are excluded from layout
+comparisons, and moving card surfaces are excluded from scroll anchoring.
+Reduced motion disables movement as well as transitions.
 
 Explanatory workspace, sidebar, column and workflow captions are omitted. Empty
 columns use a small decorative card stack with an accessible empty/loading label;
