@@ -78,12 +78,38 @@ func TestCronOccurrenceIgnoresGenerationAndPreservesLateness(t *testing.T) {
 	}
 	p.Generation = 2
 	b, _ := NewChecker(nil).Check(context.Background(), p, now)
-	if len(a.Events) != 1 || a.Events[0].Key != "cron:daily:2026-10-06" || a.Events[0].Key != b.Events[0].Key {
+	if len(a.Events) != 1 || a.Events[0].Key != "cron:daily:2026-10-06T09:00:00Z" || a.Events[0].Key != b.Events[0].Key {
 		t.Fatalf("%#v %#v", a, b)
 	}
 	late, _ := NewChecker(nil).Check(context.Background(), p, now.Add(2*time.Hour))
 	if len(late.Events) > 0 {
 		t.Fatal("late slot replayed")
+	}
+}
+
+func TestCronIdentityUsesScheduledInstant(t *testing.T) {
+	p := model.TaskPolling{TaskID: "task", Type: TypeCron, Mode: model.PollingOnce, Action: model.TaskPollingAction{Type: model.PollingReturnTask}, Config: jsonBytes(Config{Cron: "0 13 * * *", Timezone: "Europe/Minsk", MaxLateness: "5m"})}
+	checker := NewChecker(nil)
+	check := func(spec, zone string, now time.Time) model.PollingEvent {
+		t.Helper()
+		p.Config = jsonBytes(Config{Cron: spec, Timezone: zone, MaxLateness: "5m"})
+		out, err := checker.Check(context.Background(), p, now)
+		if err != nil || len(out.Events) != 1 {
+			t.Fatalf("events=%+v err=%v", out.Events, err)
+		}
+		return out.Events[0]
+	}
+	morning := time.Date(2026, 11, 3, 10, 1, 0, 0, time.UTC)
+	a := check("0 13 * * *", "Europe/Minsk", morning)
+	b := check("0 13 * * *", "Europe/Minsk", morning.Add(time.Minute))
+	sameInstant := check("0 10 * * *", "UTC", morning)
+	afternoon := check("0 16 * * *", "Europe/Minsk", morning.Add(3*time.Hour))
+	tomorrow := check("0 13 * * *", "Europe/Minsk", morning.Add(24*time.Hour))
+	if a.Key != b.Key || a.Key != sameInstant.Key || a.Key == afternoon.Key || a.Key == tomorrow.Key || a.SourceKey != a.Key {
+		t.Fatalf("keys: %s %s %s %s %s", a.Key, b.Key, sameInstant.Key, afternoon.Key, tomorrow.Key)
+	}
+	if a.Key != "cron:task:2026-11-03T10:00:00Z" {
+		t.Fatal(a.Key)
 	}
 }
 

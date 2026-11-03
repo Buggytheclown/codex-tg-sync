@@ -372,3 +372,23 @@ restore automatic height. Viewport changes discard old placement coordinates.
 The active tab uses one sliding capsule behind the three labels, with the same
 210 ms timing/easing as the body transition. Interrupted selection continues
 from its current position; reduced motion moves it immediately.
+
+## Cron occurrence identity amendment
+
+Active board cron events use the owner's stable identity, the rule ID when
+present, and the scheduled instant as a UTC RFC3339 timestamp. The local
+scheduled_at payload and human-facing task time keep their configured timezone.
+Changing today's schedule from 13:00 to 16:00 permits a distinct occurrence;
+poll time, prompt edits, generation changes and restarts do not change identity.
+PR keys, schedule evaluation, supported expressions, lateness and resume grace
+are unchanged. Ordinary once rules still need explicit rearming.
+
+Acceptance reads old date-only event keys in the same transaction as the new
+event/request. A valid scheduled_at protects only that instant, including across
+timezone representations. Missing, invalid or inconsistent old times protect
+the old local date, including a rescheduled time that day. Other owners/rules
+and following dates are independent. The existing legacy-wait conversion also
+recognizes its original flat keys. Compatibility does not rewrite history,
+child source keys or frozen requests, and needs no migration job or schema.
+Repeated or interrupted updates retain the same durable protection. The retired
+file-based poller keeps its historical date keys for existing import records.

@@ -68,7 +68,7 @@ func (c *Checker) Check(ctx context.Context, p model.TaskPolling, now time.Time)
 		if id == "" {
 			id = p.TaskID
 		}
-		key := "cron:" + id + ":" + slot.Format("2006-01-02")
+		key := "cron:" + id + ":" + slot.UTC().Format(time.RFC3339)
 		out.Events = []model.PollingEvent{{Key: key, SourceKey: key, Title: "Scheduled task", Payload: jsonBytes(map[string]string{"scheduled_at": slot.Format(time.RFC3339), "timezone": cfg.Timezone}), Variables: map[string]string{"date": slot.Format("2006-01-02"), "scheduled_at": slot.Format(time.RFC3339)}}}
 	case TypeReview, TypeChanges:
 		if c == nil || c.pr == nil {

@@ -100,6 +100,15 @@ func (s *Store) AcceptTaskPollingOutcome(ctx context.Context, out model.TaskPoll
 		if !errors.Is(err, sql.ErrNoRows) {
 			return false, err
 		}
+		if p.Type == "cron" {
+			accepted, err := legacyCronEventAcceptedTx(ctx, tx, t.ID, event)
+			if err != nil {
+				return false, err
+			}
+			if accepted {
+				continue
+			}
+		}
 
 		if !acceptedEvent && p.Mode == model.PollingOnce && (p.Action.Column == model.TaskTODO || p.Action.Column == model.TaskDone) {
 			if err := cancelUnstartedTaskRequestsTx(ctx, tx, t.ID, now); err != nil {

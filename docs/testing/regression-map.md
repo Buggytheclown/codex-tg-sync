@@ -224,6 +224,12 @@ ADR-035 adds database-owned PR/cron sources, owned child definitions and the loc
 - `internal/storage/store_task_launch_policy_test.go` covers exact configured prompts and event facts, durable author independent of waiting, human source labels, manual/trusted/automatic initial policies, normalized author matching, visible-before-auto claim, manual continuations, central source/cron title composition, and one-time upgrades preserving custom source names/policies/frozen requests.
 - `internal/polling/checker_test.go` additionally checks initial/current continuation snapshot authors. `cmd/ctr-go/board_test.go` checks configured permissions and fresh cron/review policy preservation; UI policy editing is covered in `ui/src/App.test.tsx`.
 - `internal/storage/store_tasks_test.go` and task import tests cover fresh/old databases, source definition snapshots, optimistic versions, generation fencing, atomic events/requests, legacy barriers, cancellation and chat binding.
+- Cron checker tests distinguish scheduled instants within one date, canonicalize
+  equivalent timezone representations, and retain lateness/generation behavior.
+  `internal/storage/store_cron_identity_test.go` covers old known/unknown/invalid
+  times and imports, 13:00 → 16:00 → 13:00, reopen/rearm, independent owners/rules,
+  flat-to-rules conversion, preserved history and nonduplicated source children
+  with one request each. Existing transaction rollback tests remain applicable.
 - `internal/polling/*_test.go` covers ANY conditions, empty/draft/self/nested comments, all-resolved and status edges, published heads, cron occurrence identity, lateness, resume stabilization and partial read failures.
 - `internal/daemon/board_launch_test.go` covers same-thread continuation, busy/missing chats, move versus launch, and projection without Telegram topics or enabled Sync.
 - `internal/controlapi/board_test.go` covers exact Host/Origin and JSON boundaries, conflict responses, static/API separation and SSE invalidation.

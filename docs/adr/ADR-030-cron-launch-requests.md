@@ -32,8 +32,9 @@ ownership and recovery rules.
 - A task may set `max_lateness` to a positive Go duration such as `2h`. When
   present, a scheduled occurrence older than that bound is skipped. Omitting
   the field preserves period-wide catch-up.
-- Cron external identity is `<task-id>:<scheduled local YYYY-MM-DD>`. The
-  existing unique `(source, external_id)` constraint enforces at most one
+- Historical file-based cron external identity is
+  `<task-id>:<scheduled local YYYY-MM-DD>`. Active board scheduling uses the
+  timestamp identity and compatibility rules in ADR-035. The existing unique `(source, external_id)` constraint enforces at most one
   durable request per task and period across every request state and restart.
 - `launch_policy=telegram` is the default and uses the existing permanent
   external-request topic. `launch_policy=auto` uses the existing durable
