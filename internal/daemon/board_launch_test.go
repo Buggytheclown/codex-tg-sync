@@ -752,4 +752,21 @@ func TestAutomaticBoardContinuationWaitsForIdleWithoutReplay(t *testing.T) {
 	if len(writer.turnStartCalls) != 1 {
 		t.Fatal("automatic continuation replayed")
 	}
+	// Board-only observation closes the exact polling run and returns its result
+	// for review. A later manually started turn must not move the task again.
+	terminal := appserver.SnapshotFromThreadRead(boardThreadPayload("board-thread", "completed", got.TurnID, "poll result"))
+	s.processBoardSnapshotLocked(ctx, terminal)
+	task, _ = s.store.GetTask(ctx, task.ID)
+	if task.Column != model.TaskInbox || task.ThreadID != "board-thread" {
+		t.Fatalf("polling result did not return to Inbox: %+v", task)
+	}
+	task, err = s.store.MoveTask(ctx, task.ID, model.MoveTaskInput{ExpectedVersion: task.Version, Column: model.TaskTODO})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.processBoardSnapshotLocked(ctx, appserver.SnapshotFromThreadRead(boardThreadPayload("board-thread", "completed", "zz-manual-turn", "manual result")))
+	manual, _ := s.store.GetTask(ctx, task.ID)
+	if manual.Column != model.TaskTODO || manual.Version != task.Version {
+		t.Fatalf("manual result moved task: %+v", manual)
+	}
 }

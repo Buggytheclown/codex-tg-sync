@@ -487,7 +487,12 @@ func (s *Store) CompleteExternalTurn(ctx context.Context, threadID, turnID, stat
 		return false, errors.New("invalid external turn completion status")
 	}
 	now := model.NowString()
-	result, err := s.db.ExecContext(ctx, `
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return false, err
+	}
+	defer tx.Rollback()
+	rows, err := tx.QueryContext(ctx, `
 	UPDATE external_launch_requests
 	SET status=?,
 		reply_status=CASE WHEN coalesce(source_chat_id,'')<>'' AND source_message_id<>0 AND coalesce(reply_status,'')='' THEN ? ELSE reply_status END,
@@ -495,13 +500,34 @@ func (s *Store) CompleteExternalTurn(ctx context.Context, threadID, turnID, stat
 		reply_available_at=CASE WHEN coalesce(source_chat_id,'')<>'' AND source_message_id<>0 AND coalesce(reply_status,'')='' THEN ? ELSE reply_available_at END,
 		reply_error=CASE WHEN coalesce(source_chat_id,'')<>'' AND source_message_id<>0 AND coalesce(reply_status,'')='' THEN '' ELSE reply_error END,
 		updated_at=?
-	WHERE thread_id=? AND turn_id=? AND status=?`, status, model.ExternalReplyPending, nullable(text), now, now,
+	WHERE thread_id=? AND turn_id=? AND status=? RETURNING id`, status, model.ExternalReplyPending, nullable(text), now, now,
 		threadID, turnID, model.ExternalLaunchSessionStarted)
 	if err != nil {
 		return false, err
 	}
-	rows, err := result.RowsAffected()
-	return rows == 1, err
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			return false, err
+		}
+		ids = append(ids, id)
+	}
+	err = rows.Err()
+	rows.Close()
+	if err != nil {
+		return false, err
+	}
+	for _, id := range ids {
+		if err := returnCompletedPollingTaskTx(ctx, tx, id, threadID, turnID, status, now); err != nil {
+			return false, err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return false, err
+	}
+	return len(ids) > 0, nil
 }
 
 func (s *Store) ListExternalLaunchRequestsByStatus(ctx context.Context, statuses []string, limit int) ([]model.ExternalLaunchRequest, error) {

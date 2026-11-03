@@ -228,6 +228,19 @@ the same transaction as the destination, event and cursor. TODO requests may be
 claimed; manual moves to TODO/Done still cancel definitely unstarted requests.
 Already started or ambiguous work is never interrupted or replayed.
 
+A terminal turn belonging to a polling launch returns its task from TODO to
+Inbox for result review. Initial source launches and continuations follow this
+rule, with either Telegram approval or automatic start. Completion, failure and
+interruption all return the result; a failure to start does not. Request closure,
+card version/column change and one polling_run_completed history event commit
+atomically. Duplicate observations have no effect. Matching uses the exact
+request, thread and turn plus its persisted polling event, never chat titles.
+A manual column move since the trigger relinquishes this automatic return, even
+if the task later returns to TODO; reordering and ordinary edits do not. A known
+later turn also prevents a stale completion from moving a card. Manual runs do
+not move tasks. Returning to Inbox never rearms polling or starts another turn.
+Previously closed requests are not replayed or retroactively moved.
+
 Automatic continuations use the existing queue and dispatcher, remain visible in
 Telegram before claim, preserve frozen execution settings, wait for an idle target
 and use only the attached chat. Source launch policies additionally support `none`;

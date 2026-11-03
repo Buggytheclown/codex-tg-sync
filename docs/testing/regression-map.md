@@ -228,6 +228,11 @@ ADR-035 adds database-owned PR/cron sources, owned child definitions and the loc
 - `internal/daemon/board_launch_test.go` covers same-thread continuation, busy/missing chats, move versus launch, and projection without Telegram topics or enabled Sync.
 - `internal/controlapi/board_test.go` covers exact Host/Origin and JSON boundaries, conflict responses, static/API separation and SSE invalidation.
 - `cmd/ctr-go/board_test.go` covers one-time legacy import and sole runner ownership; UI tests/build live under `ui/`.
+- `internal/storage/store_task_completion_test.go` covers initial/continuation polling
+  launches with approval/auto-start, completed/failed/interrupted outcomes, manual
+  turns, duplicate terminal reads, manual column moves and TODO round trips,
+  reorder preservation, later manual turns, and atomic rollback/retry. Return is
+  TODO → Inbox only; polling remains stopped and chat linkage is preserved.
 - `internal/storage/store_task_order_test.go`, `internal/controlapi/board_order_test.go` and `ui/src/drag.test.tsx` cover equal-position neighbor insertion, persistent ordering, API conflicts/backward compatibility, same-column polling/request preservation, midpoint/height placeholders, grabbed/cancel states, optimistic saves, old snapshots, rollback and queued refresh.
 - `internal/daemon/board_lock_test.go` and `internal/storage/store_task_reorder_test.go` cover independent board progress under Sync/dispatch barriers, reorder-only column/version fences, and preserved launch/cancel ownership. Compact API/storage tests prove summaries exclude large payloads while detail reads retain them; SSE uses compact status/version changes. UI tests cover lazy detail loading, failed retry, stale selection responses and source settings preservation.
 - `internal/storage/store_task_priority_chat_test.go` and `internal/daemon/board_chat_link_test.go` cover priority default/preservation/upgrade/reopen, passive authority, chat uniqueness/idempotency, launch/history conflicts and generation fencing. UI acceptance includes Cmd+Enter validation, accessible card priority and non-nested Codex links, linking an existing chat, and preserving drafts on conflicting save responses.
