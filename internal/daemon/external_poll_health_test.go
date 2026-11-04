@@ -60,51 +60,87 @@ func (f *pollHealthFixture) wantMessages(count int) {
 	}
 }
 
+// pollFor supplies fresh observations throughout a phase, including both endpoints.
+// Omitted sources deliberately receive no observations (for stale-source tests).
+func (f *pollHealthFixture) pollFor(duration time.Duration, results map[string]error) {
+	f.t.Helper()
+	start := f.now
+	for elapsed := time.Duration(0); ; {
+		f.now = start.Add(elapsed)
+		for source, err := range results {
+			f.service.NoteExternalPollResult(context.Background(), source, err)
+		}
+		f.service.processDeliveryBatch(context.Background())
+		if elapsed == duration {
+			break
+		}
+		elapsed += 30 * time.Second
+		if elapsed > duration {
+			elapsed = duration
+		}
+	}
+}
+
+func TestExternalPollHealthNotificationThresholds(t *testing.T) {
+	f := newPollHealthFixture(t, "a")
+	err := errors.New("network timeout")
+	f.pollFor(599*time.Second, map[string]error{"a": err})
+	f.wantMessages(0)
+	f.pollFor(time.Second, map[string]error{"a": err})
+	f.wantMessages(1)
+	f.pollFor(299*time.Second, map[string]error{"a": nil})
+	f.wantMessages(1)
+	f.pollFor(time.Second, map[string]error{"a": nil})
+	f.wantMessages(2)
+}
+
+func TestExternalPollHealthShortFailureAndInterruptedRecoveryStaySilent(t *testing.T) {
+	f := newPollHealthFixture(t, "a")
+	err := errors.New("network timeout")
+	f.pollFor(9*time.Minute, map[string]error{"a": err})
+	f.pollFor(5*time.Minute, map[string]error{"a": nil})
+	f.wantMessages(0)
+	f.pollFor(10*time.Minute, map[string]error{"a": err})
+	f.wantMessages(1)
+	f.pollFor(4*time.Minute, map[string]error{"a": nil})
+	f.pollFor(0, map[string]error{"a": err})
+	f.pollFor(299*time.Second, map[string]error{"a": nil})
+	f.wantMessages(1)
+	f.pollFor(time.Second, map[string]error{"a": nil})
+	f.wantMessages(2)
+}
+
 func TestExternalPollHealthGroupsFailuresAndPartialRecoveries(t *testing.T) {
 	f := newPollHealthFixture(t, "a", "b")
 	err := errors.New("network timeout")
-	f.note(270, "a", err)
-	f.note(280, "b", err)
-	f.note(330, "a", err)
+	f.pollFor(10*time.Minute, map[string]error{"a": err, "b": err})
 	f.wantMessages(1)
-	f.note(340, "b", err)
+	f.pollFor(5*time.Minute, map[string]error{"a": nil, "b": err})
 	f.wantMessages(1)
-	f.note(350, "a", nil)
-	f.note(380, "a", nil)
-	f.wantMessages(1)
-	f.note(390, "b", nil)
-	f.wantMessages(1)
-	f.note(420, "b", nil)
+	f.pollFor(5*time.Minute, map[string]error{"a": nil, "b": nil})
 	f.wantMessages(2)
 	if !strings.Contains(f.sender.messages[0].text, "/pollers") || !strings.Contains(f.sender.messages[1].text, "recovered") {
 		t.Fatalf("warning/recovery=%#v", f.sender.messages)
 	}
-	f.note(450, "a", err)
-	f.note(510, "b", nil)
-	f.note(510, "a", err)
+	f.pollFor(10*time.Minute, map[string]error{"a": err, "b": nil})
 	f.wantMessages(3)
 }
 
 func TestExternalPollHealthNewUnconfirmedFailureBlocksRecovery(t *testing.T) {
 	f := newPollHealthFixture(t, "a", "b")
 	err := errors.New("network timeout")
-	f.note(270, "a", err)
-	f.note(330, "a", err)
-	f.note(340, "a", nil)
-	f.note(350, "b", err)
-	f.note(370, "a", nil)
+	f.pollFor(10*time.Minute, map[string]error{"a": err, "b": nil})
+	f.pollFor(4*time.Minute, map[string]error{"a": nil, "b": nil})
+	f.pollFor(time.Minute, map[string]error{"a": nil, "b": err})
 	f.wantMessages(1)
-	f.note(380, "b", nil)
-	f.wantMessages(1)
-	f.note(410, "b", nil)
+	f.pollFor(5*time.Minute, map[string]error{"a": nil, "b": nil})
 	f.wantMessages(2)
 }
 
 func TestExternalPollHealthPersistsSharedIncidentAcrossRestart(t *testing.T) {
 	f := newPollHealthFixture(t, "a", "b")
 	err := errors.New("network timeout")
-	f.note(270, "a", err)
-	f.note(330, "a", err)
+	f.pollFor(10*time.Minute, map[string]error{"a": err, "b": nil})
 	cfg := f.service.cfg
 	if err := f.service.Close(); err != nil {
 		t.Fatal(err)
@@ -117,22 +153,18 @@ func TestExternalPollHealthPersistsSharedIncidentAcrossRestart(t *testing.T) {
 	f.service = service
 	service.now = func() time.Time { return f.now }
 	service.SetSender(f.sender)
-	f.note(340, "b", err)
-	f.note(400, "b", err)
+	f.pollFor(10*time.Minute, map[string]error{"a": err, "b": err})
 	f.wantMessages(1)
-	f.note(410, "a", nil)
-	f.note(440, "a", nil)
-	f.note(450, "b", nil)
-	f.note(480, "b", nil)
+	f.pollFor(5*time.Minute, map[string]error{"a": nil, "b": nil})
 	f.wantMessages(2)
 }
 
 func TestExternalPollHealthConcurrentFailuresQueueOneWarning(t *testing.T) {
 	f := newPollHealthFixture(t, "a", "b")
 	err := errors.New("network timeout")
-	f.note(270, "a", err)
-	f.note(270, "b", err)
-	f.now = f.now.Add(time.Minute)
+	f.pollFor(599*time.Second, map[string]error{"a": err, "b": err})
+	f.wantMessages(0)
+	f.now = f.now.Add(time.Second)
 	var wg sync.WaitGroup
 	for _, source := range []string{"a", "b", "a", "b"} {
 		wg.Go(func() { f.service.NoteExternalPollResult(context.Background(), source, err) })
@@ -144,41 +176,34 @@ func TestExternalPollHealthConcurrentFailuresQueueOneWarning(t *testing.T) {
 
 func TestExternalPollHealthDoesNotRecoverWithoutFreshObservations(t *testing.T) {
 	f := newPollHealthFixture(t, "a", "b")
-	err := errors.New("network timeout")
-	f.note(270, "a", err)
-	f.note(330, "a", err)
-	f.note(340, "a", nil)
-	f.note(370, "a", nil) // b has not completed a cycle for over two intervals.
+	f.pollFor(10*time.Minute, map[string]error{"a": errors.New("network timeout"), "b": nil})
+	f.pollFor(5*time.Minute, map[string]error{"a": nil}) // b is stale.
 	f.wantMessages(1)
-	f.note(380, "b", nil)
+	f.pollFor(0, map[string]error{"b": nil})
 	f.wantMessages(2)
 }
 
 func TestExternalPollHealthDisablingDoesNotAnnounceRecovery(t *testing.T) {
 	f := newPollHealthFixture(t, "a")
 	err := errors.New("network timeout")
-	f.note(270, "a", err)
-	f.note(330, "a", err)
+	f.pollFor(10*time.Minute, map[string]error{"a": err})
 	if err := f.service.RegisterExternalPoller(context.Background(), "a", time.Minute, false); err != nil {
 		t.Fatal(err)
 	}
-	f.note(340, "a", nil) // A late result from an already disabled worker.
+	f.pollFor(0, map[string]error{"a": nil}) // Late result from a disabled worker.
 	f.wantMessages(1)
 	if err := f.service.RegisterExternalPoller(context.Background(), "a", time.Minute, true); err != nil {
 		t.Fatal(err)
 	}
-	f.note(350, "a", err)
-	f.note(410, "a", err)
+	f.pollFor(10*time.Minute, map[string]error{"a": err})
 	f.wantMessages(2)
 }
 
 func TestExternalPollHealthSuppressesUndeliveredIncident(t *testing.T) {
 	f := newPollHealthFixture(t, "a")
 	f.service.SetSender(nil)
-	f.note(270, "a", errors.New("network timeout"))
-	f.note(330, "a", errors.New("network timeout"))
-	f.note(340, "a", nil)
-	f.note(370, "a", nil)
+	f.pollFor(10*time.Minute, map[string]error{"a": errors.New("network timeout")})
+	f.pollFor(5*time.Minute, map[string]error{"a": nil})
 	f.service.SetSender(f.sender)
 	f.service.processDeliveryBatch(context.Background())
 	f.wantMessages(0)
@@ -195,7 +220,7 @@ func TestExternalPollHealthUpgradeConsolidatesLegacyIncidents(t *testing.T) {
 			f.service.SetSender(nil)
 			ctx := context.Background()
 			for _, source := range []string{"a", "b"} {
-				f.note(270, source, errors.New("network timeout"))
+				f.pollFor(0, map[string]error{source: errors.New("network timeout")})
 				f.service.healthMu.Lock()
 				f.service.reportHealthFailureLockedToTopic(ctx, source+".poll", "Legacy warning", "timeout", "", 77)
 				f.service.healthMu.Unlock()
@@ -211,22 +236,16 @@ func TestExternalPollHealthUpgradeConsolidatesLegacyIncidents(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			f.note(275, "a", errors.New("network timeout"))
-			f.service.processDeliveryBatch(ctx)
+			f.pollFor(0, map[string]error{"a": errors.New("network timeout")})
 			warnings := max(before, 1)
 			f.wantMessages(warnings)
-			f.note(280, "a", nil)
-			f.note(310, "a", nil)
+			f.pollFor(5*time.Minute, map[string]error{"a": nil, "b": errors.New("network timeout")})
 			f.wantMessages(warnings)
-			f.note(320, "b", nil)
-			f.note(350, "b", nil)
+			f.pollFor(5*time.Minute, map[string]error{"a": nil, "b": nil})
 			f.wantMessages(warnings + 1)
-			f.note(380, "a", errors.New("network timeout"))
-			f.note(440, "b", nil)
-			f.note(440, "a", errors.New("network timeout"))
+			f.pollFor(10*time.Minute, map[string]error{"a": errors.New("network timeout"), "b": nil})
 			f.wantMessages(warnings + 2)
-			f.note(450, "a", nil)
-			f.note(480, "a", nil)
+			f.pollFor(5*time.Minute, map[string]error{"a": nil, "b": nil})
 			f.wantMessages(warnings + 3)
 			states, err := f.service.store.ListState(ctx)
 			if err != nil || len(openHealthIncidentNames(states)) != 0 {
@@ -238,12 +257,9 @@ func TestExternalPollHealthUpgradeConsolidatesLegacyIncidents(t *testing.T) {
 
 func TestExternalPollHealthDisablingSuppressesQueuedRecovery(t *testing.T) {
 	f := newPollHealthFixture(t, "a")
-	err := errors.New("network timeout")
-	f.note(270, "a", err)
-	f.note(330, "a", err)
+	f.pollFor(10*time.Minute, map[string]error{"a": errors.New("network timeout")})
 	f.service.SetSender(nil)
-	f.note(340, "a", nil)
-	f.note(370, "a", nil)
+	f.pollFor(5*time.Minute, map[string]error{"a": nil})
 	if err := f.service.RegisterExternalPoller(context.Background(), "a", time.Minute, false); err != nil {
 		t.Fatal(err)
 	}
@@ -254,19 +270,16 @@ func TestExternalPollHealthDisablingSuppressesQueuedRecovery(t *testing.T) {
 
 func TestExternalPollHealthReenabledSourceMustRecoverStably(t *testing.T) {
 	f := newPollHealthFixture(t, "a", "b")
-	err := errors.New("network timeout")
-	f.note(270, "a", err)
-	f.note(330, "a", err)
+	f.pollFor(10*time.Minute, map[string]error{"a": errors.New("network timeout"), "b": nil})
 	ctx := context.Background()
 	for _, enabled := range []bool{false, true} {
 		if err := f.service.RegisterExternalPoller(ctx, "a", time.Minute, enabled); err != nil {
 			t.Fatal(err)
 		}
 	}
-	f.note(340, "b", nil)
-	f.note(350, "a", nil)
+	f.pollFor(299*time.Second, map[string]error{"a": nil, "b": nil})
 	f.wantMessages(1)
-	f.note(380, "a", nil)
+	f.pollFor(time.Second, map[string]error{"a": nil, "b": nil})
 	f.wantMessages(2)
 }
 
@@ -275,12 +288,9 @@ func TestExternalPollHealthQueuedRecoveryWaitsForCurrentHealth(t *testing.T) {
 		t.Run(blocker, func(t *testing.T) {
 			f := newPollHealthFixture(t, "a", "b")
 			ctx := context.Background()
-			f.note(270, "a", errors.New("network timeout"))
-			f.note(330, "a", errors.New("network timeout"))
-			f.note(330, "b", nil)
+			f.pollFor(10*time.Minute, map[string]error{"a": errors.New("network timeout"), "b": nil})
 			f.service.SetSender(nil)
-			f.note(340, "a", nil)
-			f.note(370, "a", nil)
+			f.pollFor(5*time.Minute, map[string]error{"a": nil, "b": nil})
 			items, err := f.service.store.ClaimDeliveryBatch(ctx, 10)
 			if err != nil || len(items) != 1 || !strings.Contains(items[0].PayloadJSON, "recovered") {
 				t.Fatalf("queued recovery=%#v err=%v", items, err)
@@ -294,9 +304,9 @@ func TestExternalPollHealthQueuedRecoveryWaitsForCurrentHealth(t *testing.T) {
 			}
 			switch blocker {
 			case "new error":
-				f.note(380, "a", errors.New("temporary network error"))
+				f.pollFor(0, map[string]error{"a": errors.New("temporary network error")})
 			case "stale source":
-				f.note(480, "a", nil)
+				f.pollFor(150*time.Second, map[string]error{"a": nil})
 			case "unknown source":
 				if err := f.service.RegisterExternalPoller(ctx, "c", time.Minute, true); err != nil {
 					t.Fatal(err)
@@ -311,12 +321,11 @@ func TestExternalPollHealthQueuedRecoveryWaitsForCurrentHealth(t *testing.T) {
 			}
 			switch blocker {
 			case "new error":
-				f.note(390, "a", nil)
-				f.note(420, "a", nil)
+				f.pollFor(5*time.Minute, map[string]error{"a": nil, "b": nil})
 			case "stale source":
-				f.note(490, "b", nil)
+				f.pollFor(0, map[string]error{"b": nil})
 			case "unknown source":
-				f.note(380, "c", nil)
+				f.pollFor(0, map[string]error{"c": nil})
 			}
 			release()
 			f.service.processDeliveryBatch(ctx)
@@ -332,7 +341,7 @@ func TestExternalPollHealthRegistrationCannotWarnBeforeConfigurationIsApplied(t 
 	f.service.SetSender(nil)
 	ctx := context.Background()
 	for _, source := range []string{"a", "b"} {
-		f.note(270, source, errors.New("network timeout"))
+		f.pollFor(0, map[string]error{source: errors.New("network timeout")})
 		f.service.healthMu.Lock()
 		f.service.reportHealthFailureLockedToTopic(ctx, source+".poll", "Legacy warning", "timeout", "", 77)
 		f.service.healthMu.Unlock()
@@ -353,28 +362,27 @@ func TestExternalPollHealthRegistrationCannotWarnBeforeConfigurationIsApplied(t 
 func TestExternalPollHealthUpgradeRetainsUnconfirmedErrors(t *testing.T) {
 	f := newPollHealthFixture(t, "a", "b")
 	ctx := context.Background()
-	f.note(270, "a", errors.New("network timeout"))
+	f.pollFor(0, map[string]error{"a": errors.New("network timeout")})
 	f.service.healthMu.Lock()
 	f.service.reportHealthFailureLockedToTopic(ctx, "a.poll", "Legacy warning", "timeout", "", 77)
 	f.service.healthMu.Unlock()
-	f.note(270, "b", errors.New("network timeout"))
+	f.pollFor(0, map[string]error{"b": errors.New("network timeout")})
 	oldTracker := map[string]string{
 		"last_observed_at": f.now.Format(time.RFC3339Nano),
 		"warmup_until":     f.now.Add(-time.Minute).Format(time.RFC3339Nano),
 		"failure_since":    f.now.Format(time.RFC3339Nano),
 	}
-	raw, _ := json.Marshal(oldTracker) // Real old format, without the new flags.
+	raw, _ := json.Marshal(oldTracker) // Old format without the recovery flags.
 	if err := f.service.store.SetState(ctx, "health_tracker.b.poll", string(raw)); err != nil {
 		t.Fatal(err)
 	}
 	if err := f.service.migrateExternalPollHealth(ctx); err != nil {
 		t.Fatal(err)
 	}
-	f.note(280, "a", nil)
-	f.note(310, "a", nil)
-	f.note(320, "b", nil)
+	f.pollFor(time.Minute, map[string]error{"a": nil})
+	f.pollFor(299*time.Second, map[string]error{"a": nil, "b": nil})
 	f.wantMessages(1)
-	f.note(350, "b", nil)
+	f.pollFor(time.Second, map[string]error{"a": nil, "b": nil})
 	f.wantMessages(2)
 }
 
@@ -397,30 +405,24 @@ func TestExternalPollHealthUpgradeSuppressesLegacyQueuedRecovery(t *testing.T) {
 
 func TestExternalPollHealthResumeRequiresStableRecovery(t *testing.T) {
 	f := newPollHealthFixture(t, "a")
-	err := errors.New("network timeout")
-	f.note(270, "a", err)
-	f.note(330, "a", err)
-	f.note(600, "a", nil) // Wake after a gap starts the existing four-minute grace.
-	f.note(630, "a", err)
-	for seconds := 660; seconds <= 840; seconds += 30 {
-		f.note(seconds, "a", nil)
-		f.wantMessages(1)
-	}
-	f.note(870, "a", nil)
+	f.pollFor(10*time.Minute, map[string]error{"a": errors.New("network timeout")})
+	f.now = f.now.Add(3 * time.Minute) // Wake starts the existing four-minute grace.
+	f.pollFor(0, map[string]error{"a": nil})
+	f.pollFor(0, map[string]error{"a": errors.New("network timeout")})
+	f.pollFor(4*time.Minute+299*time.Second, map[string]error{"a": nil})
+	f.wantMessages(1)
+	f.pollFor(time.Second, map[string]error{"a": nil})
 	f.wantMessages(2)
 }
 
 func TestExternalPollHealthUnknownPollerCannotConfirmRecovery(t *testing.T) {
 	f := newPollHealthFixture(t, "a")
-	err := errors.New("network timeout")
-	f.note(270, "a", err)
-	f.note(330, "a", err)
+	f.pollFor(10*time.Minute, map[string]error{"a": errors.New("network timeout")})
 	if err := f.service.RegisterExternalPoller(context.Background(), "b", time.Minute, true); err != nil {
 		t.Fatal(err)
 	}
-	f.note(340, "a", nil)
-	f.note(370, "a", nil)
+	f.pollFor(5*time.Minute, map[string]error{"a": nil})
 	f.wantMessages(1)
-	f.note(380, "b", nil)
+	f.pollFor(0, map[string]error{"b": nil})
 	f.wantMessages(2)
 }

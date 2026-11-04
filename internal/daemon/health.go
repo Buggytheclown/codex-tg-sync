@@ -49,8 +49,8 @@ const (
 	externalPollHealthKey      = "external.pollers"
 	externalPollObservationGap = 2 * time.Minute
 	externalPollResumeGrace    = 4 * time.Minute
-	externalPollFailureDelay   = time.Minute
-	externalPollRecoveryDelay  = 30 * time.Second
+	externalPollFailureDelay   = 10 * time.Minute
+	externalPollRecoveryDelay  = 5 * time.Minute
 )
 
 func (s *Service) reportHealthFailure(ctx context.Context, key, title, summary, action string) {

@@ -195,6 +195,9 @@ Required invariants:
 - output distinguishes disabled, polling, healthy, degraded, and failed sources;
 - last attempt/success and consecutive failures are truthful;
 - sleep/resume gaps do not cause false flapping;
+- external polling warns only after ten minutes of failed observations following
+  wake grace, and confirms recovery after five minutes of successful observations;
+  a short failure stays silent and an error restarts recovery confirmation;
 - external pollers share one warning/recovery episode; additional failures and
   partial recoveries stay silent, and unconfirmed errors or missing/stale
   observations block recovery;

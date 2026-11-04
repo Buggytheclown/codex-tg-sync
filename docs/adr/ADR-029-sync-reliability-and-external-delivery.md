@@ -34,10 +34,10 @@ update behind one message.
   unrelated later updates are not blocked forever.
 - Important failure episodes use namespaced `daemon_state` and the existing
   durable Telegram delivery queue. External polling waits through a four-minute
-  resume warm-up, requires one minute of continuous failure, and requires 30
-  seconds of continuous success before recovery. A polling gap longer than 90
-  seconds resets the warm-up, treating sleep and DarkWake as unknown rather
-  than failed service time.
+  resume warm-up, requires ten minutes of continuous failure, and requires five
+  minutes of continuous success before recovery. A polling gap longer than two
+  minutes (updated in ADR-031) resets the warm-up, treating sleep and DarkWake
+  as unknown rather than failed service time.
 - Health deliveries carry their episode identity. A stale warning is
   superseded instead of sent, and a recovery is sent only when its matching
   warning was already delivered. This prevents delayed queue retries from
@@ -91,9 +91,11 @@ connection loss sacrifices Telegram continuity, matching process restart, in
 exchange for truthful state and no replay ambiguity.
 
 Short network transitions after host resume are intentionally not operator
-incidents. A persistent external polling outage may take up to five minutes
-after resume to become visible, trading alert latency for a stable Control
-signal on laptops.
+incidents. A persistent external polling outage takes approximately fourteen
+minutes after resume to become visible, plus polling and delivery latency,
+trading alert latency for a stable Control signal on laptops. The ten-minute
+failure and five-minute recovery thresholds supersede the original one-minute
+failure and 30-second recovery delays.
 
 ## Non-goals
 

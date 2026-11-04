@@ -117,9 +117,11 @@ Callbacks are valid only for the stored chat/topic/message, thread, turn, reques
 
 Cron, Yandex Messenger, and Arcanum review pollers insert requests through the same durable store.
 
-External poller health uses one durable aggregate incident: the first sustained
-failure warns, additional failures and partial recoveries stay silent, and all
-enabled sources must demonstrate fresh successful polling before one recovery.
+External poller health uses one durable aggregate incident: the first ten-minute
+failure after wake grace warns, additional failures and partial recoveries stay
+silent, and all enabled sources must have fresh successful observations before
+one recovery. Each source that had an error must first demonstrate five minutes
+of successful polling.
 Per-source details remain available through `/pollers`. See the
 [notification brief](../process/poller-health-notification-brief.md).
 

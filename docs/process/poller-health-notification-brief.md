@@ -8,8 +8,10 @@ and partial recoveries do not notify. `/pollers` retains per-source diagnostics.
 
 ## Behavior
 
-- Preserve the existing wake grace, sustained-failure threshold, and stable
-  recovery threshold for each source.
+- Preserve the four-minute wake grace. After it, require ten minutes of
+  consecutive failed observations before warning, and five minutes of successful
+  observations before confirming recovery. A success resets the failure timer;
+  an error resets the recovery timer. Transitions occur on a completed check.
 - The first confirmed failure opens `health.external.pollers` through the
   existing durable health episode and delivery queue.
 - Even an unconfirmed error blocks aggregate recovery until that source has

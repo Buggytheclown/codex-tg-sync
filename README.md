@@ -153,6 +153,10 @@ All sources enter the same durable request lifecycle. The Requests topic shows a
 - `/requests` for active, non-closed requests and their status.
 - `/pollers` for enabled pollers, last attempt/success, consecutive failures, and current activity.
 
+Poller health sends one shared warning after ten minutes of failed checks and
+confirms recovery after five minutes of successful checks. After startup or a
+sleep gap, the existing four-minute warm-up comes before these timers.
+
 PR and cron sources live in the local task board's SQLite database. Existing cron schedules from `~/.codex-tg/cron.json` are imported once; edit them on the board afterward.
 
 Arcanum polling uses the authenticated `ya tool gena-arcanum-cli`. Assigned PRs authored by the configured reviewer are skipped. Sources create one board task per PR cycle, with a copied source-owned task definition and Telegram launch request. Source initial launch defaults to manual `Start`; the Source editor also supports trusted PR authors or automatic launch. Automatic requests appear in Telegram before starting. Continuations require `Start`, and existing requests retain their frozen policy. Imported review sources restore the configured trusted-author allowlist once; feedback and existing cron sources stay manual. Fresh cron imports retain their configured launch policy. Moving a task to Polling enables its prepared wait. A matching event returns it to Inbox and can request continuation of the same chat.
