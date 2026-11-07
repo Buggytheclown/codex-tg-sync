@@ -37,8 +37,8 @@ Coverage includes:
 - forum validation and Control preparation;
 - paginated, importance-first `/sync on` topic selection (including `notLoaded` threads with running or terminal last turns), initial topic limit, empty active Sync, and continuous discovery of chats created or updated in the last 24 hours;
 - bounded discovery batches over every page, with failed-candidate progress;
-- `sync_fresh_window_test.go`: 100 chats, expiration/recreation, durable unknown
-  create pause, delivery of pre-activation Finals with normal later delivery,
+- `sync_fresh_window_test.go`: 100 chats, expiration/recreation, durable per-target unknown
+  creation suppression, delivery of pre-activation Finals with normal later delivery,
   catch-up Status retry without repeating Final, restart-safe multipart retry,
   and rejection of queued previous-session snapshots;
 - one topic per thread and receipt idempotency;
@@ -149,7 +149,8 @@ Required invariants:
 - historical delivered/dead rows remain historical;
 - current health, external terminal, and Sync activation deliveries to the Sync group remain eligible;
 - startup returns supported in-group deliveries interrupted in `processing` to `retry`;
-- `/sync on` stops after the first ambiguous topic-creation outcome, marks later candidates skipped, and queues its Control summary durably with the activation state.
+- `/sync on` continues after an unknown creation outcome, suppresses repeat creation
+  for that target, and queues its Control summary durably with activation state.
 
 ## Launch requests
 
@@ -503,3 +504,22 @@ For live Telegram QA, verify:
 - Check that the shared active-tab capsule follows both content directions, stays
   aligned on resize and handles rapid reversal and reduced motion without adding
   focus targets or changing selected-tab semantics.
+
+## Best-effort creation and non-interrupting off (ADR-036)
+
+- `store_topic_creation_test.go`: durable suppression, ambiguous names, event
+  recovery, late-off cleanup, legacy unknown-name fences, repeated confirmation
+  after a consumed draft.
+- `store_telegram_ingress_test.go`: off discards unsent inbox work, uncertain
+  processing is not replayed, and later off fences an older activation.
+- `sync_best_effort_test.go`: off retains writer ownership through topic deletion
+  until authoritative terminal evidence; stored names equal trimmed wire names.
+- `request_wait_test.go`: the owner lock is released after frame write while
+  waiting for an RPC response.
+- `bot_test.go`: failed service-event persistence cannot acknowledge its offset;
+  actual Bot.Run handles off while topic creation waits, and its late topic is
+  cleanup-only.
+- `topic_creation_live_test.go`: opt-in lost-response probe using an exclusive
+  test bot. Never run it against the production update consumer.
+- `tests/probes/pending_requests.py`: opt-in input/approval handoff across two
+  clients of the same App Server; creates and archives its own test chat.

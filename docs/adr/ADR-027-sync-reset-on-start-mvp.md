@@ -1,5 +1,7 @@
 # ADR-027: Sync Resume After Bridge Restart
 
+Topic-creation recovery and off/drain semantics are amended by [ADR-036](ADR-036-best-effort-sync-recovery.md).
+
 - Status: accepted; amended 2026-10-06
 - Amends: ADR-024, ADR-026 restart recovery
 - Related: ADR-032, ADR-034

@@ -93,6 +93,9 @@ func (b *Bot) createSyncTopic(ctx context.Context, title string, retry429 bool) 
 	err := b.groupWrite(ctx, egressOperationCreateForumTopic, model.SendOptions{}, retry429, func() error {
 		attemptCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
 		defer cancel()
+		if err := daemon.CheckSyncTopicCreation(ctx); err != nil {
+			return err
+		}
 		var err error
 		topic, err = b.client.CreateForumTopic(attemptCtx, b.cfg.SyncGroupID, title)
 		return err
@@ -101,8 +104,11 @@ func (b *Bot) createSyncTopic(ctx context.Context, title string, retry429 bool) 
 		safeErr := errors.New(sanitizeTelegramLogError(err))
 		var apiErr *APIError
 		if errors.As(err, &apiErr) {
-			if IsRetryable(err) {
+			if apiErr.Code == 429 || apiErr.HTTPStatus == 429 {
 				return 0, daemon.NewSyncForumFailure(daemon.SyncForumFailureRetryable, safeErr)
+			}
+			if apiErr.Code >= 500 || apiErr.HTTPStatus >= 500 {
+				return 0, daemon.NewSyncForumFailure(daemon.SyncForumFailureUnknown, safeErr)
 			}
 			return 0, daemon.NewSyncForumFailure(daemon.SyncForumFailureDefinitive, safeErr)
 		}
@@ -205,6 +211,24 @@ func (b *Bot) Start(ctx context.Context) error {
 }
 
 func (b *Bot) Run(ctx context.Context) error {
+	if b.me == nil || b.service == nil {
+		return errors.New("Telegram bot identity and service are required")
+	}
+	for {
+		if err := b.service.RecoverTelegramIngress(ctx, b.me.ID); err == nil {
+			break
+		}
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-time.After(time.Second):
+		}
+	}
+	loopCtx, stop := context.WithCancel(ctx)
+	wake := make(chan struct{}, 1)
+	workerDone := make(chan struct{})
+	go func() { defer close(workerDone); b.ingressLoop(loopCtx, wake) }()
+	defer func() { stop(); <-workerDone }()
 	var offset int64
 	for {
 		if err := ctx.Err(); err != nil {
@@ -225,14 +249,52 @@ func (b *Bot) Run(ctx context.Context) error {
 				continue
 			}
 		}
+		saved := true
+		for _, update := range updates {
+			if err := b.persistIngress(ctx, update); err != nil {
+				saved = false
+				break
+			}
+		}
+		for _, update := range updates {
+			if !saved {
+				break
+			}
+			if err := b.recordTopicCreated(ctx, update); err != nil {
+				b.logger.Printf("telegram service event persistence failed: %s", sanitizeTelegramLogError(err))
+				saved = false
+				break
+			}
+		}
+		if !saved {
+			select {
+			case <-ctx.Done():
+				return nil
+			case <-time.After(time.Second):
+			}
+			continue
+		}
 		b.acknowledgeCallbacks(ctx, updates)
 		for _, update := range updates {
 			if update.UpdateID >= offset {
 				offset = update.UpdateID + 1
 			}
-			if err := b.handleUpdate(ctx, update); err != nil {
-				b.logger.Printf("telegram update %d failed: %s", update.UpdateID, sanitizeTelegramLogError(err))
+			if b.admittedIngress(update) && isIngressOff(update) {
+				item, err := b.service.ClaimTelegramIngress(ctx, b.me.ID, update.UpdateID)
+				if err != nil {
+					return err
+				}
+				if item != nil {
+					if err = b.executeIngress(ctx, item); err != nil {
+						return err
+					}
+				}
 			}
+
+		}
+		select {
+		case wake <- struct{}{}:
+		default:
 		}
 	}
 }
@@ -374,6 +436,14 @@ func (b *Bot) DeleteMessage(ctx context.Context, chatID, topicID, messageID int6
 		defer cancel()
 		return b.client.DeleteMessage(attemptCtx, chatID, messageID)
 	})
+}
+
+func (b *Bot) recordTopicCreated(ctx context.Context, update Update) error {
+	m := update.Message
+	if m == nil || m.ForumTopicCreated == nil || m.Chat.ID != b.cfg.SyncGroupID || m.From == nil || b.me == nil || m.From.ID != b.me.ID || m.MessageThreadID <= 1 {
+		return nil
+	}
+	return b.service.RecordSyncTopicCreated(ctx, m.Chat.ID, m.MessageThreadID, update.UpdateID, m.ForumTopicCreated.Name)
 }
 
 func (b *Bot) handleUpdate(ctx context.Context, update Update) error {

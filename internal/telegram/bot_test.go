@@ -3,6 +3,7 @@ package telegram
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -20,6 +21,7 @@ import (
 	"github.com/mideco-tech/codex-tg/internal/config"
 	"github.com/mideco-tech/codex-tg/internal/daemon"
 	"github.com/mideco-tech/codex-tg/internal/model"
+	"github.com/mideco-tech/codex-tg/internal/storage"
 )
 
 func TestBotEditMessageRejectsMultiChunkPayload(t *testing.T) {
@@ -471,5 +473,163 @@ func TestBotIgnoresUnsupportedMediaOutsideSyncGroup(t *testing.T) {
 	}
 	if calls != 0 {
 		t.Fatalf("Bot API calls = %d, want silent ignore", calls)
+	}
+}
+
+func TestBotDoesNotAcknowledgeUnsavedTopicEvent(t *testing.T) {
+	root := t.TempDir()
+	service, err := daemon.New(config.Config{SyncGroupID: -1001, Paths: config.Paths{Home: root, DataDir: root, LogDir: root, DBPath: filepath.Join(root, "db")}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer service.Close()
+	db, err := sql.Open("sqlite", filepath.Join(root, "db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if _, err = db.Exec(`CREATE TRIGGER fail_topic_event BEFORE INSERT ON sync_topic_created_events BEGIN SELECT RAISE(ABORT,'injected event persistence failure'); END`); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
+	defer cancel()
+	var offsets []int64
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var request getUpdatesRequest
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Error(err)
+		}
+		offsets = append(offsets, request.Offset)
+		if len(offsets) == 2 {
+			cancel()
+		}
+		_, _ = io.WriteString(w, `{"ok":true,"result":[{"update_id":10,"message":{"message_id":20,"message_thread_id":20,"chat":{"id":-1001},"from":{"id":9},"forum_topic_created":{"name":"topic"}}}]}`)
+	}))
+	defer server.Close()
+	client := NewClient("test-token")
+	client.baseURL = server.URL
+	bot := &Bot{cfg: config.Config{SyncGroupID: -1001}, client: client, service: service, me: &User{ID: 9}, logger: log.New(io.Discard, "", 0)}
+	if err = bot.Run(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if len(offsets) < 2 || offsets[0] != 0 || offsets[1] != 0 {
+		t.Fatalf("acknowledged unsaved event: %v", offsets)
+	}
+}
+
+func TestBotOffIsHandledWhileTopicCreationWaits(t *testing.T) {
+	root := t.TempDir()
+	cfg := config.Config{SyncGroupID: -1001, AllowedUserIDs: []int64{7}, DefaultCWD: root, Paths: config.Paths{Home: root, DataDir: root, LogDir: root, DBPath: filepath.Join(root, "db")}}
+	service, err := daemon.New(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer service.Close()
+	store, err := storage.Open(cfg.Paths.DBPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	defer cancel()
+	if err = store.BeginSyncActivation(ctx, "s", -1001); err != nil {
+		t.Fatal(err)
+	}
+	if err = store.FinishSyncActivation(ctx, "s", "{}", true); err != nil {
+		t.Fatal(err)
+	}
+	menu, err := service.HandleMessageWithID(ctx, -1001, 1, 10, 7, "/newchat", 0)
+	if err != nil || menu == nil || len(menu.Buttons) == 0 {
+		t.Fatal(menu, err)
+	}
+	token := menu.Buttons[0][0].CallbackData
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	offSent := make(chan struct{})
+	allSent := make(chan struct{})
+	var polls, sends atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/getUpdates":
+			switch polls.Add(1) {
+			case 1:
+				_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "result": []any{map[string]any{"update_id": 1, "callback_query": map[string]any{"id": "cb", "from": map[string]any{"id": 7}, "data": token, "message": map[string]any{"message_id": 50, "message_thread_id": 1, "chat": map[string]any{"id": -1001}}}}}})
+			case 2:
+				select {
+				case <-entered:
+				case <-ctx.Done():
+					return
+				}
+				_, _ = io.WriteString(w, `{"ok":true,"result":[{"update_id":2,"message":{"message_id":51,"message_thread_id":1,"chat":{"id":-1001},"from":{"id":7},"text":"/sync off"}}]}`)
+			default:
+				<-ctx.Done()
+			}
+		case "/answerCallbackQuery":
+			_, _ = io.WriteString(w, `{"ok":true,"result":true}`)
+		case "/createForumTopic":
+			close(entered)
+			select {
+			case <-release:
+			case <-ctx.Done():
+				return
+			}
+			_, _ = io.WriteString(w, `{"ok":true,"result":{"message_thread_id":20,"name":"New task"}}`)
+		case "/sendMessage":
+			n := sends.Add(1)
+			_, _ = io.WriteString(w, `{"ok":true,"result":{"message_id":100}}`)
+			if n == 1 {
+				close(offSent)
+			}
+			if n == 2 {
+				close(allSent)
+			}
+		default:
+			t.Errorf("unexpected path %s", r.URL.Path)
+			_, _ = io.WriteString(w, `{"ok":true,"result":true}`)
+		}
+	}))
+	defer server.Close()
+	client := NewClient("test-token")
+	client.baseURL = server.URL
+	bot := &Bot{cfg: cfg, client: client, service: service, me: &User{ID: 9}, logger: log.New(io.Discard, "", 0), egress: newEgressGovernor(time.Nanosecond)}
+	service.SetSyncForum(bot)
+	bot.egress.Start(ctx)
+	done := make(chan error, 1)
+	go func() { done <- bot.Run(ctx) }()
+	select {
+	case <-entered:
+	case <-ctx.Done():
+		t.Fatal("create was not attempted")
+	}
+	ticker := time.NewTicker(5 * time.Millisecond)
+	defer ticker.Stop()
+	offObserved := false
+	for !offObserved {
+		state, err := store.GetSyncState(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		offObserved = state.State == model.SyncStateOff
+		if !offObserved {
+			select {
+			case <-ctx.Done():
+				t.Fatal("off waited for create response")
+			case <-ticker.C:
+			}
+		}
+	}
+	close(release)
+	select {
+	case <-allSent:
+	case <-ctx.Done():
+		t.Fatal("creation did not complete")
+	}
+	cancel()
+	if err = <-done; err != nil {
+		t.Fatal(err)
+	}
+	targets, err := store.ListAllSyncCleanupTargets(context.Background(), -1001)
+	if err != nil || len(targets) != 1 || targets[0].TopicID != 20 {
+		t.Fatal("late topic was not cleanup-only", targets, err)
 	}
 }

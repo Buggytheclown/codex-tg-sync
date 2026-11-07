@@ -164,7 +164,7 @@ func TestSyncRecoveryGateRequiresTelegramAndCorrectGroup(t *testing.T) {
 	}
 }
 
-func TestSyncRecoveryResumesDrainingWithoutInterruptReplay(t *testing.T) {
+func TestSyncRecoveryConvertsDrainingToOffWithoutInterruptReplay(t *testing.T) {
 	service := activeSyncService(t)
 	ctx := context.Background()
 	forum := &fakeSyncForum{}
@@ -186,7 +186,7 @@ func TestSyncRecoveryResumesDrainingWithoutInterruptReplay(t *testing.T) {
 	service.poll, service.pollConnected = poll, true
 	service.reconcileSync(ctx)
 	state, _ := service.store.GetSyncState(ctx)
-	if state.State != model.SyncStateDraining || service.syncWriter.Snapshot().Accepting {
+	if state.State != model.SyncStateOff || service.syncWriter.Snapshot().Accepting {
 		t.Fatalf("draining=%#v", state)
 	}
 	poll.threadReads["thread-1"] = syncCompletedPayload("thread-1", "turn", "done")
@@ -349,15 +349,15 @@ func TestSyncResumedDrainingRepeatedOffWaitsForAuthoritativeTerminal(t *testing.
 	service.poll, service.pollConnected = poll, true
 	service.reconcileSync(ctx)
 	response, err := service.forceDeactivateSync(ctx)
-	if err != nil || response == nil || !strings.Contains(response.Text, "remains draining") {
+	if err != nil || response == nil || !strings.Contains(response.Text, "already off") {
 		t.Fatalf("force off=%#v %v", response, err)
 	}
 	response, err = service.deactivateSync(ctx)
-	if err != nil || response == nil || !strings.Contains(response.Text, "refused") {
+	if err != nil || response == nil || !strings.Contains(response.Text, "already off") {
 		t.Fatalf("off=%#v %v", response, err)
 	}
 	state, _ := service.store.GetSyncState(ctx)
-	if state.State != model.SyncStateDraining || len(poll.turnInterruptCalls) != 0 {
+	if state.State != model.SyncStateOff || len(poll.turnInterruptCalls) != 0 {
 		t.Fatalf("state=%#v interrupts=%v", state, poll.turnInterruptCalls)
 	}
 }

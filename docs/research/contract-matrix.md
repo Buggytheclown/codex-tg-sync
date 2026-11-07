@@ -19,7 +19,7 @@ The Bot API chat-scoped menu contains exactly:
 
 | Command | Scope | Contract |
 | --- | --- | --- |
-| `/sync on|off` | Control | enable synchronization or clean managed topics; activation stops after an ambiguous topic-create result and reports durably |
+| `/sync on|off` | Control | enable synchronization or clean managed topics without interrupting Codex; uncertain creation affects only its target |
 | `/status` | Control | Sync, App Server, delivery, request, and health summary |
 | `/pollers` | Control | configured pollers, current activity, last attempt/success, failures |
 | `/requests` | Control | active non-closed launch requests |
@@ -41,11 +41,14 @@ The Bot API chat-scoped menu contains exactly:
   candidates do not starve later candidates. Start/status events reduce latency.
 - First catch-up shows User/current Status and the latest completed Final,
   including results from before activation. Confirmed deliveries are not repeated.
-- A durable marker written before remote creation prevents automatic retries
-  after an ambiguous outcome, including continuation after partial activation.
-  Control/status report the ambiguous operation; existing bound topics keep updating. Resolve its marker manually after inspection.
+- Durable per-target creation intents prevent retries after unknown outcomes.
+  Exact bot-authored creation events may recover them; ambiguous names, duplicate
+  evidence and missing outcomes are reported in Control. Other chats continue.
+- Off deletes known managed session topics without interrupting Codex or deciding
+  pending approvals/input. Force is an alias. Unknown leftovers may require manual
+  deletion; off/on rebuilds the known projection.
 - One durable Codex `threadId` maps to one managed topic per Sync session.
-- Restart and transport repair preserve active/off/draining state, session ID, activation boundary, topic bindings, message anchors, and fingerprints. Interrupted activation continues in the same session. Catch-up reads saved topics before discovery; only freshly read topics can be retention-pruned.
+- Restart and transport repair preserve active/off state (legacy draining becomes off), session ID, activation boundary, topic bindings, message anchors, and fingerprints. Interrupted activation continues in the same session. Catch-up reads saved topics before discovery; only freshly read topics can be retention-pruned.
 - Periodic reconciliation and new-topic creation prune passive topics inactive
   for more than 24 hours and old ready drafts, independent of topic count.
   Passive Desktop-running/unknown work may lose its topic and regain it on fresh

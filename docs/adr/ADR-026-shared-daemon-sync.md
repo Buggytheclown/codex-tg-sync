@@ -1,5 +1,7 @@
 # ADR-026: Shared Daemon Sync
 
+Topic-creation recovery and off/drain semantics are amended by [ADR-036](ADR-036-best-effort-sync-recovery.md).
+
 - Status: accepted; bridge-restart recovery amended by ADR-027
 - Amends: ADR-019, ADR-020, ADR-022, ADR-023, ADR-024
 - Related: ADR-025, ADR-027, `docs/plans/2026-08-16-sync-desktop-sync-mvp-design.md`

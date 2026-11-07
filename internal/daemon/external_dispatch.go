@@ -3,17 +3,25 @@ package daemon
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 
 	"github.com/mideco-tech/codex-tg/internal/appserver"
 	"github.com/mideco-tech/codex-tg/internal/model"
+	"github.com/mideco-tech/codex-tg/internal/storage"
 )
 
 func (s *Service) dispatchExternalLaunchRequest(ctx context.Context, requestID string) {
+	if _, loaded := s.externalDispatchInFlight.LoadOrStore(requestID, struct{}{}); loaded {
+		return
+	}
+	defer s.externalDispatchInFlight.Delete(requestID)
+	ctx = context.WithValue(ctx, syncExternalRequestKey{}, requestID)
 	s.syncMu.Lock()
 	defer s.syncMu.Unlock()
 	// Wait for background Sync before taking the board/launch gate.
+
 	s.taskLaunchMu.Lock()
 	defer s.taskLaunchMu.Unlock()
 
@@ -51,30 +59,61 @@ func (s *Service) dispatchExternalLaunchRequest(ctx context.Context, requestID s
 
 	telegramPreview := externalLaunchTelegramPreview(*request)
 	title := syncPromptTopicTitle(telegramPreview)
-	topicID, err := forum.CreateLaunchTopic(ctx, title)
-	if err != nil {
-		_, _ = s.store.CompleteExternalLaunchRequest(ctx, request.ID, model.ExternalLaunchFailed, "", "", "telegram_topic", "Telegram could not create the session topic.")
-		s.finishExternalLaunchDispatch()
-		return
-	}
 	topics, _ := s.store.ListSyncTopics(ctx, state.SessionID)
 	drafts, _ := s.store.ListSyncTopicDrafts(ctx, state.SessionID)
 	projectName, directoryName := model.ProjectNameFromCWD(request.CWD)
-	draft := model.SyncTopicDraft{
-		SessionID: state.SessionID, ChatID: state.ChatID, TopicID: topicID, Rank: len(topics) + len(drafts) + 1,
-		Title: title, CWD: request.CWD, ProjectName: projectName, DirectoryName: directoryName,
+	draft := model.SyncTopicDraft{SessionID: state.SessionID, ChatID: state.ChatID, Rank: len(topics) + len(drafts) + 1, Title: title, CWD: request.CWD, ProjectName: projectName, DirectoryName: directoryName}
+	target := "external:" + request.ID
+	confirmed, lookupErr := s.store.ConfirmedTopicCreation(ctx, state.SessionID, target)
+	if lookupErr != nil {
+		return
 	}
-	if err := s.store.CreateSyncTopicDraft(ctx, draft); err != nil {
-		_ = forum.DeleteSyncTopic(ctx, topicID)
-		_, _ = s.store.CompleteExternalLaunchRequest(ctx, request.ID, model.ExternalLaunchFailed, "", "", "sync_draft", "Sync could not persist the new session topic.")
+	topicID := int64(0)
+	if confirmed != nil {
+		topicID = confirmed.TopicID
+	} else {
+		if err := s.store.AllowFailedTopicRetry(ctx, state.SessionID, target); err != nil {
+			return
+		}
+		op, fresh, err := s.prepareTopicCreation(ctx, storage.TopicCreation{SessionID: state.SessionID, ChatID: state.ChatID, Target: target, Title: title, Rank: draft.Rank, Draft: &draft})
+		if err != nil {
+			return
+		}
+		if fresh {
+			ctx = context.WithValue(ctx, syncCreationLockKey{}, true)
+			id, createErr := s.createTopicIO(ctx, state.SessionID, func(ioCtx context.Context) (int64, error) { return forum.CreateLaunchTopic(ioCtx, title) })
+			topicID, err = s.finishTopicCreation(ctx, op, id, createErr)
+		} else {
+			err = NewSyncForumFailure(SyncForumFailureUnknown, fmt.Errorf("topic creation awaiting confirmation"))
+		}
+		if err != nil {
+			status := model.ExternalLaunchOutcomeUnknown
+			var failure *SyncForumFailure
+			if errors.As(err, &failure) && (failure.Kind == SyncForumFailureDefinitive || failure.Kind == SyncForumFailureRetryable) {
+				status = model.ExternalLaunchFailed
+			}
+			_, _ = s.store.CompleteExternalLaunchRequest(ctx, request.ID, status, "", "", "telegram_topic", "Telegram topic creation failed or remains uncertain. Check Control.")
+			s.finishExternalLaunchDispatch()
+			return
+		}
+	}
+	stateNow, stateErr := s.store.GetSyncState(ctx)
+	if stateErr != nil || stateNow.SessionID != state.SessionID || stateNow.State != model.SyncStateActive {
+		_, _ = s.store.ResetExternalLaunchRequestPending(ctx, request.ID, "sync_inactive", "Sync was disabled before dispatch.")
 		s.finishExternalLaunchDispatch()
 		return
 	}
+	draft.TopicID = topicID
 	sourceMessageID, err := forum.SendSyncMessage(ctx, topicID, model.RenderedMessage{Text: syncUserHeader + "\n" + telegramPreview}, model.SendOptions{Silent: true})
 	if err != nil {
 		_ = forum.DeleteSyncTopic(ctx, topicID)
 		_ = s.store.DeleteSyncTopic(ctx, state.SessionID, topicID)
 		_, _ = s.store.CompleteExternalLaunchRequest(ctx, request.ID, model.ExternalLaunchFailed, "", "", "telegram_prompt", "Telegram could not write the initial request into the session topic.")
+		s.finishExternalLaunchDispatch()
+		return
+	}
+	if err := s.store.ReadyExternalTopicDraft(ctx, state.SessionID, topicID, request.ID); err != nil {
+		_, _ = s.store.CompleteExternalLaunchRequest(ctx, request.ID, model.ExternalLaunchFailed, "", "", "sync_claim", "Could not prepare the external topic draft.")
 		s.finishExternalLaunchDispatch()
 		return
 	}
@@ -160,6 +199,7 @@ func (s *Service) dispatchExternalContinuationLocked(ctx context.Context, reques
 		return
 	}
 
+	ctx = s.syncRPCContextLocked(ctx, initialState.SessionID)
 	fail := func(kind, message string) {
 		_, _ = s.store.CompleteExternalLaunchRequest(ctx, request.ID, model.ExternalLaunchFailed, "", "", kind, message)
 	}

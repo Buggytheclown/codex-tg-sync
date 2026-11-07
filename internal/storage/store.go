@@ -182,7 +182,22 @@ func (s *Store) initialize(ctx context.Context) error {
 		UNIQUE(source, external_id)
 	);
 
-	CREATE TABLE IF NOT EXISTS sync_state (
+	CREATE TABLE IF NOT EXISTS telegram_ingress (
+ bot_id INTEGER NOT NULL, update_id INTEGER NOT NULL, payload TEXT NOT NULL,
+ session_id TEXT NOT NULL, state TEXT NOT NULL, is_off INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(bot_id,update_id)
+ );
+ CREATE INDEX IF NOT EXISTS idx_telegram_ingress_pending ON telegram_ingress(bot_id,state,update_id);
+ CREATE TABLE IF NOT EXISTS sync_topic_creations (
+ id TEXT PRIMARY KEY, session_id TEXT NOT NULL, chat_id INTEGER NOT NULL,
+ target TEXT NOT NULL, title TEXT NOT NULL, payload TEXT NOT NULL,
+ state TEXT NOT NULL, topic_id INTEGER NOT NULL DEFAULT 0
+ );
+ CREATE INDEX IF NOT EXISTS idx_topic_creation_target ON sync_topic_creations(session_id,target);
+ CREATE TABLE IF NOT EXISTS sync_topic_created_events (
+ chat_id INTEGER NOT NULL, topic_id INTEGER NOT NULL, update_id INTEGER NOT NULL,
+ title TEXT NOT NULL, PRIMARY KEY(chat_id,topic_id)
+ );
+ CREATE TABLE IF NOT EXISTS sync_state (
 		id INTEGER PRIMARY KEY CHECK (id = 1),
 		session_id TEXT NOT NULL,
 		chat_id INTEGER NOT NULL,
@@ -263,6 +278,12 @@ func (s *Store) initialize(ctx context.Context) error {
 		return err
 	}
 
+	if err := s.ensureColumn(ctx, "telegram_ingress", "is_off", `ALTER TABLE telegram_ingress ADD COLUMN is_off INTEGER NOT NULL DEFAULT 0`); err != nil {
+		return err
+	}
+	if err := s.ensureColumn(ctx, "sync_topic_drafts", "telegram_state", `ALTER TABLE sync_topic_drafts ADD COLUMN telegram_state TEXT NOT NULL DEFAULT 'connected'`); err != nil {
+		return err
+	}
 	if err := s.ensureColumn(ctx, "sync_topics", "active_turn_id", `ALTER TABLE sync_topics ADD COLUMN active_turn_id TEXT`); err != nil {
 		return err
 	}

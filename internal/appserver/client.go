@@ -269,6 +269,12 @@ func (c *Client) Subscribe() <-chan Event {
 }
 
 func (c *Client) Request(ctx context.Context, method string, params map[string]any) (any, error) {
+	hooks, _ := ctx.Value(requestWaitKey{}).(RequestWaitHooks)
+	if hooks.BeforeSend != nil {
+		if err := hooks.BeforeSend(method); err != nil {
+			return nil, err
+		}
+	}
 	c.mu.Lock()
 	if !c.started || c.stdin == nil {
 		c.mu.Unlock()
@@ -297,6 +303,10 @@ func (c *Client) Request(ctx context.Context, method string, params map[string]a
 		return nil, err
 	}
 
+	if hooks.BeforeWait != nil && (method == "turn/start" || method == "turn/steer" || method == "thread/start") {
+		hooks.BeforeWait()
+		defer hooks.AfterWait()
+	}
 	timeout := c.requestTimeout
 	if deadline, ok := ctx.Deadline(); ok {
 		timeout = time.Until(deadline)

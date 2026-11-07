@@ -1,5 +1,7 @@
 # ADR-032: Sync-only Telegram Surface
 
+Topic-creation recovery and off/drain semantics are amended by [ADR-036](ADR-036-best-effort-sync-recovery.md).
+
 Status: Accepted
 
 ## Context

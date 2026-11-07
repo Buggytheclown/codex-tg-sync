@@ -58,9 +58,10 @@ func notifySendOptions() model.SendOptions {
 }
 
 type Service struct {
-	cfg       config.Config
-	store     *storage.Store
-	taskBoard *tasks.Service
+	externalDispatchInFlight sync.Map
+	cfg                      config.Config
+	store                    *storage.Store
+	taskBoard                *tasks.Service
 
 	liveFactory  func() Session
 	pollFactory  func() Session

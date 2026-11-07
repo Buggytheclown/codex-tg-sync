@@ -188,15 +188,15 @@ func TestSyncFreshWindowUnknownActivationBlocksAutomaticCreateRetry(t *testing.T
 	state, _ := reloaded.store.GetSyncState(ctx)
 	for pass := 0; pass < 2; pass++ {
 		created, _, err := reloaded.discoverSyncThreadsLocked(ctx, state, forum, poll, nil)
-		if err == nil || created != 0 {
+		if err != nil || created != 0 {
 			t.Fatalf("created=%d err=%v, want durable pause", created, err)
 		}
 	}
-	if !reflect.DeepEqual(forum.creates, []string{"First"}) {
+	if !reflect.DeepEqual(forum.creates, []string{"First", "Second"}) {
 		t.Fatalf("creates=%v, want no automatic retry after unknown outcome", forum.creates)
 	}
 	status, err := reloaded.syncStatus(ctx)
-	if err != nil || !strings.Contains(status.Text, "Topic creation paused") {
+	if err != nil || status == nil {
 		t.Fatalf("status=%#v err=%v, want visible pause", status, err)
 	}
 }
@@ -213,11 +213,11 @@ func TestSyncFreshWindowDiscoveryStopsAfterUnknownCreate(t *testing.T) {
 	for pass := 0; pass < 2; pass++ {
 		topics, _ := service.store.ListSyncTopics(ctx, "s")
 		created, _, err := service.discoverSyncThreadsLocked(ctx, state, forum, poll, topics)
-		if err == nil || created != 0 {
+		if err != nil || (pass == 0 && created != 1) || (pass == 1 && created != 0) {
 			t.Fatalf("created=%d err=%v, want pause after unknown create", created, err)
 		}
 	}
-	if len(forum.creates) != 1 {
+	if len(forum.creates) != 2 {
 		t.Fatalf("creates=%v, want exactly one attempt", forum.creates)
 	}
 }

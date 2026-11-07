@@ -1,5 +1,7 @@
 # ADR-024: Sync Guarded Controls And Draining
 
+Topic-creation recovery and off/drain semantics are amended by [ADR-036](ADR-036-best-effort-sync-recovery.md).
+
 - Status: accepted; Stop origin restriction amended by ADR-026
 - Related: ADR-020, ADR-023
 

@@ -127,20 +127,25 @@ func activeChatMemberStatus(status string) bool {
 	}
 }
 
+type ForumTopicCreated struct {
+	Name string `json:"name"`
+}
+
 type Message struct {
-	MessageID       int64             `json:"message_id"`
-	MessageThreadID int64             `json:"message_thread_id,omitempty"`
-	From            *User             `json:"from"`
-	Chat            Chat              `json:"chat"`
-	Text            string            `json:"text"`
-	Caption         string            `json:"caption,omitempty"`
-	Photo           []json.RawMessage `json:"photo,omitempty"`
-	Document        json.RawMessage   `json:"document,omitempty"`
-	Voice           json.RawMessage   `json:"voice,omitempty"`
-	Audio           json.RawMessage   `json:"audio,omitempty"`
-	Video           json.RawMessage   `json:"video,omitempty"`
-	Entities        []MessageEntity   `json:"entities,omitempty"`
-	ReplyToMessage  *Message          `json:"reply_to_message"`
+	ForumTopicCreated *ForumTopicCreated `json:"forum_topic_created,omitempty"`
+	MessageID         int64              `json:"message_id"`
+	MessageThreadID   int64              `json:"message_thread_id,omitempty"`
+	From              *User              `json:"from"`
+	Chat              Chat               `json:"chat"`
+	Text              string             `json:"text"`
+	Caption           string             `json:"caption,omitempty"`
+	Photo             []json.RawMessage  `json:"photo,omitempty"`
+	Document          json.RawMessage    `json:"document,omitempty"`
+	Voice             json.RawMessage    `json:"voice,omitempty"`
+	Audio             json.RawMessage    `json:"audio,omitempty"`
+	Video             json.RawMessage    `json:"video,omitempty"`
+	Entities          []MessageEntity    `json:"entities,omitempty"`
+	ReplyToMessage    *Message           `json:"reply_to_message"`
 }
 
 type CallbackQuery struct {

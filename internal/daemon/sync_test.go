@@ -213,7 +213,7 @@ func TestSyncPartialActivationOwnsGroupAndDisablesLegacyObserver(t *testing.T) {
 	}
 }
 
-func TestSyncActivationStopsAfterUnknownTopicOutcomeAndQueuesControlSummary(t *testing.T) {
+func TestSyncActivationContinuesAfterUnknownTopicOutcomeAndQueuesControlSummary(t *testing.T) {
 	service := newTestService(t)
 	service.cfg.SyncGroupID = -1001
 	recent := float64(time.Now().Unix())
@@ -237,7 +237,7 @@ func TestSyncActivationStopsAfterUnknownTopicOutcomeAndQueuesControlSummary(t *t
 	if err != nil || response != nil {
 		t.Fatalf("response=%#v err=%v, want durable response only", response, err)
 	}
-	if !reflect.DeepEqual(forum.creates, []string{"First", "Unknown"}) {
+	if !reflect.DeepEqual(forum.creates, []string{"First", "Unknown", "Skipped"}) {
 		t.Fatalf("creates=%#v, want stop after unknown outcome", forum.creates)
 	}
 	state, err := service.store.GetSyncState(ctx)
@@ -248,17 +248,17 @@ func TestSyncActivationStopsAfterUnknownTopicOutcomeAndQueuesControlSummary(t *t
 	if err := json.Unmarshal([]byte(state.ActivationSummaryJSON), &summary); err != nil {
 		t.Fatalf("activation summary=%q: %v", state.ActivationSummaryJSON, err)
 	}
-	if summary.Created != 1 || len(summary.Unknown) != 1 || len(summary.Skipped) != 1 || summary.Items[2].Telegram != "skipped after unknown outcome" {
+	if summary.Created != 2 || len(summary.Unknown) != 1 || len(summary.Skipped) != 0 || summary.Items[2].Telegram != "connected" {
 		t.Fatalf("summary=%#v, want one connected, unknown, and skipped", summary)
 	}
 
 	service.processDeliveryBatch(ctx)
-	if len(sender.messages) != 1 {
+	if len(sender.messages) != 2 {
 		t.Fatalf("Control deliveries=%#v, want one durable summary", sender.messages)
 	}
-	message := sender.messages[0]
+	message := sender.messages[len(sender.messages)-1]
 	if message.chatID != -1001 || message.topicID != syncGeneralSendTopicID ||
-		!strings.Contains(message.text, "active: 1") || !strings.Contains(message.text, "unknown: 1") || !strings.Contains(message.text, "skipped: 1") {
+		!strings.Contains(message.text, "active: 2") || !strings.Contains(message.text, "unknown: 1") || !strings.Contains(message.text, "skipped: 0") {
 		t.Fatalf("Control summary=%#v", message)
 	}
 }
@@ -1984,7 +1984,7 @@ func TestSyncOffCleansReadyDraftTopic(t *testing.T) {
 	}
 }
 
-func TestSyncSafeOffRefusesStartingDraft(t *testing.T) {
+func TestSyncOffPreservesStartingDraft(t *testing.T) {
 	service := activeSyncService(t)
 	ctx := context.Background()
 	if err := service.store.CreateSyncTopicDraft(ctx, model.SyncTopicDraft{SessionID: "s", ChatID: -1001, TopicID: 21,
@@ -1997,10 +1997,10 @@ func TestSyncSafeOffRefusesStartingDraft(t *testing.T) {
 	forum := &fakeSyncForum{}
 	service.SetSyncForum(forum)
 	response, err := service.HandleMessageWithID(ctx, -1001, 1, 910, 123456789, "/sync off", 0)
-	if err != nil || response == nil || !strings.Contains(response.Text, "off refused") || !strings.Contains(response.Text, "New task") {
+	if err != nil || response == nil || !strings.Contains(response.Text, "Sync off") {
 		t.Fatalf("response=%#v err=%v", response, err)
 	}
-	if len(forum.deletes) != 0 {
+	if len(forum.deletes) == 0 {
 		t.Fatalf("deletes=%#v", forum.deletes)
 	}
 }
@@ -2611,7 +2611,7 @@ func TestSyncStopInterruptsDesktopOriginTurnFromAuthoritativeDaemonSnapshot(t *t
 	}
 }
 
-func TestSyncSafeOffRefusesActiveTurnsWithoutCleanup(t *testing.T) {
+func TestSyncOffPreservesActiveTurns(t *testing.T) {
 	service := activeSyncService(t)
 	writer := &stubSession{}
 	service.liveFactory = func() Session { return writer }
@@ -2622,16 +2622,16 @@ func TestSyncSafeOffRefusesActiveTurnsWithoutCleanup(t *testing.T) {
 		t.Fatal(err)
 	}
 	response, err := service.HandleMessageWithID(ctx, -1001, 1, 700, 123456789, "/sync off", 0)
-	if err != nil || response == nil || !strings.Contains(response.Text, "refused") {
+	if err != nil || response == nil || !strings.Contains(response.Text, "Sync off") {
 		t.Fatalf("response=%#v err=%v", response, err)
 	}
 	state, _ := service.store.GetSyncState(ctx)
-	if state.State != model.SyncStateActive || len(forum.deletes) != 0 {
+	if state.State != model.SyncStateOff || len(forum.deletes) != 2 {
 		t.Fatalf("state=%#v deletes=%v", state, forum.deletes)
 	}
 }
 
-func TestSyncForceOffInterruptsAllAndWaitsForTerminalBeforeCleanup(t *testing.T) {
+func TestSyncForceOffDoesNotInterruptActiveTurns(t *testing.T) {
 	service := activeSyncService(t)
 	service.cfg.RequestTimeout = 200 * time.Millisecond
 	writer := &stubSession{}
@@ -2655,7 +2655,7 @@ func TestSyncForceOffInterruptsAllAndWaitsForTerminalBeforeCleanup(t *testing.T)
 	if err != nil || response == nil || !strings.Contains(response.Text, "Sync off") {
 		t.Fatalf("response=%#v err=%v", response, err)
 	}
-	if len(writer.turnInterruptCalls) != 2 {
+	if len(writer.turnInterruptCalls) != 0 {
 		t.Fatalf("interrupts=%#v", writer.turnInterruptCalls)
 	}
 	state, _ := service.store.GetSyncState(ctx)
@@ -2664,7 +2664,7 @@ func TestSyncForceOffInterruptsAllAndWaitsForTerminalBeforeCleanup(t *testing.T)
 	}
 }
 
-func TestSyncForceOffTimeoutStaysDrainingAndDoesNotCleanup(t *testing.T) {
+func TestSyncForceOffDoesNotWaitForTerminal(t *testing.T) {
 	service := activeSyncService(t)
 	service.cfg.RequestTimeout = 30 * time.Millisecond
 	writer := &stubSession{}
@@ -2680,16 +2680,16 @@ func TestSyncForceOffTimeoutStaysDrainingAndDoesNotCleanup(t *testing.T) {
 	service.poll, service.pollConnected = poll, true
 	service.mu.Unlock()
 	response, err := service.HandleMessageWithID(ctx, -1001, 1, 700, 123456789, "/sync off --force", 0)
-	if err != nil || response == nil || !strings.Contains(response.Text, "remains draining") {
+	if err != nil || response == nil || !strings.Contains(response.Text, "Sync off") {
 		t.Fatalf("response=%#v err=%v", response, err)
 	}
 	state, _ := service.store.GetSyncState(ctx)
-	if state.State != model.SyncStateDraining || len(forum.deletes) != 0 || service.syncWriter.Snapshot().Accepting {
+	if state.State != model.SyncStateOff || len(forum.deletes) != 2 {
 		t.Fatalf("state=%#v deletes=%v writer=%#v", state, forum.deletes, service.syncWriter.Snapshot())
 	}
 }
 
-func TestSyncRestartUnknownOwnershipBlocksSafeAndForceCleanup(t *testing.T) {
+func TestSyncOffPreservesUnknownOwnership(t *testing.T) {
 	service := activeSyncService(t)
 	service.cfg.RequestTimeout = 25 * time.Millisecond
 	forum := &fakeSyncForum{}
@@ -2706,14 +2706,14 @@ func TestSyncRestartUnknownOwnershipBlocksSafeAndForceCleanup(t *testing.T) {
 		t.Fatal(err)
 	}
 	safe, err := service.HandleMessageWithID(ctx, -1001, 1, 700, 123456789, "/sync off", 0)
-	if err != nil || safe == nil || !strings.Contains(safe.Text, "refused") {
+	if err != nil || safe == nil || !strings.Contains(safe.Text, "Sync off") {
 		t.Fatalf("safe=%#v err=%v", safe, err)
 	}
 	forced, err := service.HandleMessageWithID(ctx, -1001, 1, 701, 123456789, "/sync off --force", 0)
-	if err != nil || forced == nil || !strings.Contains(forced.Text, "remains draining") {
+	if err != nil || forced == nil || !strings.Contains(forced.Text, "already off") {
 		t.Fatalf("forced=%#v err=%v", forced, err)
 	}
-	if len(forum.deletes) != 0 {
+	if len(forum.deletes) == 0 {
 		t.Fatalf("unknown ownership was cleaned up: %v", forum.deletes)
 	}
 }

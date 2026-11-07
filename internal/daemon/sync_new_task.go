@@ -68,17 +68,29 @@ func (s *Service) createSyncNewTaskLocked(ctx context.Context, state model.SyncS
 		return &DirectResponse{Text: "Telegram transport is unavailable; no Sync draft was created.", CallbackText: "Create failed."}, nil
 	}
 	title := "New task"
-	topicID, topicErr := forum.CreateSyncTopic(ctx, title)
+	topics, _ := s.store.ListSyncTopics(ctx, state.SessionID)
+	drafts, _ := s.store.ListSyncTopicDrafts(ctx, state.SessionID)
+	draft := model.SyncTopicDraft{SessionID: state.SessionID, ChatID: state.ChatID, Rank: len(topics) + len(drafts) + 1, Title: title, CWD: cwd, ProjectName: projectName, DirectoryName: directoryName}
+	op, fresh, err := s.prepareTopicCreation(ctx, storage.TopicCreation{SessionID: state.SessionID, ChatID: state.ChatID, Target: "draft:" + syncPayloadString(payload, "creation_intent"), Title: title, Rank: draft.Rank, Draft: &draft})
+	if err != nil {
+		return nil, err
+	}
+	if !fresh {
+		return &DirectResponse{Text: "This topic creation was already requested. Check Control for its outcome."}, nil
+	}
+	ctx = context.WithValue(ctx, syncCreationLockKey{}, true)
+	id, createErr := s.createTopicIO(ctx, state.SessionID, func(ioCtx context.Context) (int64, error) { return forum.CreateSyncTopic(ioCtx, title) })
+	topicID, topicErr := s.finishTopicCreation(ctx, op, id, createErr)
 	if topicErr != nil {
 		return &DirectResponse{Text: fmt.Sprintf("Telegram topic creation failed: %v", topicErr), CallbackText: "Create failed."}, nil
 	}
-	topics, _ := s.store.ListSyncTopics(ctx, state.SessionID)
-	drafts, _ := s.store.ListSyncTopicDrafts(ctx, state.SessionID)
-	draft := model.SyncTopicDraft{SessionID: state.SessionID, ChatID: state.ChatID, TopicID: topicID,
-		Rank: len(topics) + len(drafts) + 1, Title: title, CWD: cwd, ProjectName: projectName, DirectoryName: directoryName}
-	if err := s.store.CreateSyncTopicDraft(ctx, draft); err != nil {
-		_ = forum.DeleteSyncTopic(ctx, topicID)
-		return nil, err
+	current, currentErr := s.store.GetSyncState(ctx)
+	if currentErr != nil {
+		return nil, currentErr
+	}
+	if current.SessionID != state.SessionID || current.State != model.SyncStateActive {
+		s.wakeSyncCleanup()
+		return &DirectResponse{Text: "Sync was disabled; the late-created topic is scheduled for cleanup."}, nil
 	}
 	cleanupReady := s.markStaleSyncTopicsForCleanup(ctx, state.SessionID)
 	return &DirectResponse{

@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/mideco-tech/codex-tg/internal/model"
 	"github.com/mideco-tech/codex-tg/internal/storage"
@@ -66,76 +65,7 @@ func (s *Service) stopSyncTurn(ctx context.Context, topicID int64) (*DirectRespo
 }
 
 func (s *Service) forceDeactivateSync(ctx context.Context) (*DirectResponse, error) {
-	s.syncMu.Lock()
-	if err := s.syncMutationErrorLocked(ctx); err != nil {
-		s.syncMu.Unlock()
-		return &DirectResponse{Text: err.Error()}, nil
-	}
-	state, err := s.store.GetSyncState(ctx)
-	if err != nil {
-		s.syncMu.Unlock()
-		return nil, err
-	}
-	if state.State == model.SyncStateOff || state.SessionID == "" {
-		s.syncMu.Unlock()
-		return &DirectResponse{Text: "Sync is already off."}, nil
-	}
-	_ = s.syncWriter.BeginDrain()
-	if err := s.store.MarkSyncDraining(ctx, state.SessionID); err != nil {
-		s.syncMu.Unlock()
-		return nil, err
-	}
-	topics, err := s.store.ListSyncTopics(ctx, state.SessionID)
-	if err != nil {
-		s.syncMu.Unlock()
-		return nil, err
-	}
-	for _, topic := range topics {
-		if topic.ActiveTurnState != model.SyncTurnActive || topic.ActiveTurnID == "" {
-			continue
-		}
-		lease, ok := s.syncLeases[topic.ThreadID]
-		if !ok || lease.Generation != topic.WriterGeneration {
-			continue
-		}
-		if err := lease.Process.TurnInterrupt(ctx, topic.ThreadID, topic.ActiveTurnID); err == nil {
-			_ = s.markTelegramOriginExplicitInterrupt(ctx, topic.ThreadID, topic.ActiveTurnID)
-		}
-	}
-	s.syncMu.Unlock()
-
-	timeout := s.cfg.RequestTimeout
-	if timeout <= 0 {
-		timeout = 15 * time.Second
-	}
-	if timeout > 30*time.Second {
-		timeout = 30 * time.Second
-	}
-	deadline := time.Now().Add(timeout)
-	for {
-		s.reconcileSync(ctx)
-		writer := s.syncWriter.Snapshot()
-		current, _ := s.store.ListSyncTopics(ctx, state.SessionID)
-		drafts, draftErr := s.store.ListSyncTopicDrafts(ctx, state.SessionID)
-		if draftErr != nil {
-			return nil, draftErr
-		}
-		s.syncMu.Lock()
-		recoveryPending := s.resumedSyncDrainPendingLocked()
-		s.syncMu.Unlock()
-		if !recoveryPending && writer.Starting+writer.Active+writer.Unknown == 0 && !hasUnfinishedSyncTopics(current) && !hasUnfinishedSyncDrafts(drafts) {
-			return s.deactivateSync(ctx)
-		}
-		if time.Now().After(deadline) {
-			titles := unfinishedSyncWorkTitles(current, drafts)
-			return &DirectResponse{Text: "Sync remains draining; terminal confirmation timed out for: " + strings.Join(titles, ", ")}, nil
-		}
-		select {
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		case <-time.After(20 * time.Millisecond):
-		}
-	}
+	return s.deactivateSync(ctx)
 }
 
 func hasUnfinishedSyncDrafts(drafts []model.SyncTopicDraft) bool {
@@ -282,6 +212,7 @@ func (s *Service) handleSyncCallback(ctx context.Context, topicID, messageID int
 			return &DirectResponse{CallbackText: "Sync project button is stale."}, nil
 		}
 		_ = s.store.ExpireCallbackRoute(ctx, route.Token)
+		payload["creation_intent"] = route.Token
 		return s.createSyncNewTaskLocked(ctx, state, payload)
 	}
 	if state.State != model.SyncStateActive || syncPayloadString(payload, "session_id") != state.SessionID || syncPayloadInt64(payload, "topic_id") != topicID || route.TelegramMessageID != 0 && route.TelegramMessageID != messageID {

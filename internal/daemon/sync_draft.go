@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"unicode/utf8"
@@ -42,6 +43,7 @@ func (s *Service) dispatchSyncDraftMessage(ctx context.Context, draft model.Sync
 }
 
 func (s *Service) startClaimedSyncDraftLocked(ctx context.Context, draft model.SyncTopicDraft, receipt model.SyncMessageReceipt, text, titleText string, permissions appserver.ThreadStartOptions, execution appserver.TurnStartOptions) (*DirectResponse, error) {
+	ctx = s.syncRPCContextLocked(ctx, draft.SessionID)
 	lease, err := s.syncWriter.ReserveProcess(ctx, "draft:"+randomToken())
 	if err != nil {
 		_ = s.store.ResetSyncTopicDraftMessage(ctx, draft, receipt)
@@ -97,6 +99,15 @@ func (s *Service) startClaimedSyncDraftLocked(ctx context.Context, draft model.S
 	result, turnErr := lease.Process.TurnStart(ctx, thread.ID, text, thread.CWD, turnOptions)
 	turnID := appserverThreadTurnID(result)
 	if turnErr != nil || strings.TrimSpace(turnID) == "" {
+		if errors.Is(turnErr, errSyncCommandNotSent) {
+			if err := s.store.MarkSyncDispatchFailure(ctx, receipt, model.SyncReceiptRejected, model.SyncTurnTerminal, lease.Generation); err != nil {
+				return nil, err
+			}
+			delete(s.syncLeases, thread.ID)
+			s.unsubscribeSyncWriterLeaseLocked(ctx, lease)
+			_ = s.syncWriter.Abort(lease)
+			return &DirectResponse{Text: "Sync was disabled. The new Codex chat was retained; its first prompt was not sent."}, nil
+		}
 		if syncDispatchAmbiguous(turnErr, turnID) {
 			_ = s.syncWriter.MarkUnknown(lease)
 			_ = s.store.MarkSyncDispatchFailure(ctx, receipt, model.SyncReceiptUnknown, model.SyncTurnUnknown, lease.Generation)

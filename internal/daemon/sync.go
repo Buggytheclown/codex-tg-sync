@@ -17,6 +17,7 @@ import (
 	"github.com/mideco-tech/codex-tg/internal/appserver"
 	"github.com/mideco-tech/codex-tg/internal/config"
 	"github.com/mideco-tech/codex-tg/internal/model"
+	"github.com/mideco-tech/codex-tg/internal/storage"
 	"github.com/mideco-tech/codex-tg/internal/tgformat"
 )
 
@@ -103,6 +104,11 @@ func (s *Service) handleSyncMessage(ctx context.Context, topicID, messageID, use
 	if !isSyncControlTopic(topicID) || !syncLegacyReadOnlyCommand(text) {
 		s.syncMu.Lock()
 		err := s.syncMutationErrorLocked(ctx)
+		lower := strings.ToLower(strings.TrimSpace(text))
+		if isSyncControlTopic(topicID) && (lower == "/sync off" || lower == "/sync off --force") {
+			err = nil
+		}
+
 		fields := strings.Fields(strings.ToLower(text))
 		if isSyncControlTopic(topicID) && len(fields) == 1 {
 			command, _, _ := strings.Cut(fields[0], "@")
@@ -163,6 +169,15 @@ func (s *Service) handleSyncMessage(ctx context.Context, topicID, messageID, use
 			return &DirectResponse{Text: "Sync Control accepts /sync on, /sync off, /status, /pollers, /requests, /refresh, /repair, /projects, and /newchat. Unsupported commands are disabled in this group."}, nil
 		}
 	}
+	if messageID > 0 {
+		prior, err := s.store.GetSyncReceipt(ctx, topicID, messageID)
+		if err != nil {
+			return nil, err
+		}
+		if prior != nil && prior.State == model.SyncReceiptRejected {
+			return syncDuplicateReceiptResponse(*prior), nil
+		}
+	}
 	topic, err := s.store.GetActiveSyncTopic(ctx, s.cfg.SyncGroupID, topicID)
 	if err != nil {
 		return nil, err
@@ -175,7 +190,10 @@ func (s *Service) handleSyncMessage(ctx context.Context, topicID, messageID, use
 		if draft != nil {
 			return s.handleSyncDraftMessage(ctx, *draft, messageID, text)
 		}
-		return &DirectResponse{Text: "Sync topic is stale or unknown. Use /status in Control."}, nil
+		if err := s.store.RejectUnboundSyncMessage(ctx, s.cfg.SyncGroupID, topicID, messageID); err != nil {
+			return nil, err
+		}
+		return &DirectResponse{Text: "Sync topic is stale or unknown. Use /status in Control. This message will not be dispatched later."}, nil
 	}
 	if text == "" {
 		return &DirectResponse{Text: "Sync topic requires a non-empty plain-text prompt."}, nil
@@ -195,6 +213,7 @@ func (s *Service) dispatchSyncMessage(ctx context.Context, topic model.SyncTopic
 	if err := s.syncMutationErrorLocked(ctx); err != nil {
 		return &DirectResponse{Text: err.Error()}, nil
 	}
+	ctx = s.syncRPCContextLocked(ctx, topic.SessionID)
 	receipt, created, err := s.store.AcceptSyncMessage(ctx, topic.ChatID, topic.TopicID, messageID)
 	if err != nil {
 		return nil, err
@@ -506,6 +525,7 @@ func isSyncNoRolloutError(err error) bool {
 func (s *Service) activateSync(ctx context.Context, userID int64) (*DirectResponse, error) {
 	s.syncMu.Lock()
 	defer s.syncMu.Unlock()
+	ctx = context.WithValue(ctx, syncCreationLockKey{}, true)
 	if err := s.syncMutationErrorLocked(ctx); err != nil {
 		return &DirectResponse{Text: err.Error()}, nil
 	}
@@ -556,7 +576,11 @@ func (s *Service) activateSync(ctx context.Context, userID int64) (*DirectRespon
 	}
 	now := time.Now().UTC()
 	sessionID := randomToken()
-	if err := s.store.BeginSyncActivation(ctx, sessionID, s.cfg.SyncGroupID); err != nil {
+	identity, _ := ctx.Value(telegramIngressIdentityKey{}).([]int64)
+	if err := s.store.BeginSyncActivation(ctx, sessionID, s.cfg.SyncGroupID, identity...); err != nil {
+		if errors.Is(err, storage.ErrSyncActivationSuperseded) {
+			return &DirectResponse{Text: "Sync activation canceled by a later off command."}, nil
+		}
 		return nil, err
 	}
 	summary := syncActivationSummary{SnapshotAt: now.Format(time.RFC3339Nano), Selected: len(filtered)}
@@ -577,11 +601,7 @@ func (s *Service) activateSync(ctx context.Context, userID int64) (*DirectRespon
 			summary.Unknown = append(summary.Unknown, entry)
 			summary.Items[rank].Telegram = "create outcome unknown"
 			summary.Items[rank].Error = sanitizeDiagnosticString(createErr.Error())
-			for skippedRank := rank + 1; skippedRank < len(filtered); skippedRank++ {
-				summary.Skipped = append(summary.Skipped, filtered[skippedRank].ID)
-				summary.Items[skippedRank].Telegram = "skipped after unknown outcome"
-			}
-			break
+			continue
 		}
 		summary.Created++
 		summary.Items[rank].Telegram = "connected"
@@ -600,9 +620,7 @@ func (s *Service) activateSync(ctx context.Context, userID int64) (*DirectRespon
 		return nil, err
 	}
 	_ = s.syncWriter.AcceptNewWork()
-	if pending, _ := s.store.GetState(ctx, syncTopicCreationKey(sessionID)); pending == "" {
-		s.reportHealthRecovered(ctx, "sync.topic_create", "Sync topic creation recovered")
-	}
+	s.reportHealthRecovered(ctx, "sync.topic_create", "Global topic creation pause removed; individual issues are reported separately")
 	s.syncValidatedSession = sessionID
 	s.pruneSyncTopics(ctx, sessionID)
 	return nil, nil
@@ -611,34 +629,30 @@ func (s *Service) activateSync(ctx context.Context, userID int64) (*DirectRespon
 func (s *Service) deactivateSync(ctx context.Context) (*DirectResponse, error) {
 	s.syncMu.Lock()
 	defer s.syncMu.Unlock()
-	if err := s.syncMutationErrorLocked(ctx); err != nil {
-		return &DirectResponse{Text: err.Error()}, nil
-	}
 	state, err := s.store.GetSyncState(ctx)
 	if err != nil {
 		return nil, err
 	}
+	if expected, ok := ctx.Value(telegramOffSessionKey{}).(string); ok && expected != state.SessionID {
+		return &DirectResponse{Text: "This off command belongs to an older Sync session."}, nil
+	}
 	if state.State == model.SyncStateOff || state.SessionID == "" {
 		return &DirectResponse{Text: "Sync is already off."}, nil
 	}
-	writer := s.syncWriter.Snapshot()
-	topics, err := s.store.ListSyncTopics(ctx, state.SessionID)
-	if err != nil {
-		return nil, err
-	}
-	drafts, err := s.store.ListSyncTopicDrafts(ctx, state.SessionID)
-	if err != nil {
-		return nil, err
-	}
-	if s.resumedSyncDrainPendingLocked() || writer.Starting+writer.Active+writer.Unknown > 0 || hasUnfinishedSyncTopics(topics) || hasUnfinishedSyncDrafts(drafts) {
-		titles := unfinishedSyncWorkTitles(topics, drafts)
-		return &DirectResponse{Text: "Sync off refused; unfinished topics: " + strings.Join(titles, ", ") + ". Use /sync off --force to drain."}, nil
-	}
+	var topics []model.SyncTopic
 	topics, err = s.store.MarkSyncOff(ctx, state.SessionID)
 	if err != nil {
 		return nil, err
 	}
 	s.pruneSyncPollSubscriptionsLocked(ctx)
+	s.mu.RLock()
+	started := s.started
+	s.mu.RUnlock()
+	if started {
+		s.wakeSyncCleanup()
+		return &DirectResponse{Text: "Sync off. Topic cleanup scheduled; Codex work continues."}, nil
+	}
+
 	forum := s.getSyncForum()
 	deleted, pending := 0, 0
 	for _, topic := range topics {
@@ -647,6 +661,8 @@ func (s *Service) deactivateSync(ctx context.Context) (*DirectResponse, error) {
 		}
 		if forum == nil || forum.DeleteSyncTopic(ctx, topic.TopicID) != nil {
 			pending++
+			_ = s.store.ReportSyncCleanup(ctx, topic.SessionID, topic.ChatID, topic.TopicID, true)
+			s.wakeSyncCleanup()
 			continue
 		}
 		if err := s.store.DeleteSyncTopic(ctx, topic.SessionID, topic.TopicID); err != nil {
@@ -683,11 +699,12 @@ func (s *Service) syncStatus(ctx context.Context) (*DirectResponse, error) {
 	if accessErr != nil {
 		health += "\n" + accessErr.Error()
 	}
-	if pending, err := s.store.GetState(ctx, syncTopicCreationKey(state.SessionID)); err != nil {
+	if ops, err := s.store.PendingTopicCreations(ctx); err != nil {
 		return nil, err
-	} else if pending != "" {
-		health += "\n" + syncTopicCreationPaused
+	} else if len(ops) > 0 {
+		health += fmt.Sprintf("\nUnconfirmed topic creations: %d. Check Control; other chats are independent.", len(ops))
 	}
+
 	return &DirectResponse{Text: fmt.Sprintf("Sync state: %s\nSession: %s\nInitial topic limit: %d\nConnected topics: %d\nReady drafts: %d\n%s\nPoller status: /pollers\nExternal requests: /requests\nRefresh command: /refresh\nRepair command: /repair\nNew task commands: /projects, /newchat\nActivation summary: %s",
 		state.State, state.SessionID, syncInitialTopicLimit(s.cfg.SyncInitialTopicLimit), countConnectedSyncTopics(topics), countReadySyncDrafts(drafts), health, strings.TrimSpace(state.ActivationSummaryJSON))}, nil
 }
@@ -719,6 +736,8 @@ func (s *Service) reconcileSyncCommand(ctx context.Context) (*DirectResponse, er
 }
 
 func (s *Service) reconcileSyncLocked(ctx context.Context) (reconcileSyncResult, error) {
+	ctx = context.WithValue(ctx, syncCreationLockKey{}, true)
+	s.reconcileDetachedSyncWorkLocked(ctx)
 	s.retrySyncWriterUnsubscribesLocked(ctx)
 	defer s.pruneSyncPollSubscriptionsLocked(ctx)
 	var result reconcileSyncResult
@@ -842,11 +861,9 @@ func syncStoredTerminalPresentationDelivered(previous *model.ThreadSnapshotState
 }
 
 func (s *Service) discoverSyncThreadsLocked(ctx context.Context, state model.SyncState, forum SyncForum, poll Session, topics []model.SyncTopic) (int, int, error) {
-	if err := s.syncTopicCreationReady(ctx, state.SessionID); err != nil {
-		s.reportSyncTopicCreationPaused(ctx, err)
+	if err := s.reconcileTopicCreations(ctx); err != nil {
 		return 0, 0, err
 	}
-	s.reportHealthRecovered(ctx, "sync.topic_create", "Sync topic creation recovered")
 	cutoff := s.now().UTC().Add(-syncTopicInactiveAge).Unix()
 	threads, err := listSyncThreads(ctx, poll)
 	if err != nil {
@@ -925,8 +942,7 @@ func (s *Service) discoverSyncThreadsLocked(ctx context.Context, state model.Syn
 			if errors.As(createErr, &failure) && failure.Kind == SyncForumFailureDefinitive {
 				continue
 			}
-			s.reportSyncTopicCreationPaused(ctx, createErr)
-			return discovered, failures, createErr
+			continue
 		}
 		nextRank++
 		bound[thread.ID] = struct{}{}
@@ -935,57 +951,18 @@ func (s *Service) discoverSyncThreadsLocked(ctx context.Context, state model.Syn
 	return discovered, failures, nil
 }
 
-const syncTopicCreationPaused = "Topic creation paused: one Telegram create outcome is unknown. Existing topics continue syncing; inspect the ambiguous operation before clearing its marker."
-
 func syncTopicCreationKey(sessionID string) string { return "sync.topic_create." + sessionID }
 
-func (s *Service) syncTopicCreationReady(ctx context.Context, sessionID string) error {
-	pending, err := s.store.GetState(ctx, syncTopicCreationKey(sessionID))
-	if err != nil || pending == "" {
-		return err
-	}
-	// A crash after persisting the binding is safe to recover: its topic id is known.
-	topic, err := s.store.GetActiveSyncTopicByThread(ctx, sessionID, pending)
-	if err != nil {
-		return err
-	}
-	if topic == nil {
-		return NewSyncForumFailure(SyncForumFailureUnknown, errors.New(syncTopicCreationPaused))
-	}
-	return s.store.DeleteState(ctx, syncTopicCreationKey(sessionID))
-}
-
 func (s *Service) createSyncThreadTopic(ctx context.Context, forum SyncForum, sessionID string, chatID int64, rank int, thread model.Thread) (int64, error) {
-	if err := s.syncTopicCreationReady(ctx, sessionID); err != nil {
-		return 0, err
-	}
-	key := syncTopicCreationKey(sessionID)
-	// Record before remote I/O, including the crash-before-binding window.
-	if err := s.store.SetState(ctx, key, thread.ID); err != nil {
-		return 0, NewSyncForumFailure(SyncForumFailureDefinitive, err)
-	}
-	topicID, err := forum.CreateSyncTopic(ctx, syncTopicTitle(thread))
+	op, fresh, err := s.prepareTopicCreation(ctx, storage.TopicCreation{SessionID: sessionID, ChatID: chatID, Target: "thread:" + thread.ID, ThreadID: thread.ID, Rank: rank, Title: syncTopicTitle(thread)})
 	if err != nil {
-		var failure *SyncForumFailure
-		if errors.As(err, &failure) && failure.Kind == SyncForumFailureDefinitive {
-			_ = s.store.DeleteState(ctx, key)
-		}
 		return 0, err
 	}
-	if err := s.store.UpsertSyncTopic(ctx, model.SyncTopic{SessionID: sessionID, ChatID: chatID,
-		TopicID: topicID, ThreadID: thread.ID, Rank: rank, Title: syncTopicTitle(thread), TelegramState: model.SyncTopicConnected}); err != nil {
-		if deleteErr := forum.DeleteSyncTopic(ctx, topicID); deleteErr != nil {
-			return 0, NewSyncForumFailure(SyncForumFailureUnknown, errors.Join(err, deleteErr))
-		}
-		_ = s.store.DeleteState(ctx, key)
-		return 0, NewSyncForumFailure(SyncForumFailureDefinitive, err)
+	if !fresh {
+		return 0, NewSyncForumFailure(SyncForumFailureDefinitive, errors.New("topic creation already attempted; waiting for confirmation"))
 	}
-	_ = s.store.DeleteState(ctx, key)
-	return topicID, nil
-}
-
-func (s *Service) reportSyncTopicCreationPaused(ctx context.Context, err error) {
-	s.reportHealthFailure(ctx, "sync.topic_create", "Sync topic creation paused", err.Error(), syncTopicCreationPaused)
+	id, err := s.createTopicIO(ctx, sessionID, func(ioCtx context.Context) (int64, error) { return forum.CreateSyncTopic(ioCtx, op.Title) })
+	return s.finishTopicCreation(ctx, op, id, err)
 }
 
 func syncThreadActiveSince(thread model.Thread, cutoffUnix int64) bool {
@@ -1250,6 +1227,7 @@ func (s *Service) handleSyncWriterEvent(ctx context.Context, process Session, ev
 		return
 	}
 	if topic == nil || topic.WriterGeneration != generation || (state.State != model.SyncStateActive && state.State != model.SyncStateDraining) {
+		s.markSyncThreadDirty(threadID)
 		tracked := s.boardTracksThreadLocked(ctx, threadID)
 		s.syncMu.Unlock()
 		if tracked && syncEventInvalidatesSnapshot(event) {
@@ -1355,6 +1333,7 @@ func (s *Service) reconcileDirtySyncThreads(ctx context.Context) {
 func (s *Service) reconcileSyncThread(ctx context.Context, threadID string) {
 	s.syncMu.Lock()
 	defer s.syncMu.Unlock()
+	s.reconcileDetachedSyncWorkLocked(ctx)
 	state, err := s.store.GetSyncState(ctx)
 	if err != nil {
 		return
@@ -1976,6 +1955,10 @@ func (s *Service) refreshSyncDirectDelivery(ctx context.Context, chatID, topicID
 }
 
 func (s *Service) cleanupSyncTopics(ctx context.Context) {
+	if err := s.reconcileTopicCreations(ctx); err != nil {
+		s.logLifecycle("sync_creation_reconcile_failed", lifecycleFields{"error": err})
+		return
+	}
 	s.syncCleanupMu.Lock()
 	defer s.syncCleanupMu.Unlock()
 	forum := s.getSyncForum()
@@ -2021,10 +2004,14 @@ func (s *Service) wakeSyncCleanup() {
 }
 
 func (s *Service) syncCleanupLoop(ctx context.Context) {
+	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			return
+		case <-ticker.C:
+			s.cleanupSyncTopics(ctx)
 		case <-s.syncCleanupWake:
 			s.cleanupSyncTopics(ctx)
 		}
@@ -2039,10 +2026,15 @@ func (s *Service) deleteSyncCleanupTargets(ctx context.Context, forum SyncForum,
 		if topic.TelegramState != model.SyncTopicCleanup {
 			continue
 		}
+		if topic.TopicID == s.cfg.ExternalRequestsTopicID {
+			continue
+		}
 		if err := forum.DeleteSyncTopic(ctx, topic.TopicID); err != nil {
+			_ = s.store.ReportSyncCleanup(ctx, topic.SessionID, topic.ChatID, topic.TopicID, true)
 			s.logLifecycle("sync_cleanup_delete_failed", lifecycleFields{"session_id": topic.SessionID, "topic_id": topic.TopicID, "error": err})
 			continue
 		}
+		_ = s.store.ReportSyncCleanup(ctx, topic.SessionID, topic.ChatID, topic.TopicID, false)
 		if err := s.store.DeleteSyncTopic(ctx, topic.SessionID, topic.TopicID); err != nil {
 			s.logLifecycle("sync_cleanup_forget_failed", lifecycleFields{"session_id": topic.SessionID, "topic_id": topic.TopicID, "error": err})
 		}
@@ -2122,7 +2114,7 @@ func syncTopicTitle(thread model.Thread) string {
 		_, size := utf8.DecodeLastRuneInString(title)
 		title = title[:len(title)-size]
 	}
-	return title
+	return strings.TrimSpace(title)
 }
 
 func renderSyncActivationSummary(summary syncActivationSummary) string {
@@ -2491,6 +2483,9 @@ func syncDuplicateReceiptResponse(receipt model.SyncMessageReceipt) *DirectRespo
 }
 
 func syncDispatchAmbiguous(err error, turnID string) bool {
+	if errors.Is(err, errSyncCommandNotSent) {
+		return false
+	}
 	if err == nil {
 		return strings.TrimSpace(turnID) == ""
 	}

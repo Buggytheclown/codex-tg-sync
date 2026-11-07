@@ -13,6 +13,12 @@ import (
 // All runtime recovery fields are guarded by syncMu. SQLite remains the source
 // of user enabled state; these fields only gate access and initial catch-up.
 func (s *Service) recoverSyncRuntimeLocked(ctx context.Context) error {
+	if err := s.store.ImportLegacyTopicCreations(ctx); err != nil {
+		return err
+	}
+	if err := s.store.RecoverTopicCreations(ctx); err != nil {
+		return err
+	}
 	cards, err := s.store.ListSyncActionCards(ctx)
 	if err != nil {
 		return err
@@ -24,6 +30,13 @@ func (s *Service) recoverSyncRuntimeLocked(ctx context.Context) error {
 	state, err := s.store.GetSyncState(ctx)
 	if err != nil {
 		return err
+	}
+	if state.State == model.SyncStateDraining {
+		if _, err := s.store.MarkSyncOff(ctx, state.SessionID); err != nil {
+			return err
+		}
+		state.State = model.SyncStateOff
+		s.wakeSyncCleanup()
 	}
 	topics, err := s.store.ListSyncTopics(ctx, state.SessionID)
 	if err != nil {

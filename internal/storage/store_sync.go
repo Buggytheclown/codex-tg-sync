@@ -25,15 +25,34 @@ func (s *Store) GetSyncState(ctx context.Context) (model.SyncState, error) {
 	return state, err
 }
 
-func (s *Store) BeginSyncActivation(ctx context.Context, sessionID string, chatID int64) error {
+var ErrSyncActivationSuperseded = errors.New("Sync activation superseded by a later off command")
+
+func (s *Store) BeginSyncActivation(ctx context.Context, sessionID string, chatID int64, ingress ...int64) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer rollback(tx)
+	if len(ingress) == 2 && ingress[1] > 0 {
+		var later int
+		if err = tx.QueryRowContext(ctx, `SELECT count(*) FROM telegram_ingress WHERE bot_id=? AND update_id>? AND is_off=1`, ingress[0], ingress[1]).Scan(&later); err != nil {
+			return err
+		}
+		if later > 0 {
+			return ErrSyncActivationSuperseded
+		}
+	}
 	now := string(model.NowString())
-	_, err := s.db.ExecContext(ctx, `INSERT INTO sync_state(id, session_id, chat_id, state, security_state, snapshot_at,
+	_, err = tx.ExecContext(ctx, `INSERT INTO sync_state(id, session_id, chat_id, state, security_state, snapshot_at,
 		activation_summary_json, created_at, ended_at) VALUES (1, ?, ?, ?, ?, ?, '', ?, NULL)
 		ON CONFLICT(id) DO UPDATE SET session_id=excluded.session_id, chat_id=excluded.chat_id,
 		state=excluded.state, security_state=excluded.security_state, snapshot_at=excluded.snapshot_at,
 		activation_summary_json='', created_at=excluded.created_at, ended_at=NULL`,
 		sessionID, chatID, model.SyncStateActivating, model.SyncSecurityValid, now, now)
-	return err
+	if err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 // RecoverSyncWriterState preserves the durable presentation, but never restores
@@ -50,12 +69,12 @@ func (s *Store) RecoverSyncWriterState(ctx context.Context) error {
 		args  []any
 	}{
 		{`UPDATE sync_message_receipts SET state=?, updated_at=? WHERE state=?
-		 AND session_id=(SELECT session_id FROM sync_state WHERE id=1)`, []any{model.SyncReceiptUnknown, now, model.SyncReceiptAccepted}},
+		 `, []any{model.SyncReceiptUnknown, now, model.SyncReceiptAccepted}},
 		{`UPDATE sync_topics SET active_turn_state=CASE WHEN active_turn_state IN (?,?) THEN ? ELSE active_turn_state END,
-		 writer_generation=0, updated_at=? WHERE session_id=(SELECT session_id FROM sync_state WHERE id=1)`,
+		 writer_generation=0, updated_at=? `,
 			[]any{model.SyncTurnStarting, model.SyncTurnActive, model.SyncTurnUnknown, now}},
 		{`UPDATE sync_topic_drafts SET state=?, updated_at=? WHERE state=?
-		 AND session_id=(SELECT session_id FROM sync_state WHERE id=1)`, []any{model.SyncDraftUnknown, now, model.SyncDraftStarting}},
+		 `, []any{model.SyncDraftUnknown, now, model.SyncDraftStarting}},
 		{`UPDATE callback_routes SET status=? WHERE substr(action,1,5)='sync_'`, []any{model.CallbackStatusExpired}},
 		{`UPDATE sync_state SET state=? WHERE id=1 AND state=?`, []any{model.SyncStateActive, model.SyncStateActivating}},
 	}
@@ -248,7 +267,7 @@ func (s *Store) MaterializeSyncTopicDraft(ctx context.Context, draft model.SyncT
 	now := model.NowString()
 	result, err := tx.ExecContext(ctx, `INSERT INTO sync_topics(session_id,chat_id,topic_id,thread_id,rank,title,telegram_state,
 		active_turn_state,writer_generation,created_at,updated_at)
-		SELECT session_id,chat_id,topic_id,?,rank,?,?,?, ?,created_at,?
+		SELECT session_id,chat_id,topic_id,?,rank,?,CASE WHEN telegram_state='connected' THEN ? ELSE telegram_state END,?, ?,created_at,?
 		FROM sync_topic_drafts WHERE session_id=? AND topic_id=? AND state=? AND source_message_id=?`,
 		threadID, title, model.SyncTopicConnected, model.SyncTurnStarting, generation, now,
 		draft.SessionID, draft.TopicID, model.SyncDraftStarting, receipt.MessageID)
@@ -592,13 +611,13 @@ func (s *Store) markSyncDispatchState(ctx context.Context, receipt model.SyncMes
 	}
 	if strings.TrimSpace(pendingUserFP) == "" {
 		result, err = tx.ExecContext(ctx, `UPDATE sync_topics SET active_turn_id=?, active_turn_state=?, writer_generation=?, updated_at=?
-			WHERE session_id=? AND topic_id=? AND thread_id=? AND telegram_state=?`, nullable(turnID), nullable(turnState), generation, now,
-			receipt.SessionID, receipt.TopicID, receipt.ThreadID, model.SyncTopicConnected)
+			WHERE session_id=? AND topic_id=? AND thread_id=? `, nullable(turnID), nullable(turnState), generation, now,
+			receipt.SessionID, receipt.TopicID, receipt.ThreadID)
 	} else {
 		result, err = tx.ExecContext(ctx, `UPDATE sync_topics SET active_turn_id=?, active_turn_state=?, writer_generation=?,
 			pending_telegram_user_fp=?, pending_telegram_turn_id=?, updated_at=?
-			WHERE session_id=? AND topic_id=? AND thread_id=? AND telegram_state=?`, nullable(turnID), nullable(turnState), generation,
-			nullable(pendingUserFP), nullable(turnID), now, receipt.SessionID, receipt.TopicID, receipt.ThreadID, model.SyncTopicConnected)
+			WHERE session_id=? AND topic_id=? AND thread_id=? `, nullable(turnID), nullable(turnState), generation,
+			nullable(pendingUserFP), nullable(turnID), now, receipt.SessionID, receipt.TopicID, receipt.ThreadID)
 	}
 	if err != nil {
 		return err
@@ -755,7 +774,10 @@ func (s *Store) MarkSyncOff(ctx context.Context, sessionID string) ([]model.Sync
 	if _, err := tx.ExecContext(ctx, `UPDATE sync_topics SET telegram_state=?, updated_at=? WHERE session_id=? AND telegram_state=?`, model.SyncTopicCleanup, now, sessionID, model.SyncTopicConnected); err != nil {
 		return nil, err
 	}
-	if _, err := tx.ExecContext(ctx, `UPDATE sync_topic_drafts SET state=?, updated_at=? WHERE session_id=?`, model.SyncDraftCleanup, now, sessionID); err != nil {
+	if _, err := tx.ExecContext(ctx, `UPDATE sync_topic_drafts SET telegram_state='cleanup', state=CASE WHEN state IN ('starting','unknown') THEN state ELSE ? END, updated_at=? WHERE session_id=?`, model.SyncDraftCleanup, now, sessionID); err != nil {
+		return nil, err
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE callback_routes SET status=? WHERE substr(action,1,5)='sync_'`, model.CallbackStatusExpired); err != nil {
 		return nil, err
 	}
 	if err := tx.Commit(); err != nil {
@@ -814,10 +836,16 @@ func (s *Store) DeleteSyncTopic(ctx context.Context, sessionID string, topicID i
 		return err
 	}
 	defer rollback(tx)
-	if _, err := tx.ExecContext(ctx, `DELETE FROM sync_topics WHERE session_id=? AND topic_id=?`, sessionID, topicID); err != nil {
+	if _, err := tx.ExecContext(ctx, `DELETE FROM sync_topics WHERE session_id=? AND topic_id=? AND coalesce(active_turn_state,'') NOT IN ('starting','active','unknown')`, sessionID, topicID); err != nil {
 		return err
 	}
-	if _, err := tx.ExecContext(ctx, `DELETE FROM sync_topic_drafts WHERE session_id=? AND topic_id=?`, sessionID, topicID); err != nil {
+	if _, err := tx.ExecContext(ctx, `DELETE FROM sync_topic_drafts WHERE session_id=? AND topic_id=? AND state NOT IN ('starting','unknown')`, sessionID, topicID); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE sync_topics SET telegram_state='deleted' WHERE session_id=? AND topic_id=?`, sessionID, topicID); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE sync_topic_drafts SET telegram_state='deleted' WHERE session_id=? AND topic_id=?`, sessionID, topicID); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -833,7 +861,11 @@ func (s *Store) ListSyncCleanupTargets(ctx context.Context, sessionID string) ([
 		return nil, err
 	}
 	for _, draft := range drafts {
-		if draft.State != model.SyncDraftCleanup {
+		var cleanup int
+		if err := s.db.QueryRowContext(ctx, `SELECT count(*) FROM sync_topic_drafts WHERE session_id=? AND topic_id=? AND telegram_state='cleanup'`, draft.SessionID, draft.TopicID).Scan(&cleanup); err != nil {
+			return nil, err
+		}
+		if draft.State != model.SyncDraftCleanup && cleanup == 0 {
 			continue
 		}
 		topics = append(topics, model.SyncTopic{SessionID: draft.SessionID, ChatID: draft.ChatID, TopicID: draft.TopicID,
@@ -848,7 +880,7 @@ func (s *Store) ListAllSyncCleanupTargets(ctx context.Context, chatID int64) ([]
 		FROM sync_topics WHERE chat_id=? AND telegram_state=?
 		UNION ALL
 		SELECT session_id,chat_id,topic_id,'' AS thread_id,rank,title,created_at,updated_at
-		FROM sync_topic_drafts WHERE chat_id=? AND state=?
+		FROM sync_topic_drafts WHERE chat_id=? AND (state=? OR telegram_state='cleanup') AND telegram_state!='deleted'
 	) ORDER BY updated_at,topic_id`, chatID, model.SyncTopicCleanup, chatID, model.SyncDraftCleanup)
 	if err != nil {
 		return nil, err
@@ -865,4 +897,51 @@ func (s *Store) ListAllSyncCleanupTargets(ctx context.Context, chatID int64) ([]
 		targets = append(targets, topic)
 	}
 	return targets, rows.Err()
+}
+
+func (s *Store) ListDetachedSyncWork(ctx context.Context, chatID int64) ([]model.SyncTopic, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT DISTINCT session_id FROM sync_topics WHERE chat_id=? AND telegram_state IN ('cleanup','deleted') AND active_turn_state IN ('starting','active','unknown')`, chatID)
+	if err != nil {
+		return nil, err
+	}
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err = rows.Scan(&id); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	err = rows.Err()
+	rows.Close()
+	if err != nil {
+		return nil, err
+	}
+	var result []model.SyncTopic
+	for _, id := range ids {
+		topics, err := s.ListSyncTopics(ctx, id)
+		if err != nil {
+			return nil, err
+		}
+		for _, t := range topics {
+			if t.TelegramState != model.SyncTopicConnected && (t.ActiveTurnState == model.SyncTurnActive || t.ActiveTurnState == model.SyncTurnStarting || t.ActiveTurnState == model.SyncTurnUnknown) {
+				result = append(result, t)
+			}
+		}
+	}
+	return result, nil
+}
+
+func (s *Store) ResolveDetachedSyncTerminal(ctx context.Context, t model.SyncTopic) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE sync_topics SET active_turn_state=?,writer_generation=0,updated_at=? WHERE session_id=? AND topic_id=? AND thread_id=? AND telegram_state IN ('cleanup','deleted') AND active_turn_state=? AND writer_generation=?`, model.SyncTurnTerminal, model.NowString(), t.SessionID, t.TopicID, t.ThreadID, t.ActiveTurnState, t.WriterGeneration)
+	return err
+}
+
+func (s *Store) RejectUnboundSyncMessage(ctx context.Context, chatID, topicID, messageID int64) error {
+	if messageID <= 0 {
+		return nil
+	}
+	_, err := s.db.ExecContext(ctx, `INSERT INTO sync_message_receipts(chat_id,topic_id,message_id,session_id,thread_id,state,created_at,updated_at) SELECT ?,?,?,coalesce((SELECT session_id FROM sync_state WHERE id=1),''),'',?,?,? ON CONFLICT(chat_id,topic_id,message_id) DO NOTHING`, chatID, topicID, messageID, model.SyncReceiptRejected, model.NowString(), model.NowString())
+	return err
 }
