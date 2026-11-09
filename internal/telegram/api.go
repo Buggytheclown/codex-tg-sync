@@ -685,6 +685,12 @@ func IsTopicNotFound(err error) bool {
 		strings.Contains(description, "topic was deleted")
 }
 
+func IsMessageNotModified(err error) bool {
+	var apiErr *APIError
+	return errors.As(err, &apiErr) && apiErr.Code == 400 &&
+		strings.Contains(strings.ToLower(apiErr.Description), "message is not modified")
+}
+
 func IsTopicNotModified(err error) bool {
 	var apiErr *APIError
 	if !errors.As(err, &apiErr) {

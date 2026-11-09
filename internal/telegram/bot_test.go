@@ -34,6 +34,41 @@ func TestBotEditMessageRejectsMultiChunkPayload(t *testing.T) {
 	}
 }
 
+func TestBotUnchangedMessageEditIsDelivered(t *testing.T) {
+	for _, rendered := range []bool{false, true} {
+		for _, unchanged := range []bool{false, true} {
+			t.Run(fmt.Sprintf("rendered=%t/unchanged=%t", rendered, unchanged), func(t *testing.T) {
+				calls := 0
+				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					calls++
+					description := "Bad Request: message to edit not found"
+					if unchanged {
+						description = "Bad Request: message is not modified: specified new message content and reply markup are exactly the same"
+					}
+					w.WriteHeader(http.StatusBadRequest)
+					_ = json.NewEncoder(w).Encode(map[string]any{"ok": false, "error_code": 400, "description": description})
+				}))
+				defer server.Close()
+				client := NewClient("token")
+				client.baseURL = server.URL
+				bot := &Bot{client: client}
+				var err error
+				if rendered {
+					err = bot.EditRenderedMessage(context.Background(), 42, 0, 77, model.RenderedMessage{Text: "existing card"}, nil)
+				} else {
+					err = bot.EditMessage(context.Background(), 42, 0, 77, "existing card", nil)
+				}
+				if (err == nil) != unchanged {
+					t.Fatalf("edit error=%v, unchanged=%t", err, unchanged)
+				}
+				if unchanged && calls != 1 {
+					t.Fatalf("unchanged edit made %d API calls", calls)
+				}
+			})
+		}
+	}
+}
+
 func TestSanitizeTelegramLogErrorRedactsBotTokenURL(t *testing.T) {
 	t.Parallel()
 

@@ -369,6 +369,9 @@ func (b *Bot) EditMessage(ctx context.Context, chatID, topicID, messageID int64,
 		attemptCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
 		defer cancel()
 		_, err := b.client.EditMessageText(attemptCtx, chatID, messageID, chunks[0], toInlineKeyboard(buttons))
+		if IsMessageNotModified(err) {
+			return nil
+		}
 		return err
 	})
 }
@@ -382,6 +385,9 @@ func (b *Bot) EditRenderedMessage(ctx context.Context, chatID, topicID, messageI
 		attemptCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
 		defer cancel()
 		_, err := b.client.EditRenderedMessageText(attemptCtx, chatID, messageID, rendered, toInlineKeyboard(buttons))
+		if IsMessageNotModified(err) {
+			return nil
+		}
 		return err
 	})
 	if err == nil {
@@ -392,6 +398,9 @@ func (b *Bot) EditRenderedMessage(ctx context.Context, chatID, topicID, messageI
 		attemptCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
 		defer cancel()
 		_, err := b.client.EditRenderedMessageText(attemptCtx, chatID, messageID, rendered, toInlineKeyboard(buttons))
+		if IsMessageNotModified(err) {
+			return nil
+		}
 		return err
 	})
 	if fallbackErr != nil {

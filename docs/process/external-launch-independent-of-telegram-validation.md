@@ -108,6 +108,15 @@ cleanup от renderer. После исправлений проверка в с�
 адресный `-race`, `go build -buildvcs=false ./...`, проверка diff/секретов
 и отдельное read-only ревью исправления.
 
+Проверка установленного исправления подтвердила отсутствие новых terminal
+deliveries после рестарта и сохранение Sync session. Authenticated Telegram
+readback также не обнаружил новых terminal notices. Эта проверка выявила
+повторные edit-запросы при ответе Telegram `message is not modified`:
+адаптер теперь принимает такой ответ 400 как подтверждение уже доставленного
+содержимого. `TestBotUnchangedMessageEditIsDelivered` проверяет обычное
+и entity-rendered редактирование, отсутствие лишнего fallback и сохранение
+ошибки для действительно отсутствующего сообщения; до исправления тест падал.
+
 ## Граница вывода
 
 Live probe использует ephemeral-чат и события App Server:
