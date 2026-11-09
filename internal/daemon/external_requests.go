@@ -473,6 +473,11 @@ func externalLaunchStatusLabel(status string) string {
 }
 
 func (s *Service) enqueueExternalTerminalNotice(ctx context.Context, request model.ExternalLaunchRequest) error {
+	// Repainting a projection is not a new execution transition. Older cards may
+	// already show this terminal status without a corresponding delivery record.
+	if request.TelegramRenderedStatus == request.Status {
+		return nil
+	}
 	if s.cfg.SyncGroupID == 0 || request.TelegramTopicID == 0 || request.TelegramMessageID == 0 {
 		return nil
 	}

@@ -38,6 +38,9 @@ The launch card exposes Codex and Telegram outcomes separately. Its content
 fingerprint includes projection state and available actions, not just execution
 status. A terminal request can retain a Telegram recovery action. Failed card
 updates remain undelivered. Off/activation and startup dirty projection rendering.
+Invalidating that fingerprint preserves the rendered execution status. Repainting
+an already rendered terminal status must not enqueue a completion notice, even
+when a legacy database has no matching terminal delivery record.
 
 Telegram Retry has a separate callback action and never invokes Codex dispatch.
 It consumes one current route and expected attempt/delivery version atomically.

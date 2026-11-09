@@ -438,8 +438,9 @@ func (s *Store) RecoverStartingExternalLaunchRequests(ctx context.Context) (int6
 func (s *Store) RefreshExternalLaunchActionCards(ctx context.Context) (int64, error) {
 	result, err := s.db.ExecContext(ctx, `
 	UPDATE external_launch_requests
-	SET telegram_rendered_status='', telegram_rendered_fp='', updated_at=?
- WHERE telegram_message_id<>0 AND (status IN (?, ?) OR coalesce(thread_id,'')<>'')`, model.NowString(), model.ExternalLaunchFailed, model.ExternalLaunchOutcomeUnknown)
+	SET telegram_rendered_status=CASE WHEN status IN (?, ?) THEN '' ELSE telegram_rendered_status END,
+	    telegram_rendered_fp='', updated_at=?
+ WHERE telegram_message_id<>0 AND (status IN (?, ?) OR coalesce(thread_id,'')<>'')`, model.ExternalLaunchFailed, model.ExternalLaunchOutcomeUnknown, model.NowString(), model.ExternalLaunchFailed, model.ExternalLaunchOutcomeUnknown)
 	if err != nil {
 		return 0, err
 	}

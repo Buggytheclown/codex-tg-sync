@@ -420,3 +420,67 @@ func TestCompletedExternalTopicCreationRetainsOneAttemptPolicy(t *testing.T) {
 		t.Fatal(got, forum.launch, forum.ordinary)
 	}
 }
+
+// Old terminal cards may predate the terminal-notice ledger. A startup repaint
+// must not turn that absence into a new completion event.
+func TestLegacyCompletedCardRefreshDoesNotBackfillTerminalNotice(t *testing.T) {
+	ctx := context.Background()
+	s := newTestService(t)
+	s.cfg.SyncGroupID = -1001
+	r := daemonExternalRequest("legacy:already-completed", "old completed work")
+	if _, err := s.IngestExternalRequests(ctx, "test", 1, []model.ExternalLaunchRequest{r}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.store.MarkExternalLaunchRequestTelegramSent(ctx, r.ID, 501, model.ExternalLaunchPendingApproval); err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := s.store.ClaimExternalLaunchRequest(ctx, r.ID); err != nil || !ok {
+		t.Fatal(ok, err)
+	}
+	if ok, err := s.store.CompleteExternalLaunchRequest(ctx, r.ID, model.ExternalLaunchSessionStarted, "old-thread", "old-turn", "", ""); err != nil || !ok {
+		t.Fatal(ok, err)
+	}
+	if ok, err := s.store.CompleteExternalTurn(ctx, "old-thread", "old-turn", model.ExternalLaunchSessionCompleted, "old final"); err != nil || !ok {
+		t.Fatal(ok, err)
+	}
+	if err := s.store.MarkExternalLaunchRequestTelegramRendered(ctx, r.ID, 501, model.ExternalLaunchSessionCompleted); err != nil {
+		t.Fatal(err)
+	}
+	cfg := s.cfg
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	db, err := sql.Open("sqlite", cfg.Paths.DBPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, column := range []string{"dispatch_phase", "telegram_rendered_fp"} {
+		if _, err = db.Exec("ALTER TABLE external_launch_requests DROP COLUMN " + column); err != nil {
+			db.Close()
+			t.Fatal(err)
+		}
+	}
+	db.Close()
+	upgraded, err := New(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer upgraded.Close()
+	sender := &recordingSender{}
+	upgraded.SetSender(sender)
+	if _, err = upgraded.store.RefreshExternalLaunchActionCards(ctx); err != nil {
+		t.Fatal(err)
+	}
+	stored, err := upgraded.store.GetExternalLaunchRequest(ctx, r.ID)
+	if err != nil || stored == nil || stored.TelegramRenderedStatus != model.ExternalLaunchSessionCompleted {
+		t.Fatalf("startup lost the already-rendered terminal status: request=%+v err=%v", stored, err)
+	}
+	upgraded.processExternalLaunchRequests(ctx)
+	upgraded.processDeliveryBatch(ctx)
+	if len(sender.edits) != 1 {
+		t.Fatalf("historical card was not repainted: edits=%d", len(sender.edits))
+	}
+	if len(sender.messages) != 0 {
+		t.Fatalf("startup repaint generated %d historical completion notices", len(sender.messages))
+	}
+}
