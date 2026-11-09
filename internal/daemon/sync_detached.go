@@ -38,10 +38,22 @@ func (s *Service) reconcileDetachedSyncWorkLocked(ctx context.Context) {
 			continue
 		}
 		s.queueExternalReplyFromSnapshot(ctx, observed)
-		if owned && (topic.ActiveTurnState != model.SyncTurnActive || topic.ActiveTurnID == "" || current.LatestTurnID != topic.ActiveTurnID) {
+		superseded := false
+		if owned {
+			if topic.ActiveTurnState != model.SyncTurnActive || topic.ActiveTurnID == "" {
+				continue
+			}
+			if current.LatestTurnID != topic.ActiveTurnID {
+				superseded = turnIDAfter(current.LatestTurnID, topic.ActiveTurnID) && s.externalTerminalIsDurable(ctx, topic.ThreadID)
+				if !superseded {
+					continue
+				}
+			}
+		}
+		if !superseded && !isTerminalStatus(current.LatestTurnStatus) {
 			continue
 		}
-		if !isTerminalStatus(current.LatestTurnStatus) {
+		if !s.externalTerminalIsDurable(ctx, topic.ThreadID) {
 			continue
 		}
 		if err := s.store.ResolveDetachedSyncTerminal(ctx, topic); err != nil {

@@ -37,6 +37,13 @@ func (s *Service) externalRequestsOverview(ctx context.Context, filter string) (
 	if err != nil {
 		return nil, err
 	}
+	if (filter == "active" || filter == "failed") && len(requests) < 20 {
+		terminal, err := s.store.TerminalRequestsNeedingTelegram(ctx, 20-len(requests))
+		if err != nil {
+			return nil, err
+		}
+		requests = append(requests, terminal...)
+	}
 	lines := []string{fmt.Sprintf("External requests · %s", filter)}
 	if len(requests) == 0 {
 		lines = append(lines, "", "No matching requests.")
@@ -51,6 +58,17 @@ func (s *Service) externalRequestsOverview(ctx context.Context, filter string) (
 		if request.ThreadID != "" {
 			lines = append(lines, "Thread: "+request.ThreadID)
 		}
+		if request.ThreadID != "" {
+			p, err := s.externalTelegramProjection(ctx, request)
+			if err != nil {
+				return nil, err
+			}
+			lines = append(lines, "Telegram: "+p.State)
+			if p.Error != "" {
+				lines = append(lines, "Telegram error: "+p.Error)
+			}
+		}
+
 		if request.ErrorSummary != "" {
 			lines = append(lines, "Error: "+sanitizeDiagnosticString(request.ErrorSummary))
 		}

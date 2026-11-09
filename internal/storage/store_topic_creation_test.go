@@ -228,3 +228,95 @@ func TestTopicCreationBindingFailureRollsBackAndCanRecover(t *testing.T) {
 		t.Fatal(topics, err)
 	}
 }
+
+func TestTopicRetryPreservesUnknownAndLateConfirmationCannotReplaceBinding(t *testing.T) {
+	ctx := context.Background()
+	s, err := Open(filepath.Join(t.TempDir(), "state.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	if err = s.BeginSyncActivation(ctx, "s", -1); err != nil {
+		t.Fatal(err)
+	}
+	first := TopicCreation{ID: "first", SessionID: "s", ChatID: -1, Target: "thread:t", ThreadID: "t", Title: "same"}
+	if fresh, err := s.PrepareTopicCreation(ctx, first); err != nil || !fresh {
+		t.Fatal(fresh, err)
+	}
+	if err = s.TopicCreationResult(ctx, first.ID, 0, "unknown"); err != nil {
+		t.Fatal(err)
+	}
+	next := first
+	next.ID = "next"
+	next.SupersedesID = first.ID
+	if fresh, err := s.PrepareTopicCreation(ctx, next); err != nil || !fresh {
+		t.Fatal(fresh, err)
+	}
+	duplicate := next
+	duplicate.ID = "duplicate"
+	if fresh, err := s.PrepareTopicCreation(ctx, duplicate); err == nil && fresh {
+		t.Fatal("two successors")
+	}
+	next.TopicID = 30
+	if err = s.TopicCreationResult(ctx, next.ID, 30, "confirmed"); err != nil {
+		t.Fatal(err)
+	}
+	if err = s.MaterializeTopicCreation(ctx, next); err != nil {
+		t.Fatal(err)
+	}
+	var state string
+	if err = s.db.QueryRow(`SELECT state FROM sync_topic_creations WHERE id='first'`).Scan(&state); err != nil || state != "unknown" {
+		t.Fatal(state, err)
+	}
+	first.TopicID = 20
+	if err = s.TopicCreationResult(ctx, first.ID, 20, "confirmed"); err != nil {
+		t.Fatal(err)
+	}
+	if err = s.MaterializeTopicCreation(ctx, first); err != nil {
+		t.Fatal(err)
+	}
+	topics, err := s.ListSyncTopics(ctx, "s")
+	if err != nil || len(topics) != 1 || topics[0].TopicID != 30 {
+		t.Fatal(topics, err)
+	}
+}
+
+func TestTopicRetryHistoryDoesNotBlockRecreationAfterKnownExpiry(t *testing.T) {
+	ctx := context.Background()
+	s := openTestStore(t)
+	if err := s.BeginSyncActivation(ctx, "s", -1); err != nil {
+		t.Fatal(err)
+	}
+	first := TopicCreation{ID: "first", SessionID: "s", ChatID: -1, Target: "thread:t", ThreadID: "t", Title: "same"}
+	if _, err := s.PrepareTopicCreation(ctx, first); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.TopicCreationResult(ctx, first.ID, 0, "unknown"); err != nil {
+		t.Fatal(err)
+	}
+	next := first
+	next.ID = "next"
+	next.SupersedesID = first.ID
+	if fresh, err := s.PrepareTopicCreation(ctx, next); err != nil || !fresh {
+		t.Fatal(fresh, err)
+	}
+	next.TopicID = 30
+	if err := s.TopicCreationResult(ctx, next.ID, 30, "confirmed"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.MaterializeTopicCreation(ctx, next); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.DeleteSyncTopic(ctx, "s", 30); err != nil {
+		t.Fatal(err)
+	}
+	third := first
+	third.ID = "fresh-after-expiry"
+	if fresh, err := s.PrepareTopicCreation(ctx, third); err != nil || !fresh {
+		t.Fatal(fresh, err)
+	}
+	var state string
+	if err := s.db.QueryRow(`SELECT state FROM sync_topic_creations WHERE id='first'`).Scan(&state); err != nil || state != "unknown" {
+		t.Fatal(state, err)
+	}
+}

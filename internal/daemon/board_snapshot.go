@@ -9,7 +9,7 @@ import (
 )
 
 func (s *Service) boardTracksThreadLocked(ctx context.Context, threadID string) bool {
-	ids, err := s.store.ListTrackedTaskThreadIDs(ctx)
+	ids, err := s.executionThreadIDs(ctx)
 	if err != nil {
 		return false
 	}
@@ -24,7 +24,7 @@ func (s *Service) boardTracksThreadLocked(ctx context.Context, threadID string) 
 // This is the board part of the existing periodic producer, never a second
 // polling loop. Connected topics were already read by reconcileSyncLocked.
 func (s *Service) reconcileBoardThreadsLocked(ctx context.Context) {
-	ids, err := s.store.ListTrackedTaskThreadIDs(ctx)
+	ids, err := s.executionThreadIDs(ctx)
 	if err != nil || len(ids) == 0 {
 		return
 	}
@@ -34,21 +34,7 @@ func (s *Service) reconcileBoardThreadsLocked(ctx context.Context) {
 	if poll == nil || !connected {
 		return
 	}
-	state, err := s.store.GetSyncState(ctx)
-	if err != nil {
-		return
-	}
-	topicProducerAvailable := (state.State == model.SyncStateActive || state.State == model.SyncStateDraining) && s.syncAccessErrorLocked(ctx) == nil && s.getSyncForum() != nil
 	for _, id := range ids {
-		if topicProducerAvailable {
-			topic, err := s.store.GetActiveSyncTopicByThread(ctx, state.SessionID, id)
-			if err != nil {
-				continue
-			}
-			if topic != nil {
-				continue
-			}
-		}
 		// ThreadResume is a mutation: it can update activity and cause Sync to
 		// discover a historical chat as recent. Passive board targets are read-only;
 		// the existing periodic producer reconciles them without subscribing.
@@ -65,7 +51,9 @@ func (s *Service) reconcileBoardThreadsLocked(ctx context.Context) {
 }
 
 func (s *Service) processBoardSnapshotLocked(ctx context.Context, current appserver.ThreadReadSnapshot) {
-	// persistSyncSnapshot owns ADR-034's terminal fence for both presentations.
+	if s.applyTelegramOriginTerminalGate(ctx, "external_execution", &current, nil) {
+		return
+	}
 	observed, _, err := s.persistSyncSnapshot(ctx, model.SyncTopic{ThreadID: current.Thread.ID}, current)
 	if err != nil {
 		return
@@ -95,6 +83,18 @@ func (s *Service) releaseBoardContinuationLeaseLocked(ctx context.Context, curre
 	topic, err := s.store.GetActiveSyncTopicByThread(ctx, state.SessionID, current.Thread.ID)
 	if err != nil {
 		return
+	}
+	if owned.RequestID != "" && owned.TurnID != "" && ((current.LatestTurnID == owned.TurnID && isTerminalStatus(current.LatestTurnStatus)) || turnIDAfter(current.LatestTurnID, owned.TurnID)) {
+		r, err := s.store.GetExternalLaunchRequest(ctx, owned.RequestID)
+		if err != nil || r == nil || r.Status == model.ExternalLaunchSessionStarted || r.Status == model.ExternalLaunchOutcomeUnknown {
+			return
+		}
+		if topic != nil && topic.WriterGeneration == lease.Generation && topic.ActiveTurnID == owned.TurnID {
+			if err = s.store.MarkSyncTerminal(ctx, topic.SessionID, topic.ThreadID, owned.TurnID, lease.Generation); err != nil {
+				return
+			}
+			topic.ActiveTurnState = model.SyncTurnTerminal
+		}
 	}
 	// A Sync receipt must become terminal before board cleanup can release its writer.
 	if topic != nil && topic.WriterGeneration == lease.Generation &&
@@ -133,4 +133,50 @@ func (s *Service) boardDiscoveryActivityRecent(ctx context.Context, thread model
 		return true, nil
 	}
 	return observedTerminalAt.Unix() >= cutoffUnix, nil
+}
+
+func (s *Service) executionThreadIDs(ctx context.Context) ([]string, error) {
+	ids, err := s.store.ListTrackedTaskThreadIDs(ctx)
+	if err != nil {
+		return nil, err
+	}
+	external, err := s.store.ListExternalExecutionThreadIDs(ctx)
+	if err != nil {
+		return nil, err
+	}
+	for id := range s.boardContinuationLeases {
+		external = append(external, id)
+	}
+	seen := map[string]bool{}
+	out := []string{}
+	for _, id := range append(ids, external...) {
+		if !seen[id] {
+			seen[id] = true
+			out = append(out, id)
+		}
+	}
+	return out, nil
+}
+
+func (s *Service) externalTerminalIsDurable(ctx context.Context, thread string) bool {
+	owned, ok := s.boardContinuationLeases[thread]
+	if !ok || owned.RequestID == "" {
+		return true
+	}
+	if owned.TurnID == "" {
+		return false
+	}
+	r, err := s.store.GetExternalLaunchRequest(ctx, owned.RequestID)
+	if err != nil || r == nil {
+		return false
+	}
+	// Closing tracking does not stop Codex, but also must not pin its writer after
+	// authoritative completion of the exact turn retained by this live lease.
+	if r.Status == model.ExternalLaunchDismissed {
+		return true
+	}
+	if r.ThreadID != thread || r.TurnID != owned.TurnID {
+		return false
+	}
+	return r.Status == model.ExternalLaunchSessionCompleted || r.Status == model.ExternalLaunchSessionFailed || r.Status == model.ExternalLaunchSessionInterrupted
 }

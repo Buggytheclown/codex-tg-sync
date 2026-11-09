@@ -542,7 +542,7 @@ func TestExternalOutcomeCheckReconcilesStoredTerminalSnapshot(t *testing.T) {
 	if claimed, _ := service.store.ClaimExternalLaunchRequest(ctx, request.ID); !claimed {
 		t.Fatal("request was not claimed")
 	}
-	if changed, err := service.store.CompleteExternalLaunchRequest(ctx, request.ID, model.ExternalLaunchOutcomeUnknown, "thread-check", "", "dispatch_unknown", "unknown"); err != nil || !changed {
+	if changed, err := service.store.CompleteExternalLaunchRequest(ctx, request.ID, model.ExternalLaunchOutcomeUnknown, "thread-check", "turn-check", "dispatch_unknown", "unknown"); err != nil || !changed {
 		t.Fatalf("mark unknown=%t err=%v", changed, err)
 	}
 	snapshot := appserver.SnapshotFromThreadRead(syncCompletedPayload("thread-check", "turn-check", "Done"))
@@ -670,9 +670,14 @@ func TestDispatchExternalLaunchRequestCreatesSyncThreadTurnAndTopic(t *testing.T
 	if writer.turnStartCalls[0].collaborationMode != "" || writer.turnStartCalls[0].model != "gpt-5.6-luna" || writer.turnStartCalls[0].reasoningEffort != "high" {
 		t.Fatalf("turn execution settings=%#v", writer.turnStartCalls[0])
 	}
+	if len(forum.creates) != 0 || len(forum.sends) != 0 {
+		t.Fatal("dispatch performed Telegram IO")
+	}
+	storeExternalRunningSnapshot(t, service, "external-thread", request.Prompt)
+	service.runSyncDelivery(context.Background(), "external-thread")
 	userMessages := 0
 	for _, sent := range forum.sends {
-		if sent.topicID == 21 && sent.text == syncUserHeader+"\n"+request.SafePreview {
+		if sent.topicID == 21 && sent.text == syncUserHeader+"\n"+request.Prompt {
 			userMessages++
 		}
 	}
@@ -693,7 +698,7 @@ func TestDispatchExternalLaunchRequestCreatesSyncThreadTurnAndTopic(t *testing.T
 	}
 	userMessages = 0
 	for _, sent := range forum.sends {
-		if sent.topicID == 21 && sent.text == syncUserHeader+"\n"+request.SafePreview {
+		if sent.topicID == 21 && sent.text == syncUserHeader+"\n"+request.Prompt {
 			userMessages++
 		}
 	}
@@ -741,50 +746,42 @@ func TestDispatchExternalLaunchRequestDoesNotReplayAmbiguousThreadStart(t *testi
 	}
 }
 
-func TestDispatchExternalLaunchRequestTopicFailureCreatesNoCodexState(t *testing.T) {
-	t.Parallel()
+func TestDispatchExternalLaunchRequestTopicFailureKeepsCodexRunning(t *testing.T) {
 	service := activeSyncService(t)
-	writer := &stubSession{threadStartResult: map[string]any{"thread": map[string]any{"id": "must-not-start"}}}
+	writer := &stubSession{threadStartResult: map[string]any{"thread": map[string]any{"id": "running", "cwd": "/project"}}}
 	service.liveFactory = func() Session { return writer }
 	sender := &recordingSender{}
 	service.SetSender(sender)
-	service.SetSyncForum(&fakeSyncForum{
-		createErrAt: 1,
-		createErr:   NewSyncForumFailure(SyncForumFailureRetryable, errors.New("telegram 429")),
-	})
+	service.SetSyncForum(&fakeSyncForum{createErrAt: 1, createErr: NewSyncForumFailure(SyncForumFailureRetryable, errors.New("telegram 429"))})
 	request := prepareStartingExternalRequest(t, service, "test:dispatch:4", "topic failure")
-
 	service.dispatchExternalLaunchRequest(context.Background(), request.ID)
+	service.runSyncDelivery(context.Background(), "running")
 	service.processExternalLaunchRequests(context.Background())
 	stored, _ := service.store.GetExternalLaunchRequest(context.Background(), request.ID)
-	if stored.Status != model.ExternalLaunchFailed || len(writer.threadStartCalls) != 0 {
-		t.Fatalf("topic failure request=%#v starts=%#v", stored, writer.threadStartCalls)
+	if stored.Status != model.ExternalLaunchSessionStarted || len(writer.turnStartCalls) != 1 {
+		t.Fatalf("request=%#v", stored)
 	}
-	if len(sender.edits) != 1 || callbackTokenForButton(sender.edits[0].buttons, "Retry") == "" || callbackTokenForButton(sender.edits[0].buttons, "Close") == "" {
-		t.Fatalf("retryable topic failure card=%#v", sender.edits)
+	if len(sender.edits) != 1 || callbackTokenForButton(sender.edits[0].buttons, "Retry") == "" || callbackTokenForButton(sender.edits[0].buttons, "Close") != "" {
+		t.Fatalf("card=%#v", sender.edits)
 	}
 }
-
-func TestDispatchExternalLaunchRequestPromptSendFailureCreatesNoCodexState(t *testing.T) {
-	t.Parallel()
+func TestDispatchExternalLaunchRequestPromptSendFailureKeepsCodexRunning(t *testing.T) {
 	service := activeSyncService(t)
-	writer := &stubSession{threadStartResult: map[string]any{"thread": map[string]any{"id": "must-not-start"}}}
+	writer := &stubSession{threadStartResult: map[string]any{"thread": map[string]any{"id": "running", "cwd": "/project"}}}
 	service.liveFactory = func() Session { return writer }
 	forum := &fakeSyncForum{nextTopicID: 20, sendErrAt: 1}
 	service.SetSyncForum(forum)
-	request := prepareStartingExternalRequest(t, service, "test:dispatch:5", "prompt send failure")
-
+	request := prepareStartingExternalRequest(t, service, "test:dispatch:5", "prompt failure")
 	service.dispatchExternalLaunchRequest(context.Background(), request.ID)
+	storeExternalRunningSnapshot(t, service, "running", request.Prompt)
+	service.runSyncDelivery(context.Background(), "running")
 	stored, _ := service.store.GetExternalLaunchRequest(context.Background(), request.ID)
-	if stored.Status != model.ExternalLaunchFailed || len(writer.threadStartCalls) != 0 {
-		t.Fatalf("prompt send failure request=%#v starts=%#v", stored, writer.threadStartCalls)
+	if stored.Status != model.ExternalLaunchSessionStarted || len(writer.turnStartCalls) != 1 || len(forum.deletes) != 0 {
+		t.Fatalf("request=%#v deletes=%#v", stored, forum.deletes)
 	}
-	if len(forum.deletes) != 1 || forum.deletes[0] != 21 {
-		t.Fatalf("deleted topics=%#v, want [21]", forum.deletes)
-	}
-	drafts, err := service.store.ListSyncTopicDrafts(context.Background(), "s")
-	if err != nil || len(drafts) != 0 {
-		t.Fatalf("drafts=%#v err=%v, want cleanup", drafts, err)
+	p, err := service.externalTelegramProjection(context.Background(), *stored)
+	if err != nil || !p.Retryable() {
+		t.Fatal(p, err)
 	}
 }
 

@@ -71,11 +71,13 @@ func (s *Service) processExternalLaunchRequests(ctx context.Context) {
 	s.mu.RLock()
 	sender := s.sender
 	s.mu.RUnlock()
-	s.renderExternalLaunchRequestsLocked(ctx, sender)
 	s.externalRequestMu.Unlock()
 	for _, requestID := range requestIDs {
 		s.startExternalLaunchDispatch(requestID)
 	}
+	s.externalRequestMu.Lock()
+	s.renderExternalLaunchRequestsLocked(ctx, sender)
+	s.externalRequestMu.Unlock()
 }
 
 func (s *Service) renderExternalLaunchRequestsLocked(ctx context.Context, sender Sender) {
@@ -94,18 +96,42 @@ func (s *Service) renderExternalLaunchRequestsLocked(ctx context.Context, sender
 }
 
 func (s *Service) queueExternalReplyFromSnapshot(ctx context.Context, snapshot appserver.ThreadReadSnapshot) {
-	launchStatus, text, ok := externalTerminalLaunchOutcome(snapshot)
-	if !ok {
-		return
-	}
-	queued, err := s.store.CompleteExternalTurn(ctx, snapshot.Thread.ID, snapshot.LatestTurnID, launchStatus, text)
+	requests, err := s.store.ExternalExecutionsForThread(ctx, snapshot.Thread.ID)
 	if err != nil {
-		s.logLifecycle("external_reply_queue_failed", lifecycleFields{"thread_id": snapshot.Thread.ID, "turn_id": snapshot.LatestTurnID, "error": err})
+		s.logLifecycle("external_reply_queue_failed", lifecycleFields{"thread_id": snapshot.Thread.ID, "error": err})
 		return
 	}
-	if queued {
-		s.logLifecycle("external_reply_queued", lifecycleFields{"thread_id": snapshot.Thread.ID, "turn_id": snapshot.LatestTurnID})
-		s.wakeExternalLaunchRenderer()
+	for _, r := range requests {
+		if r.Status != model.ExternalLaunchSessionStarted {
+			if r.DispatchPhase != model.ExternalDispatchTurnConfirmed || r.TurnID == "" {
+				continue
+			}
+			if r.Status == model.ExternalLaunchStarting {
+				_, err = s.store.CompleteExternalLaunchRequest(ctx, r.ID, model.ExternalLaunchSessionStarted, r.ThreadID, r.TurnID, "", "")
+			} else {
+				_, err = s.store.ResolveExternalLaunchOutcome(ctx, r.ID, r.ThreadID, r.TurnID)
+			}
+			if err != nil {
+				s.logLifecycle("external_reply_queue_failed", lifecycleFields{"request_id": r.ID, "error": err})
+				continue
+			}
+		}
+		status, text, terminal := externalTerminalLaunchOutcome(snapshot)
+		if turnIDAfter(snapshot.LatestTurnID, r.TurnID) {
+			status = model.ExternalLaunchSessionCompleted
+			text = "The original Codex turn is no longer active; a later turn exists in the same thread."
+		} else if snapshot.LatestTurnID != r.TurnID || !terminal {
+			continue
+		}
+		queued, err := s.store.CompleteExternalTurn(ctx, r.ThreadID, r.TurnID, status, text)
+		if err != nil {
+			s.logLifecycle("external_reply_queue_failed", lifecycleFields{"thread_id": r.ThreadID, "turn_id": r.TurnID, "error": err})
+			continue
+		}
+		if queued {
+			s.logLifecycle("external_reply_queued", lifecycleFields{"thread_id": r.ThreadID, "turn_id": r.TurnID})
+			s.wakeExternalLaunchRenderer()
+		}
 	}
 }
 
@@ -263,13 +289,27 @@ func (s *Service) deliverExternalMessage(ctx context.Context, sender ExternalRep
 }
 
 func (s *Service) renderExternalLaunchRequest(ctx context.Context, sender Sender, request model.ExternalLaunchRequest) error {
+	p, err := s.externalTelegramProjection(ctx, request)
+	if err != nil {
+		return err
+	}
 	text := externalLaunchRequestText(request)
+	if request.ThreadID != "" {
+		text += "\nCodex: " + externalLaunchStatusLabel(request.Status) + "\nChat: codex://threads/" + request.ThreadID + "\nTelegram: " + p.State
+		if p.Error != "" {
+			text += "\nTelegram error: " + p.Error
+		}
+	}
+	fp := syncFingerprint(text + storage.MustJSON(p) + request.DispatchPhase)
+	if request.TelegramMessageID != 0 && request.TelegramRenderedStatus == request.Status && request.TelegramRenderedFP == fp {
+		return nil
+	}
 	if err := s.enqueueExternalTerminalNotice(ctx, request); err != nil {
 		return err
 	}
 	if request.TelegramMessageID == 0 {
 		_ = s.store.ExpireExternalLaunchCallbackRoutes(ctx, request.ID)
-		buttons, routes, err := s.externalLaunchActions(ctx, request)
+		buttons, routes, err := s.externalLaunchActionsForProjection(ctx, request, p)
 		if err != nil {
 			return err
 		}
@@ -285,10 +325,13 @@ func (s *Service) renderExternalLaunchRequest(ctx context.Context, sender Sender
 				return err
 			}
 		}
-		return s.store.MarkExternalLaunchRequestTelegramSent(ctx, request.ID, messageID, request.Status)
+		if err := s.store.MarkExternalLaunchRequestTelegramSent(ctx, request.ID, messageID, request.Status); err != nil {
+			return err
+		}
+		return s.store.MarkExternalTelegramFingerprint(ctx, request.ID, fp, p)
 	}
 	_ = s.store.ExpireExternalLaunchCallbackRoutes(ctx, request.ID)
-	buttons, routes, err := s.externalLaunchActions(ctx, request)
+	buttons, routes, err := s.externalLaunchActionsForProjection(ctx, request, p)
 	if err != nil {
 		return err
 	}
@@ -301,10 +344,20 @@ func (s *Service) renderExternalLaunchRequest(ctx context.Context, sender Sender
 	if err := sender.EditMessage(ctx, s.cfg.SyncGroupID, request.TelegramTopicID, request.TelegramMessageID, text, buttons); err != nil {
 		return err
 	}
-	return s.store.MarkExternalLaunchRequestTelegramRendered(ctx, request.ID, request.TelegramMessageID, request.Status)
+	if err := s.store.MarkExternalLaunchRequestTelegramRendered(ctx, request.ID, request.TelegramMessageID, request.Status); err != nil {
+		return err
+	}
+	return s.store.MarkExternalTelegramFingerprint(ctx, request.ID, fp, p)
 }
 
 func (s *Service) externalLaunchActions(ctx context.Context, request model.ExternalLaunchRequest) ([][]model.ButtonSpec, []model.CallbackRoute, error) {
+	p, err := s.externalTelegramProjection(ctx, request)
+	if err != nil {
+		return nil, nil, err
+	}
+	return s.externalLaunchActionsForProjection(ctx, request, p)
+}
+func (s *Service) externalLaunchActionsForProjection(ctx context.Context, request model.ExternalLaunchRequest, p storage.ThreadTelegramProjection) ([][]model.ButtonSpec, []model.CallbackRoute, error) {
 	type action struct {
 		label string
 		name  string
@@ -320,6 +373,9 @@ func (s *Service) externalLaunchActions(ctx context.Context, request model.Exter
 	case model.ExternalLaunchOutcomeUnknown:
 		actions = []action{{label: "Close", name: "external_launch_close"}, {label: "Check status", name: "external_launch_check"}}
 	}
+	if request.Status != model.ExternalLaunchFailed && request.Status != model.ExternalLaunchDismissed && request.ThreadID != "" && p.Retryable() {
+		actions = append(actions, action{label: "Retry", name: "external_launch_telegram_retry"})
+	}
 	if len(actions) == 0 {
 		return nil, nil, nil
 	}
@@ -330,6 +386,15 @@ func (s *Service) externalLaunchActions(ctx context.Context, request model.Exter
 		if err != nil {
 			_ = s.store.ExpireExternalLaunchCallbackRoutes(ctx, request.ID)
 			return nil, nil, err
+		}
+		if action.name == "external_launch_telegram_retry" {
+			var payload map[string]any
+			_ = json.Unmarshal([]byte(route.PayloadJSON), &payload)
+			payload["projection"] = p
+			route.PayloadJSON = storage.MustJSON(payload)
+			if err := s.store.PutCallbackRoute(ctx, route); err != nil {
+				return nil, nil, err
+			}
 		}
 		buttons = append(buttons, button)
 		routes = append(routes, route)
@@ -465,6 +530,9 @@ func (s *Service) handleExternalLaunchCallback(ctx context.Context, chatID, topi
 		route.TelegramMessageID != messageID || route.ThreadID != request.ID {
 		return &DirectResponse{CallbackText: "This launch request button is stale."}, nil
 	}
+	if route.Action == "external_launch_telegram_retry" {
+		return s.handleExternalTelegramRetry(ctx, *request, route)
+	}
 	if route.Action == "external_launch_check" {
 		return s.checkExternalLaunchOutcome(ctx, *request)
 	}
@@ -521,7 +589,7 @@ func (s *Service) checkExternalLaunchOutcome(ctx context.Context, request model.
 	if strings.TrimSpace(request.ThreadID) == "" {
 		return &DirectResponse{CallbackText: "No durable thread id is available; outcome remains unknown."}, nil
 	}
-	if request.TargetThreadID != "" && request.TurnID == "" {
+	if request.TurnID == "" {
 		return &DirectResponse{CallbackText: "No confirmed continuation turn is available; outcome remains unknown and will not be replayed."}, nil
 	}
 	stored, err := s.store.GetSnapshot(ctx, request.ThreadID)
@@ -535,10 +603,10 @@ func (s *Service) checkExternalLaunchOutcome(ctx context.Context, request model.
 	if err := json.Unmarshal(stored.CompactJSON, &snapshot); err != nil || strings.TrimSpace(snapshot.LatestTurnID) == "" {
 		return &DirectResponse{CallbackText: "The thread snapshot has no confirmed turn; outcome remains unknown."}, nil
 	}
-	if request.TargetThreadID != "" && request.TurnID != "" && snapshot.LatestTurnID != request.TurnID {
+	if snapshot.LatestTurnID != request.TurnID {
 		return &DirectResponse{CallbackText: "The confirmed continuation turn has no matching authoritative snapshot yet; outcome remains unknown."}, nil
 	}
-	changed, err := s.store.ResolveExternalLaunchOutcome(ctx, request.ID, request.ThreadID, snapshot.LatestTurnID)
+	changed, err := s.store.ResolveExternalLaunchOutcome(ctx, request.ID, request.ThreadID, request.TurnID)
 	if err != nil {
 		return nil, err
 	}
@@ -576,11 +644,24 @@ type externalLaunchReceiptRoute struct {
 func externalLaunchReceiptKey(requestID string) string { return "external.launch.receipt." + requestID }
 
 func (s *Service) reconcileDurableExternalLaunchReceipts(ctx context.Context) {
-	requests, err := s.store.ListExternalLaunchRequestsByStatus(ctx, []string{model.ExternalLaunchOutcomeUnknown}, 1000)
+	requests, err := s.store.ListExternalLaunchRequestsByStatus(ctx, []string{model.ExternalLaunchOutcomeUnknown, model.ExternalLaunchStarting}, 1000)
 	if err != nil {
 		return
 	}
 	for _, request := range requests {
+		if request.DispatchPhase == model.ExternalDispatchTurnConfirmed && request.ThreadID != "" && request.TurnID != "" {
+			var changed bool
+			var err error
+			if request.Status == model.ExternalLaunchStarting {
+				changed, err = s.store.CompleteExternalLaunchRequest(ctx, request.ID, model.ExternalLaunchSessionStarted, request.ThreadID, request.TurnID, "", "")
+			} else {
+				changed, err = s.store.ResolveExternalLaunchOutcome(ctx, request.ID, request.ThreadID, request.TurnID)
+			}
+			if err == nil && changed {
+				s.queueExternalReplyFromStoredSnapshot(ctx, request.ThreadID)
+			}
+			continue
+		}
 		if request.TargetThreadID != "" {
 			continue
 		}

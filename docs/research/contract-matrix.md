@@ -131,7 +131,9 @@ Per-source details remain available through `/pollers`. See the
 - A visible `[Launch request]` card is created before either manual or automatic start.
 - `/requests` shows active requests by default.
 - Failed starts may be retried or closed.
-- A launch `createForumTopic` `429` is returned after one attempt and rendered as a retryable failed card; it is not hidden by an internal retry loop.
+- After launch admission, Codex dispatch and terminal tracking are independent of Telegram creation, sends and rate limits. The launch card reports both outcomes separately.
+- A launch-topic `429` leaves Codex running and exposes Telegram Retry. This action restores the same chat's projection, including a completed result; it never starts a second turn.
+- Explicit Telegram Retry can authorize one successor to an uncertain topic attempt. Unknown ancestors remain recorded, late confirmations cannot replace the active binding, and existing Control notices report ambiguity/duplicates. Automatic discovery and restart do not repeat uncertain creates.
 - Ambiguous thread creation is never replayed automatically.
 - Terminal Codex state closes the request and queues a short terminal reply when the source supports replies.
 - Database-owned sources have an explicit initial launch policy: manual by default, trusted PR authors, or automatic. Cards precede automatic claim; continuations remain manual. The once-only imported review upgrade preserves the configured legacy author allowlist when no explicit board policy exists. Feedback/existing cron sources stay manual; new cron imports retain configured policy. Frozen requests preserve their prior policy.

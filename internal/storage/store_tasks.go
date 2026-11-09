@@ -658,11 +658,15 @@ func reorderTaskTx(ctx context.Context, tx *sql.Tx, task *model.Task, column, be
 }
 
 func cancelUnstartedTaskRequestsTx(ctx context.Context, tx *sql.Tx, id string, now model.TimeString) error {
-	_, err := tx.ExecContext(ctx, `UPDATE callback_routes SET status=? WHERE action LIKE 'external_launch_%' AND request_id IN (SELECT id FROM external_launch_requests WHERE task_id=? AND status IN (?,?,?) AND coalesce(thread_id,'')='' AND coalesce(turn_id,'')='')`, model.CallbackStatusExpired, id, model.ExternalLaunchPendingApproval, model.ExternalLaunchStarting, model.ExternalLaunchFailed)
+	_, err := tx.ExecContext(ctx, `UPDATE callback_routes SET status=? WHERE action LIKE 'external_launch_%' AND request_id IN (SELECT id FROM external_launch_requests WHERE task_id=? AND status IN (?,?,?) AND (dispatch_phase IN ('not_sent','thread_ready') OR (dispatch_phase='' AND status!='starting')) AND coalesce(turn_id,'')='')`, model.CallbackStatusExpired, id, model.ExternalLaunchPendingApproval, model.ExternalLaunchStarting, model.ExternalLaunchFailed)
 	if err != nil {
 		return err
 	}
-	_, err = tx.ExecContext(ctx, `UPDATE external_launch_requests SET status=?,error_type='task_cancelled',error_summary='Task moved to TODO or Done before dispatch.',updated_at=? WHERE task_id=? AND status IN (?,?,?) AND coalesce(thread_id,'')='' AND coalesce(turn_id,'')=''`, model.ExternalLaunchDismissed, now, id, model.ExternalLaunchPendingApproval, model.ExternalLaunchStarting, model.ExternalLaunchFailed)
+	_, err = tx.ExecContext(ctx, `UPDATE external_launch_requests SET status=?,error_type='task_cancelled',error_summary='Task moved to TODO or Done before dispatch.',updated_at=? WHERE task_id=? AND status IN (?,?,?) AND (dispatch_phase IN ('not_sent','thread_ready') OR (dispatch_phase='' AND status!='starting')) AND coalesce(turn_id,'')=''`, model.ExternalLaunchDismissed, now, id, model.ExternalLaunchPendingApproval, model.ExternalLaunchStarting, model.ExternalLaunchFailed)
+	if err != nil {
+		return err
+	}
+	_, err = tx.ExecContext(ctx, `UPDATE external_launch_requests SET error_type='task_cancel_pending',error_summary='Task moved before first turn dispatch.',updated_at=? WHERE task_id=? AND status='starting' AND dispatch_phase='thread_sending'`, now, id)
 	return err
 }
 func (s *Store) SetTaskPolling(ctx context.Context, id string, in model.SetTaskPollingInput) (*model.Task, error) {

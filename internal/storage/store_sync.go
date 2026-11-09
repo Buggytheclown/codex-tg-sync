@@ -52,6 +52,9 @@ func (s *Store) BeginSyncActivation(ctx context.Context, sessionID string, chatI
 	if err != nil {
 		return err
 	}
+	if _, err := tx.ExecContext(ctx, `UPDATE external_launch_requests SET telegram_rendered_fp='' WHERE coalesce(thread_id,'')<>''`); err != nil {
+		return err
+	}
 	return tx.Commit()
 }
 
@@ -403,6 +406,9 @@ func (s *Store) finishSyncActivation(ctx context.Context, sessionID, summaryJSON
 		if err := enqueueDelivery(ctx, tx, *delivery); err != nil {
 			return err
 		}
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE external_launch_requests SET telegram_rendered_fp='' WHERE coalesce(thread_id,'')<>''`); err != nil {
+		return err
 	}
 	return tx.Commit()
 }
@@ -778,6 +784,9 @@ func (s *Store) MarkSyncOff(ctx context.Context, sessionID string) ([]model.Sync
 		return nil, err
 	}
 	if _, err := tx.ExecContext(ctx, `UPDATE callback_routes SET status=? WHERE substr(action,1,5)='sync_'`, model.CallbackStatusExpired); err != nil {
+		return nil, err
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE external_launch_requests SET telegram_rendered_fp='' WHERE coalesce(thread_id,'')<>''`); err != nil {
 		return nil, err
 	}
 	if err := tx.Commit(); err != nil {

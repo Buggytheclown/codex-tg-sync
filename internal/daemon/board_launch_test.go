@@ -328,7 +328,7 @@ func TestBoardInitialLaunchReconcilesDurableReceiptAfterBindingFailure(t *testin
 	request = prepareStartingExternalRequestRecord(t, s, request)
 	s.dispatchExternalLaunchRequest(ctx, request.ID)
 	got, _ := s.store.GetExternalLaunchRequest(ctx, request.ID)
-	if got.Status != model.ExternalLaunchOutcomeUnknown {
+	if got.Status != model.ExternalLaunchStarting || got.DispatchPhase != model.ExternalDispatchTurnConfirmed {
 		t.Fatalf("request=%#v", got)
 	}
 	if _, err := db.Exec(`DROP TRIGGER fail_started_binding`); err != nil {

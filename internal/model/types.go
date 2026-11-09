@@ -139,7 +139,17 @@ type SyncMessageReceipt struct {
 
 type TimeString string
 
+const (
+	ExternalDispatchNotSent       = "not_sent"
+	ExternalDispatchThreadSending = "thread_sending"
+	ExternalDispatchThreadReady   = "thread_ready"
+	ExternalDispatchTurnSending   = "turn_sending"
+	ExternalDispatchTurnConfirmed = "turn_confirmed"
+)
+
 type ExternalLaunchRequest struct {
+	DispatchPhase          string
+	TelegramRenderedFP     string
 	TaskID                 string
 	TriggerEventID         string
 	TargetThreadID         string

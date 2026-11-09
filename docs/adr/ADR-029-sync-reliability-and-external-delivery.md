@@ -1,5 +1,7 @@
 # ADR-029: Sync Reliability And External Delivery Transparency
 
+External execution and explicit Telegram Retry are amended by
+[ADR-037](ADR-037-independent-external-execution.md).
 - Status: accepted
 - Amends: ADR-027, ADR-028
 - Related: ADR-019, ADR-020, ADR-026

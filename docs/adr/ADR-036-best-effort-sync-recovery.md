@@ -1,5 +1,7 @@
 # ADR-036: Best-effort Sync Recovery
 
+External execution and explicit Telegram Retry are amended by
+[ADR-037](ADR-037-independent-external-execution.md).
 Status: implemented and deployed locally; live service-event reception, ambiguity
 handling and late-confirmation cleanup verified. Full off/on UI acceptance remains pending.
 

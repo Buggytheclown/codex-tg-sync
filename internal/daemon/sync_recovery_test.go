@@ -145,7 +145,11 @@ func TestSyncRecoveryGateRequiresTelegramAndCorrectGroup(t *testing.T) {
 			if err := service.recoverSyncRuntimeLocked(ctx); err != nil {
 				t.Fatal(err)
 			}
-			if _, err := service.reconcileSyncLocked(ctx); err == nil {
+			if _, err := func() (reconcileSyncResult, error) {
+				service.syncMu.Lock()
+				defer service.syncMu.Unlock()
+				return service.reconcileSyncLocked(ctx)
+			}(); err == nil {
 				t.Fatal("gate allowed reconciliation")
 			}
 			response, err := service.handleSyncMessage(ctx, 11, 501, 123456789, "do work")
@@ -378,10 +382,18 @@ func TestSyncRuntimeRecoveryExpiresExistingCardsInValidatedSession(t *testing.T)
 	if err := service.recoverSyncRuntimeLocked(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if err := service.validateSavedSyncLocked(ctx); err != nil {
+	if err := func() error {
+		service.syncMu.Lock()
+		defer service.syncMu.Unlock()
+		return service.validateSavedSyncLocked(ctx)
+	}(); err != nil {
 		t.Fatal(err)
 	}
-	if err := service.validateSavedSyncLocked(ctx); err != nil {
+	if err := func() error {
+		service.syncMu.Lock()
+		defer service.syncMu.Unlock()
+		return service.validateSavedSyncLocked(ctx)
+	}(); err != nil {
 		t.Fatal(err)
 	}
 	if len(forum.edits) != 1 || forum.edits[0].messageID != 90 || !strings.Contains(forum.edits[0].text, "Expired") {
@@ -437,7 +449,11 @@ func TestSyncStartupPendingDoesNotCreateHealthIncident(t *testing.T) {
 	ctx := context.Background()
 	service.started = true
 	defer func() { service.started = false }()
-	if _, err := service.reconcileSyncLocked(ctx); err == nil {
+	if _, err := func() (reconcileSyncResult, error) {
+		service.syncMu.Lock()
+		defer service.syncMu.Unlock()
+		return service.reconcileSyncLocked(ctx)
+	}(); err == nil {
 		t.Fatal("pending startup admitted")
 	}
 	episode := service.loadHealthEpisode(ctx, "health.sync.resume")

@@ -147,11 +147,11 @@ func (s *Store) ListExternalLaunchRequestsForTelegram(ctx context.Context, limit
 	rows, err := s.db.QueryContext(ctx, `SELECT `+externalLaunchRequestColumns+`
 	FROM external_launch_requests
 	WHERE telegram_topic_id != 0 AND (
-		(auto_start=0 AND (telegram_message_id=0 OR coalesce(telegram_rendered_status,'') != status))
+		(auto_start=0 AND (telegram_message_id=0 OR coalesce(telegram_rendered_status,'') != status OR (coalesce(thread_id,'')<>'' AND telegram_rendered_fp='' AND status!='dismissed')))
 		OR
 		(auto_start=1 AND (
 			telegram_rendered_status=?
-			OR (telegram_message_id != 0 AND coalesce(telegram_rendered_status,'') != status)
+			OR (telegram_message_id != 0 AND (coalesce(telegram_rendered_status,'') != status OR (coalesce(thread_id,'')<>'' AND telegram_rendered_fp='' AND status!='dismissed')))
 		))
 	)
 	ORDER BY created_at, id
@@ -202,7 +202,7 @@ const externalLaunchRequestColumns = `
 	coalesce(ack_status,''), coalesce(ack_text,''), ack_message_id, ack_attempts, coalesce(ack_available_at,''), coalesce(ack_error,''),
 	coalesce(reply_status,''), coalesce(reply_text,''), reply_message_id, reply_attempts, coalesce(reply_available_at,''), coalesce(reply_error,''),
 	coalesce(error_type,''), coalesce(error_summary,''), created_at, updated_at,
- coalesce(task_id,''), coalesce(trigger_event_id,''), coalesce(target_thread_id,''), approval_policy, approvals_reviewer, sandbox_mode`
+ coalesce(task_id,''), coalesce(trigger_event_id,''), coalesce(target_thread_id,''), approval_policy, approvals_reviewer, sandbox_mode, coalesce(dispatch_phase,''), coalesce(telegram_rendered_fp,'')`
 
 type rowScanner interface {
 	Scan(dest ...any) error
@@ -217,7 +217,7 @@ func scanExternalLaunchRequest(scanner rowScanner, request *model.ExternalLaunch
 		&request.AckStatus, &request.AckText, &request.AckMessageID, &request.AckAttempts, &request.AckAvailableAt, &request.AckError,
 		&request.ReplyStatus, &request.ReplyText, &request.ReplyMessageID,
 		&request.ReplyAttempts, &request.ReplyAvailableAt, &request.ReplyError, &request.ErrorType, &request.ErrorSummary,
-		&request.CreatedAt, &request.UpdatedAt, &request.TaskID, &request.TriggerEventID, &request.TargetThreadID, &request.ApprovalPolicy, &request.ApprovalsReviewer, &request.SandboxMode)
+		&request.CreatedAt, &request.UpdatedAt, &request.TaskID, &request.TriggerEventID, &request.TargetThreadID, &request.ApprovalPolicy, &request.ApprovalsReviewer, &request.SandboxMode, &request.DispatchPhase, &request.TelegramRenderedFP)
 	request.AutoStart = autoStart != 0
 	return err
 }
@@ -293,10 +293,10 @@ func (s *Store) CloseExternalLaunchRequest(ctx context.Context, id string) (bool
 func (s *Store) RetryExternalLaunchRequest(ctx context.Context, id string) (bool, error) {
 	result, err := s.db.ExecContext(ctx, `
 	UPDATE external_launch_requests
-	SET status=?, thread_id=NULL, turn_id=NULL, error_type=NULL, error_summary=NULL,
+	SET status=?, error_type=NULL, error_summary=NULL,
 		reply_status=NULL, reply_text=NULL, reply_message_id=0, reply_attempts=0,
 		reply_available_at=NULL, reply_error=NULL, updated_at=?
-	WHERE id=? AND status=? AND (task_id IS NULL OR EXISTS (SELECT 1 FROM tasks WHERE tasks.id=task_id AND tasks.column IN ('inbox','polling','todo')))`, model.ExternalLaunchStarting, model.NowString(), id, model.ExternalLaunchFailed)
+	WHERE id=? AND status=? AND dispatch_phase IN ('not_sent','thread_ready') AND (task_id IS NULL OR EXISTS (SELECT 1 FROM tasks WHERE tasks.id=task_id AND tasks.column IN ('inbox','polling','todo')))`, model.ExternalLaunchStarting, model.NowString(), id, model.ExternalLaunchFailed)
 	if err != nil {
 		return false, err
 	}
@@ -339,7 +339,7 @@ func (s *Store) ResolveExternalLaunchOutcome(ctx context.Context, id, threadID, 
 }
 
 func (s *Store) transitionExternalLaunchRequest(ctx context.Context, id, from, to string) (bool, error) {
-	result, err := s.db.ExecContext(ctx, `UPDATE external_launch_requests SET status=?, updated_at=? WHERE id=? AND status=? AND (task_id IS NULL OR EXISTS (SELECT 1 FROM tasks WHERE tasks.id=task_id AND tasks.column IN ('inbox','polling','todo')))`,
+	result, err := s.db.ExecContext(ctx, `UPDATE external_launch_requests SET status=?, dispatch_phase=CASE WHEN dispatch_phase='' THEN 'not_sent' ELSE dispatch_phase END, updated_at=? WHERE id=? AND status=? AND (task_id IS NULL OR EXISTS (SELECT 1 FROM tasks WHERE tasks.id=task_id AND tasks.column IN ('inbox','polling','todo')))`,
 		to, model.NowString(), id, from)
 	if err != nil {
 		return false, err
@@ -428,26 +428,18 @@ func (s *Store) NoteExternalLaunchRequestPendingError(ctx context.Context, id, e
 }
 
 func (s *Store) RecoverStartingExternalLaunchRequests(ctx context.Context) (int64, error) {
-	now := model.NowString()
-	result, err := s.db.ExecContext(ctx, `
-	UPDATE external_launch_requests
-	SET status=?, error_type='daemon_restart', error_summary='Daemon restarted after dispatch claim; outcome is unknown and was not replayed.',
-		reply_status=CASE WHEN coalesce(source_chat_id,'')<>'' AND source_message_id<>0 AND coalesce(reply_status,'')='' THEN ? ELSE reply_status END,
-		reply_text=CASE WHEN coalesce(source_chat_id,'')<>'' AND source_message_id<>0 AND coalesce(reply_status,'')='' THEN 'The Codex dispatch outcome is unknown after a daemon restart. The request was not replayed automatically.' ELSE reply_text END,
-		reply_available_at=CASE WHEN coalesce(source_chat_id,'')<>'' AND source_message_id<>0 AND coalesce(reply_status,'')='' THEN ? ELSE reply_available_at END,
-		updated_at=?
-	WHERE status=?`, model.ExternalLaunchOutcomeUnknown, model.ExternalReplyPending, now, now, model.ExternalLaunchStarting)
+	requests, err := s.ListExternalLaunchRequestsByStatus(ctx, []string{model.ExternalLaunchStarting}, 100000)
 	if err != nil {
 		return 0, err
 	}
-	return result.RowsAffected()
+	return int64(len(requests)), s.RecoverExternalDispatchPhases(ctx)
 }
 
 func (s *Store) RefreshExternalLaunchActionCards(ctx context.Context) (int64, error) {
 	result, err := s.db.ExecContext(ctx, `
 	UPDATE external_launch_requests
-	SET telegram_rendered_status='', updated_at=?
-	WHERE telegram_message_id<>0 AND status IN (?, ?)`, model.NowString(), model.ExternalLaunchFailed, model.ExternalLaunchOutcomeUnknown)
+	SET telegram_rendered_status='', telegram_rendered_fp='', updated_at=?
+ WHERE telegram_message_id<>0 AND (status IN (?, ?) OR coalesce(thread_id,'')<>'')`, model.NowString(), model.ExternalLaunchFailed, model.ExternalLaunchOutcomeUnknown)
 	if err != nil {
 		return 0, err
 	}
@@ -810,8 +802,8 @@ func insertExternalLaunchRequestTx(ctx context.Context, tx *sql.Tx, request mode
 		ack_status, ack_text, ack_message_id, ack_attempts, ack_available_at, ack_error,
 		reply_status, reply_text,
 		reply_message_id, reply_attempts, reply_available_at, reply_error,
-		error_type, error_summary, created_at, updated_at, task_id, trigger_event_id, target_thread_id, approval_policy, approvals_reviewer, sandbox_mode
-	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		error_type, error_summary, created_at, updated_at, task_id, trigger_event_id, target_thread_id, approval_policy, approvals_reviewer, sandbox_mode, dispatch_phase
+	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'not_sent')
 	ON CONFLICT(source, external_id) DO NOTHING`,
 		request.ID, request.Source, request.ExternalID, request.Sender, request.Title, nullable(request.SafePreview), nullable(request.SourceURL),
 		request.Prompt, nullable(request.CWD), nullable(request.Model), nullable(request.ReasoningEffort), request.Status, request.TelegramTopicID, request.TelegramMessageID,

@@ -154,16 +154,34 @@ func (s *Service) handleSyncPendingRequestLocked(ctx context.Context, topic mode
 			text += "\nNo structured choices were provided; answer in Codex Desktop."
 		}
 	}
-	messageID, err := forum.SendSyncActionMessage(ctx, topic.TopicID, text, buttons)
+	var messageID int64
+	err := s.syncForumCallLocked(func() error {
+		var err error
+		messageID, err = forum.SendSyncActionMessage(ctx, topic.TopicID, text, buttons)
+		return err
+	})
+	current, stateErr := s.store.GetSyncState(ctx)
+	lease, owned := s.syncLeases[topic.ThreadID]
+	if err == nil && (stateErr != nil || current.SessionID != topic.SessionID || current.State != model.SyncStateActive || !owned || lease.Generation != topic.WriterGeneration) {
+		err = errSyncCommandNotSent
+	}
 	if err != nil {
 		for _, route := range routes {
 			_ = s.store.ExpireCallbackRoute(ctx, route.Token)
 		}
 		return
 	}
+	active := false
 	for _, route := range routes {
-		route.TelegramMessageID = messageID
-		_ = s.store.PutCallbackRoute(ctx, route)
+		bound, err := s.store.BindActiveCallbackMessage(ctx, route.Token, messageID)
+		if err == nil && bound {
+			active = true
+		}
+	}
+	if !active {
+		_ = s.syncForumCallLocked(func() error {
+			return forum.EditSyncMessage(ctx, topic.TopicID, messageID, model.RenderedMessage{Text: headerForResolvedSyncRequest(approval) + "\nResolved or expired. Use Codex for current requests."}, model.SendOptions{})
+		})
 	}
 }
 
@@ -251,7 +269,9 @@ func (s *Service) handleSyncCallback(ctx context.Context, topicID, messageID int
 		if forum == nil {
 			return &DirectResponse{CallbackText: "Sync response sent; card update failed."}, nil
 		}
-		if err := forum.EditSyncMessage(ctx, topicID, messageID, model.RenderedMessage{Text: strings.Join(lines, "\n")}, model.SendOptions{}); err != nil {
+		if err := s.syncForumCallLocked(func() error {
+			return forum.EditSyncMessage(ctx, topicID, messageID, model.RenderedMessage{Text: strings.Join(lines, "\n")}, model.SendOptions{})
+		}); err != nil {
 			s.setError(ctx, fmt.Errorf("edit Sync approval card: %w", err))
 			return &DirectResponse{CallbackText: "Sync response sent; card update failed."}, nil
 		}
@@ -334,4 +354,11 @@ func syncPayloadInt64(payload map[string]any, key string) int64 {
 		return parsed
 	}
 	return 0
+}
+
+func headerForResolvedSyncRequest(approval model.PendingApproval) string {
+	if approval.PromptKind == "approval" {
+		return syncApprovalHeader
+	}
+	return syncInputHeader
 }

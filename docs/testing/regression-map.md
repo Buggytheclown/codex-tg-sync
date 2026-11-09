@@ -545,3 +545,21 @@ For live Telegram QA, verify:
   palette; drag from/to populated and empty Done, verify outline/no insertion gaps,
   no lift jump for Done neighbors, smooth landing/rollback and unchanged collapsed
   target bounds. Native visual acceptance requires an available browser surface.
+
+## Independent external execution and Telegram Retry (ADR-037)
+
+- `external_independent_test.go`: no Telegram IO on admitted dispatch, unknown
+  turn isolation, same-chat Retry after first-turn rejection, duplicate Retry,
+  task move while thread/start waits, terminal persistence failure, runtime
+  supersession with and without a topic, and unlocked presentation IO.
+- `store_external_dispatch_test.go`: every durable phase across reopen, consumed
+  retry routes, legacy alias discovery fences, canonical materialization after
+  normalization, and non-reactivation of expired approval routes.
+- `store_topic_creation_test.go`: unknown ancestors survive manual retry and late
+  confirmations cannot replace the canonical active binding.
+- Existing dispatch tests now require Codex to remain running when topic creation
+  or User delivery fails. External starts no longer depend on topic drafts.
+- `TestLiveExternalLaunchTelegramRetry` is opt-in: isolated store, real ephemeral
+  App Server turn, intentionally lost successful Telegram create response, actual
+  recovery card and authenticated Telegram history readback. It never consumes
+  getUpdates or restarts the working daemon; it deletes only its probe artifacts.

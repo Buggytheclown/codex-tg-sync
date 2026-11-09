@@ -312,6 +312,8 @@ func (s *Store) initialize(ctx context.Context) error {
 		name string
 		sql  string
 	}{
+		{"dispatch_phase", `ALTER TABLE external_launch_requests ADD COLUMN dispatch_phase TEXT NOT NULL DEFAULT ''`},
+		{"telegram_rendered_fp", `ALTER TABLE external_launch_requests ADD COLUMN telegram_rendered_fp TEXT NOT NULL DEFAULT ''`},
 		{"auto_start", `ALTER TABLE external_launch_requests ADD COLUMN auto_start INTEGER NOT NULL DEFAULT 0`},
 		{"source_chat_id", `ALTER TABLE external_launch_requests ADD COLUMN source_chat_id TEXT`},
 		{"source_message_id", `ALTER TABLE external_launch_requests ADD COLUMN source_message_id INTEGER NOT NULL DEFAULT 0`},
@@ -368,7 +370,22 @@ func (s *Store) initialize(ctx context.Context) error {
 	)`); err != nil {
 		return err
 	}
-	return s.initializeTasks(ctx)
+	for _, col := range []struct{ table, name, sql string }{
+		{"sync_topic_creations", "supersedes_id", "ALTER TABLE sync_topic_creations ADD COLUMN supersedes_id TEXT"},
+		{"sync_topics", "delivery_error", "ALTER TABLE sync_topics ADD COLUMN delivery_error TEXT NOT NULL DEFAULT ''"},
+		{"sync_topics", "delivery_revision", "ALTER TABLE sync_topics ADD COLUMN delivery_revision INTEGER NOT NULL DEFAULT 0"},
+	} {
+		if err := s.ensureColumn(ctx, col.table, col.name, col.sql); err != nil {
+			return err
+		}
+	}
+	if _, err := s.db.ExecContext(ctx, `CREATE UNIQUE INDEX IF NOT EXISTS idx_topic_creation_successor ON sync_topic_creations(supersedes_id) WHERE supersedes_id IS NOT NULL`); err != nil {
+		return err
+	}
+	if err := s.initializeTasks(ctx); err != nil {
+		return err
+	}
+	return s.migrateExternalDispatch(ctx)
 }
 
 func (s *Store) ensureColumn(ctx context.Context, tableName, columnName, alterSQL string) error {

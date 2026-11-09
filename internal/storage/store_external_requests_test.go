@@ -383,6 +383,9 @@ func TestRecoverStartingExternalLaunchRequestsMarksOutcomeUnknown(t *testing.T) 
 	if claimed, err := store.ClaimExternalLaunchRequest(ctx, request.ID); err != nil || !claimed {
 		t.Fatalf("claim=%t err=%v", claimed, err)
 	}
+	if err := store.SetExternalDispatchPhase(ctx, request.ID, model.ExternalDispatchNotSent, model.ExternalDispatchThreadSending); err != nil {
+		t.Fatal(err)
+	}
 	changed, err := store.RecoverStartingExternalLaunchRequests(ctx)
 	if err != nil || changed != 1 {
 		t.Fatalf("recovered=%d err=%v", changed, err)

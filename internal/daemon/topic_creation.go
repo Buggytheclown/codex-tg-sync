@@ -26,6 +26,7 @@ func (s *Service) prepareTopicCreation(ctx context.Context, op storage.TopicCrea
 }
 
 func (s *Service) finishTopicCreation(ctx context.Context, op storage.TopicCreation, id int64, createErr error) (int64, error) {
+	defer s.store.InvalidateExternalProjection(ctx, op.ThreadID)
 	if createErr != nil {
 		outcome := "unknown"
 		var failure *SyncForumFailure
@@ -35,6 +36,7 @@ func (s *Service) finishTopicCreation(ctx context.Context, op storage.TopicCreat
 		if err := s.store.TopicCreationResult(ctx, op.ID, 0, outcome); err != nil {
 			return 0, errors.Join(createErr, err)
 		}
+		s.wakeExternalLaunchRenderer()
 		return 0, createErr
 	}
 	if id <= 0 {
@@ -49,6 +51,7 @@ func (s *Service) finishTopicCreation(ctx context.Context, op storage.TopicCreat
 	if err := s.store.MaterializeTopicCreation(ctx, op); err != nil {
 		return 0, err
 	}
+	s.wakeExternalLaunchRenderer()
 	return id, nil
 }
 
@@ -76,15 +79,11 @@ func (s *Service) reconcileTopicCreations(ctx context.Context) error {
 			if err := s.store.MaterializeTopicCreation(ctx, op); err != nil {
 				return err
 			}
+			_ = s.store.InvalidateExternalProjection(ctx, op.ThreadID)
+			s.wakeExternalLaunchRenderer()
 		}
 	}
-	ids, err := s.store.ResumeConfirmedTopicLaunches(ctx)
-	if err != nil {
-		return err
-	}
-	for _, id := range ids {
-		s.startExternalLaunchDispatch(id)
-	}
+
 	return nil
 }
 

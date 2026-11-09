@@ -53,3 +53,11 @@ func (s *Service) lockSyncDispatch(ctx context.Context) {
 		s.taskLaunchMu.Lock()
 	}
 }
+
+// Presentation IO must not retain the lifecycle lock needed by admitted work.
+// Callers revalidate their session/route after reacquiring it.
+func (s *Service) syncForumCallLocked(call func() error) error {
+	s.syncMu.Unlock()
+	defer s.syncMu.Lock()
+	return call()
+}

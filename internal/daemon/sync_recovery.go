@@ -111,11 +111,23 @@ func (s *Service) validateSavedSyncLocked(ctx context.Context) error {
 	if forum == nil || len(s.cfg.AllowedUserIDs) != 1 {
 		return errors.New("Sync forum admission is unavailable")
 	}
-	if err := forum.ValidateSyncGroup(ctx, s.cfg.AllowedUserIDs[0]); err != nil {
-		return fmt.Errorf("validate Sync group: %w", err)
+	if err := s.syncForumCallLocked(func() error {
+		if err := forum.ValidateSyncGroup(ctx, s.cfg.AllowedUserIDs[0]); err != nil {
+			return fmt.Errorf("validate Sync group: %w", err)
+		}
+		if err := forum.PrepareSyncControl(ctx); err != nil {
+			return fmt.Errorf("prepare Sync Control: %w", err)
+		}
+		return nil
+	}); err != nil {
+		return err
 	}
-	if err := forum.PrepareSyncControl(ctx); err != nil {
-		return fmt.Errorf("prepare Sync Control: %w", err)
+	current, err := s.store.GetSyncState(ctx)
+	if err != nil {
+		return err
+	}
+	if current.SessionID != state.SessionID || current.State != state.State {
+		return errSyncCommandNotSent
 	}
 	s.syncValidatedSession = state.SessionID
 	s.expireSyncCardsLocked(ctx)
@@ -127,8 +139,10 @@ func (s *Service) expireSyncCardsLocked(ctx context.Context) {
 	if forum == nil {
 		return
 	}
+	cards := s.syncExpiredCards
+	s.syncExpiredCards = nil
 	seen := map[int64]bool{}
-	for _, card := range s.syncExpiredCards {
+	for _, card := range cards {
 		var payload map[string]any
 		if json.Unmarshal([]byte(card.PayloadJSON), &payload) != nil || syncPayloadString(payload, "session_id") != s.syncValidatedSession || seen[card.TelegramMessageID] {
 			continue
@@ -138,11 +152,12 @@ func (s *Service) expireSyncCardsLocked(ctx context.Context) {
 		if card.Action == "sync_user_input" {
 			header = syncInputHeader
 		}
-		if err := forum.EditSyncMessage(ctx, syncPayloadInt64(payload, "topic_id"), card.TelegramMessageID, model.RenderedMessage{Text: header + "\nExpired after reconnect. Use Codex to handle any remaining request."}, model.SendOptions{}); err != nil {
+		if err := s.syncForumCallLocked(func() error {
+			return forum.EditSyncMessage(ctx, syncPayloadInt64(payload, "topic_id"), card.TelegramMessageID, model.RenderedMessage{Text: header + "\nExpired after reconnect. Use Codex to handle any remaining request."}, model.SendOptions{})
+		}); err != nil {
 			s.logLifecycle("sync_expired_card_edit_failed", lifecycleFields{"error": err})
 		}
 	}
-	s.syncExpiredCards = nil
 }
 
 func (s *Service) finishResumedSyncDrainLocked(ctx context.Context, state model.SyncState) {

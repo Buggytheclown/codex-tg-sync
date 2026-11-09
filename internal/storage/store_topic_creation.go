@@ -14,6 +14,8 @@ import (
 // logical source identity, never a visual label. Empty titles are legacy unknowns.
 type TopicCreation struct {
 	ID, SessionID, Target, Title, ThreadID string
+	SupersedesID                           string
+	LegacyTarget                           string
 	ChatID, TopicID                        int64
 	Rank                                   int
 	Draft                                  *model.SyncTopicDraft
@@ -31,13 +33,29 @@ func (s *Store) PrepareTopicCreation(ctx context.Context, op TopicCreation) (boo
 	defer rollback(tx)
 	// A confirmed, expired presentation may be recreated. Uncertain creation may not.
 	var n int
-	err = tx.QueryRowContext(ctx, `SELECT count(*) FROM sync_topic_creations c WHERE session_id=? AND target=? AND
+	err = tx.QueryRowContext(ctx, `SELECT count(*) FROM sync_topic_creations c WHERE session_id=? AND target=? AND c.rowid=(SELECT max(latest.rowid) FROM sync_topic_creations latest WHERE latest.session_id=c.session_id AND latest.target=c.target) AND
  (state!='confirmed' OR EXISTS(SELECT 1 FROM sync_topics t WHERE t.session_id=c.session_id AND t.topic_id=c.topic_id)
  OR EXISTS(SELECT 1 FROM sync_topic_drafts d WHERE d.session_id=c.session_id AND d.topic_id=c.topic_id))`, op.SessionID, op.Target).Scan(&n)
-	if err != nil || n != 0 {
+	if err != nil {
 		return false, err
 	}
-	_, err = tx.ExecContext(ctx, `INSERT INTO sync_topic_creations(id,session_id,chat_id,target,title,payload,state,topic_id) VALUES(?,?,?,?,?,?,'sending',0)`, op.ID, op.SessionID, op.ChatID, op.Target, op.Title, string(data))
+	if op.SupersedesID == "" {
+		if n != 0 {
+			return false, nil
+		}
+	} else {
+		var head string
+		err = tx.QueryRowContext(ctx, `SELECT id FROM sync_topic_creations c WHERE session_id=? AND target=? AND NOT EXISTS(SELECT 1 FROM sync_topic_creations child WHERE child.supersedes_id=c.id) ORDER BY rowid DESC LIMIT 1`, op.SessionID, op.Target).Scan(&head)
+		if err != nil || head != op.SupersedesID {
+			return false, err
+		}
+		var eligible int
+		err = tx.QueryRowContext(ctx, `SELECT count(*) FROM sync_topic_creations WHERE id=? AND state IN ('failed','unknown') AND topic_id=0`, head).Scan(&eligible)
+		if err != nil || eligible != 1 {
+			return false, err
+		}
+	}
+	_, err = tx.ExecContext(ctx, `INSERT INTO sync_topic_creations(id,session_id,chat_id,target,title,payload,state,topic_id,supersedes_id) VALUES(?,?,?,?,?,?,'sending',0,?)`, op.ID, op.SessionID, op.ChatID, op.Target, op.Title, string(data), nullable(op.SupersedesID))
 	if err != nil {
 		return false, err
 	}
@@ -188,14 +206,20 @@ func (s *Store) MaterializeTopicCreation(ctx context.Context, op TopicCreation) 
 		return err
 	}
 	defer rollback(tx)
-	var canonicalState string
+	var canonicalState, canonicalPayload string
 	var canonicalID int64
-	if err = tx.QueryRowContext(ctx, `SELECT state,topic_id FROM sync_topic_creations WHERE id=?`, op.ID).Scan(&canonicalState, &canonicalID); err != nil {
+	if err = tx.QueryRowContext(ctx, `SELECT state,topic_id,payload FROM sync_topic_creations WHERE id=?`, op.ID).Scan(&canonicalState, &canonicalID, &canonicalPayload); err != nil {
 		return err
 	}
 	if canonicalID != op.TopicID {
 		return fmt.Errorf("conflicting topic confirmation")
 	}
+	id := op.ID
+	if err = json.Unmarshal([]byte(canonicalPayload), &op); err != nil {
+		return err
+	}
+	op.ID = id
+	op.TopicID = canonicalID
 	if canonicalState == "confirmed" {
 		return tx.Commit()
 	}
@@ -205,11 +229,27 @@ func (s *Store) MaterializeTopicCreation(ctx context.Context, op TopicCreation) 
 	}
 	if active != 0 && strings.HasPrefix(op.Target, "external:") {
 		var eligible int
-		if err = tx.QueryRowContext(ctx, `SELECT count(*) FROM external_launch_requests WHERE id=? AND (status=? OR (status=? AND error_type='telegram_topic'))`, strings.TrimPrefix(op.Target, "external:"), model.ExternalLaunchStarting, model.ExternalLaunchOutcomeUnknown).Scan(&eligible); err != nil {
+		if err = tx.QueryRowContext(ctx, `SELECT count(*) FROM external_launch_requests WHERE id=? AND (status=? OR (status=? AND error_type='telegram_topic') OR (status='failed' AND dispatch_phase='not_sent'))`, strings.TrimPrefix(op.Target, "external:"), model.ExternalLaunchStarting, model.ExternalLaunchOutcomeUnknown).Scan(&eligible); err != nil {
 			return err
 		}
 		if eligible == 0 {
 			active = 0
+		}
+	}
+	if active != 0 && op.ThreadID != "" {
+		var existing int64
+		err = tx.QueryRowContext(ctx, `SELECT topic_id FROM sync_topics WHERE session_id=? AND thread_id=? AND telegram_state='connected' LIMIT 1`, op.SessionID, op.ThreadID).Scan(&existing)
+		if err != nil && err != sql.ErrNoRows {
+			return err
+		}
+		if err == nil && existing != op.TopicID {
+			if _, err = tx.ExecContext(ctx, `UPDATE sync_topic_creations SET state='confirmed' WHERE id=?`, op.ID); err != nil {
+				return err
+			}
+			if err = topicCreationNotice(ctx, tx, op, "unmatched or duplicate topic"); err != nil {
+				return err
+			}
+			return tx.Commit()
 		}
 	}
 	now := model.NowString()
@@ -306,31 +346,6 @@ func (s *Store) ImportLegacyTopicCreations(ctx context.Context) error {
 	return nil
 }
 
-func (s *Store) ConfirmedTopicCreation(ctx context.Context, session, target string) (*TopicCreation, error) {
-	var payload string
-	var id string
-	var tid int64
-	err := s.db.QueryRowContext(ctx, `SELECT id,payload,topic_id FROM sync_topic_creations WHERE session_id=? AND target=? AND state='confirmed' AND (EXISTS(SELECT 1 FROM sync_topic_drafts d WHERE d.session_id=sync_topic_creations.session_id AND d.topic_id=sync_topic_creations.topic_id AND d.state IN ('ready','external')) OR EXISTS(SELECT 1 FROM sync_topics t WHERE t.session_id=sync_topic_creations.session_id AND t.topic_id=sync_topic_creations.topic_id)) ORDER BY rowid DESC LIMIT 1`, session, target).Scan(&id, &payload, &tid)
-	if err == sql.ErrNoRows {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-	var op TopicCreation
-	if err = json.Unmarshal([]byte(payload), &op); err != nil {
-		return nil, err
-	}
-	op.ID = id
-	op.TopicID = tid
-	return &op, nil
-}
-
-func (s *Store) AllowFailedTopicRetry(ctx context.Context, session, target string) error {
-	_, err := s.db.ExecContext(ctx, `UPDATE sync_topic_creations SET target=target||':'||id WHERE session_id=? AND target=? AND state='failed'`, session, target)
-	return err
-}
-
 func (s *Store) RecoverTopicCreations(ctx context.Context) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -371,40 +386,6 @@ func (s *Store) RecoverTopicCreations(ctx context.Context) error {
 	return tx.Commit()
 }
 
-// ResumeConfirmedTopicLaunches only resumes requests whose sole uncertainty was
-// topic creation. It never replays an App Server dispatch or a closed request.
-func (s *Store) ResumeConfirmedTopicLaunches(ctx context.Context) ([]string, error) {
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return nil, err
-	}
-	defer rollback(tx)
-	rows, err := tx.QueryContext(ctx, `SELECT r.id FROM external_launch_requests r JOIN sync_topic_creations c ON c.target='external:'||r.id JOIN sync_state st ON st.session_id=c.session_id AND st.chat_id=c.chat_id WHERE st.id=1 AND st.state=? AND c.state='confirmed' AND r.status=? AND r.error_type='telegram_topic'`, model.SyncStateActive, model.ExternalLaunchOutcomeUnknown)
-	if err != nil {
-		return nil, err
-	}
-	var ids []string
-	for rows.Next() {
-		var id string
-		if err = rows.Scan(&id); err != nil {
-			rows.Close()
-			return nil, err
-		}
-		ids = append(ids, id)
-	}
-	err = rows.Err()
-	rows.Close()
-	if err != nil {
-		return nil, err
-	}
-	for _, id := range ids {
-		if _, err = tx.ExecContext(ctx, `UPDATE external_launch_requests SET status=?,error_type=NULL,error_summary=NULL,telegram_rendered_status='',updated_at=? WHERE id=? AND status=? AND error_type='telegram_topic'`, model.ExternalLaunchStarting, model.NowString(), id, model.ExternalLaunchOutcomeUnknown); err != nil {
-			return nil, err
-		}
-	}
-	return ids, tx.Commit()
-}
-
 func (s *Store) ReportSyncCleanup(ctx context.Context, session string, chatID, topicID int64, failed bool) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -431,19 +412,4 @@ func (s *Store) ReportSyncCleanup(ctx context.Context, session string, chatID, t
 		return err
 	}
 	return tx.Commit()
-}
-
-func (s *Store) ReadyExternalTopicDraft(ctx context.Context, session string, topicID int64, requestID string) error {
-	result, err := s.db.ExecContext(ctx, `UPDATE sync_topic_drafts SET state='ready' WHERE session_id=? AND topic_id=? AND state IN ('ready','external') AND EXISTS(SELECT 1 FROM external_launch_requests WHERE id=? AND status=?)`, session, topicID, requestID, model.ExternalLaunchStarting)
-	if err != nil {
-		return err
-	}
-	n, err := result.RowsAffected()
-	if err != nil {
-		return err
-	}
-	if n != 1 {
-		return fmt.Errorf("external topic claim became stale")
-	}
-	return nil
 }

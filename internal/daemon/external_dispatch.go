@@ -2,14 +2,11 @@ package daemon
 
 import (
 	"context"
-	"encoding/json"
-	"errors"
 	"fmt"
 	"strings"
 
 	"github.com/mideco-tech/codex-tg/internal/appserver"
 	"github.com/mideco-tech/codex-tg/internal/model"
-	"github.com/mideco-tech/codex-tg/internal/storage"
 )
 
 func (s *Service) dispatchExternalLaunchRequest(ctx context.Context, requestID string) {
@@ -20,167 +17,102 @@ func (s *Service) dispatchExternalLaunchRequest(ctx context.Context, requestID s
 	ctx = context.WithValue(ctx, syncExternalRequestKey{}, requestID)
 	s.syncMu.Lock()
 	defer s.syncMu.Unlock()
-	// Wait for background Sync before taking the board/launch gate.
-
 	s.taskLaunchMu.Lock()
 	defer s.taskLaunchMu.Unlock()
-
 	request, err := s.store.GetExternalLaunchRequest(ctx, requestID)
 	if err != nil || request == nil || request.Status != model.ExternalLaunchStarting {
 		return
 	}
-	if strings.TrimSpace(request.TargetThreadID) != "" {
-		s.dispatchExternalContinuationLocked(ctx, *request)
-		return
-	}
+	defer s.finishExternalLaunchDispatch()
 	state, err := s.store.GetSyncState(ctx)
 	if err != nil {
 		return
 	}
-	if state.State != model.SyncStateActive || state.ChatID != s.cfg.SyncGroupID || s.syncMutationErrorLocked(ctx) != nil {
-		summary := "Sync is inactive; enable Sync and press Start again."
-		if request.AutoStart {
-			summary = "Sync is inactive; the request will start automatically after Sync is enabled."
-		}
-		_, _ = s.store.ResetExternalLaunchRequestPending(ctx, request.ID, "sync_inactive", summary)
-		s.finishExternalLaunchDispatch()
+	// A previously admitted launch needs no Telegram IO or presentation readiness.
+	if state.State != model.SyncStateActive || state.ChatID != s.cfg.SyncGroupID || state.SecurityState != model.SyncSecurityValid {
+		_, _ = s.store.ResetExternalLaunchRequestPending(ctx, request.ID, "sync_inactive", continuationRetryText(*request, "Sync is inactive; enable Sync and press Start again.", "Sync is inactive; the request will start after Sync is enabled."))
 		return
 	}
-	forum := s.getSyncForum()
-	if forum == nil {
-		summary := "Telegram transport is unavailable; press Start to retry."
-		if request.AutoStart {
-			summary = "Telegram transport is unavailable; the request will retry automatically."
-		}
-		_, _ = s.store.ResetExternalLaunchRequestPending(ctx, request.ID, "telegram_unavailable", summary)
-		s.finishExternalLaunchDispatch()
+	if request.DispatchPhase != model.ExternalDispatchNotSent && request.DispatchPhase != model.ExternalDispatchThreadReady {
 		return
 	}
-
-	telegramPreview := externalLaunchTelegramPreview(*request)
-	title := syncPromptTopicTitle(telegramPreview)
-	topics, _ := s.store.ListSyncTopics(ctx, state.SessionID)
-	drafts, _ := s.store.ListSyncTopicDrafts(ctx, state.SessionID)
-	projectName, directoryName := model.ProjectNameFromCWD(request.CWD)
-	draft := model.SyncTopicDraft{SessionID: state.SessionID, ChatID: state.ChatID, Rank: len(topics) + len(drafts) + 1, Title: title, CWD: request.CWD, ProjectName: projectName, DirectoryName: directoryName}
-	target := "external:" + request.ID
-	confirmed, lookupErr := s.store.ConfirmedTopicCreation(ctx, state.SessionID, target)
-	if lookupErr != nil {
+	if request.TargetThreadID != "" || request.ThreadID != "" {
+		s.dispatchExternalContinuationLocked(ctx, *request)
 		return
 	}
-	topicID := int64(0)
-	if confirmed != nil {
-		topicID = confirmed.TopicID
-	} else {
-		if err := s.store.AllowFailedTopicRetry(ctx, state.SessionID, target); err != nil {
-			return
-		}
-		op, fresh, err := s.prepareTopicCreation(ctx, storage.TopicCreation{SessionID: state.SessionID, ChatID: state.ChatID, Target: target, Title: title, Rank: draft.Rank, Draft: &draft})
-		if err != nil {
-			return
-		}
-		if fresh {
-			ctx = context.WithValue(ctx, syncCreationLockKey{}, true)
-			id, createErr := s.createTopicIO(ctx, state.SessionID, func(ioCtx context.Context) (int64, error) { return forum.CreateLaunchTopic(ioCtx, title) })
-			topicID, err = s.finishTopicCreation(ctx, op, id, createErr)
-		} else {
-			err = NewSyncForumFailure(SyncForumFailureUnknown, fmt.Errorf("topic creation awaiting confirmation"))
-		}
-		if err != nil {
-			status := model.ExternalLaunchOutcomeUnknown
-			var failure *SyncForumFailure
-			if errors.As(err, &failure) && (failure.Kind == SyncForumFailureDefinitive || failure.Kind == SyncForumFailureRetryable) {
-				status = model.ExternalLaunchFailed
-			}
-			_, _ = s.store.CompleteExternalLaunchRequest(ctx, request.ID, status, "", "", "telegram_topic", "Telegram topic creation failed or remains uncertain. Check Control.")
-			s.finishExternalLaunchDispatch()
-			return
-		}
-	}
-	stateNow, stateErr := s.store.GetSyncState(ctx)
-	if stateErr != nil || stateNow.SessionID != state.SessionID || stateNow.State != model.SyncStateActive {
-		_, _ = s.store.ResetExternalLaunchRequestPending(ctx, request.ID, "sync_inactive", "Sync was disabled before dispatch.")
-		s.finishExternalLaunchDispatch()
-		return
-	}
-	draft.TopicID = topicID
-	sourceMessageID, err := forum.SendSyncMessage(ctx, topicID, model.RenderedMessage{Text: syncUserHeader + "\n" + telegramPreview}, model.SendOptions{Silent: true})
+	permissions := appserver.ThreadStartOptions{ApprovalPolicy: frozenExternalSetting(request.ApprovalPolicy, s.cfg.ExternalApprovalPolicy), ApprovalsReviewer: frozenExternalSetting(request.ApprovalsReviewer, s.cfg.ExternalApprovalsReviewer), SandboxMode: frozenExternalSetting(request.SandboxMode, s.cfg.ExternalSandboxMode)}
+	lease, err := s.syncWriter.ReserveProcess(ctx, "external:"+request.ID)
 	if err != nil {
-		_ = forum.DeleteSyncTopic(ctx, topicID)
-		_ = s.store.DeleteSyncTopic(ctx, state.SessionID, topicID)
-		_, _ = s.store.CompleteExternalLaunchRequest(ctx, request.ID, model.ExternalLaunchFailed, "", "", "telegram_prompt", "Telegram could not write the initial request into the session topic.")
-		s.finishExternalLaunchDispatch()
+		s.failExternalDispatch(ctx, *request, "writer_unavailable", err, false)
 		return
 	}
-	if err := s.store.ReadyExternalTopicDraft(ctx, state.SessionID, topicID, request.ID); err != nil {
-		_, _ = s.store.CompleteExternalLaunchRequest(ctx, request.ID, model.ExternalLaunchFailed, "", "", "sync_claim", "Could not prepare the external topic draft.")
-		s.finishExternalLaunchDispatch()
+	s.installSyncWriterLocked(lease)
+	if err = s.store.SetExternalDispatchPhase(ctx, request.ID, model.ExternalDispatchNotSent, model.ExternalDispatchThreadSending); err != nil {
+		_ = s.syncWriter.Abort(lease)
+		s.failExternalDispatch(ctx, *request, "journal_persistence", err, false)
 		return
 	}
-	claimed, receipt, created, err := s.store.ClaimSyncTopicDraftMessage(ctx, state.ChatID, topicID, sourceMessageID)
-	if err != nil || !created {
-		_ = forum.DeleteSyncTopic(ctx, topicID)
-		_ = s.store.DeleteSyncTopic(ctx, state.SessionID, topicID)
-		_, _ = s.store.CompleteExternalLaunchRequest(ctx, request.ID, model.ExternalLaunchFailed, "", "", "sync_claim", "Sync could not claim the new session topic.")
-		s.finishExternalLaunchDispatch()
-		return
-	}
-	// Persist the route to the existing durable dispatch receipt before any
-	// App Server mutation. Restart can bind a confirmed launch without replay.
-	receiptJSON, _ := json.Marshal(externalLaunchReceiptRoute{TopicID: topicID, MessageID: sourceMessageID})
-	if err := s.store.SetState(ctx, externalLaunchReceiptKey(request.ID), string(receiptJSON)); err != nil {
-		_ = s.store.ResetSyncTopicDraftMessage(ctx, claimed, receipt)
-		_ = forum.DeleteSyncTopic(ctx, topicID)
-		_ = s.store.DeleteSyncTopic(ctx, state.SessionID, topicID)
-		_, _ = s.store.CompleteExternalLaunchRequest(ctx, request.ID, model.ExternalLaunchFailed, "", "", "receipt_persistence", "Could not persist the launch dispatch receipt; no Codex work was started.")
-		s.finishExternalLaunchDispatch()
-		return
-	}
-	permissions := appserver.ThreadStartOptions{
-		ApprovalPolicy:    frozenExternalSetting(request.ApprovalPolicy, s.cfg.ExternalApprovalPolicy),
-		ApprovalsReviewer: frozenExternalSetting(request.ApprovalsReviewer, s.cfg.ExternalApprovalsReviewer),
-		SandboxMode:       frozenExternalSetting(request.SandboxMode, s.cfg.ExternalSandboxMode),
-	}
-	execution := appserver.TurnStartOptions{Model: request.Model, ReasoningEffort: request.ReasoningEffort}
-	response, dispatchErr := s.startClaimedSyncDraftLocked(ctx, claimed, receipt, request.Prompt, telegramPreview, permissions, execution)
-	storedReceipt, receiptErr := s.store.GetSyncReceipt(ctx, topicID, sourceMessageID)
-	if response != nil && strings.TrimSpace(response.ThreadID) != "" && strings.TrimSpace(response.TurnID) != "" && dispatchErr == nil {
-		changed, completeErr := s.store.CompleteExternalLaunchRequest(ctx, request.ID, model.ExternalLaunchSessionStarted,
-			response.ThreadID, response.TurnID, "", "")
-		if completeErr != nil || !changed {
-			_, _ = s.store.CompleteExternalLaunchRequest(ctx, request.ID, model.ExternalLaunchOutcomeUnknown,
-				response.ThreadID, response.TurnID, "persistence_unknown", "Codex started but task/request confirmation is uncertain; this request will not be replayed.")
+	rpcCtx := s.syncRPCContextLocked(ctx, state.SessionID)
+	payload, startErr := lease.Process.ThreadStart(rpcCtx, request.CWD, permissions)
+	if startErr != nil {
+		unknown := syncDispatchAmbiguous(startErr, "")
+		if unknown {
+			_ = s.syncWriter.MarkUnknown(lease)
+		} else {
+			_ = s.syncWriter.Abort(lease)
+			_ = s.store.SetExternalDispatchPhase(ctx, request.ID, model.ExternalDispatchThreadSending, model.ExternalDispatchNotSent)
 		}
-		s.pruneSyncTopics(ctx, state.SessionID)
-		s.queueExternalReplyFromStoredSnapshot(ctx, response.ThreadID)
-		s.finishExternalLaunchDispatch()
+		s.failExternalDispatch(ctx, *request, "thread_start", startErr, unknown)
 		return
 	}
-
-	threadID := ""
-	if storedReceipt != nil {
-		threadID = storedReceipt.ThreadID
+	project, directory := model.ProjectNameFromCWD(request.CWD)
+	thread := threadFromStartPayload(payload, pendingNewThreadState{CWD: request.CWD, ProjectName: project, DirectoryName: directory})
+	if thread.ID == "" {
+		_ = s.syncWriter.MarkUnknown(lease)
+		s.failExternalDispatch(ctx, *request, "thread_start", fmt.Errorf("thread/start returned no id"), true)
+		return
 	}
-	status := model.ExternalLaunchOutcomeUnknown
-	errorType := "dispatch_unknown"
-	errorSummary := "Sync dispatch outcome is unknown; this request will not be replayed automatically."
-	if receiptErr == nil && storedReceipt != nil && storedReceipt.State == model.SyncReceiptRejected && dispatchErr == nil {
-		status = model.ExternalLaunchFailed
-		errorType = "dispatch_rejected"
-		errorSummary = "Sync rejected the request before its first turn could start."
+	request.ThreadID = thread.ID
+	lease, err = s.syncWriter.ClaimThread(lease, thread.ID)
+	if err != nil {
+		_ = s.syncWriter.MarkUnknown(lease)
+		s.failExternalDispatch(ctx, *request, "ownership_unknown", err, true)
+		return
 	}
-	_, _ = s.store.CompleteExternalLaunchRequest(ctx, request.ID, status, threadID, "", errorType, errorSummary)
-	if status == model.ExternalLaunchFailed {
-		_ = forum.DeleteSyncTopic(ctx, topicID)
-		_ = s.store.DeleteSyncTopic(ctx, state.SessionID, topicID)
+	s.syncLeases[thread.ID] = lease
+	s.installSyncWriterLocked(lease)
+	if err = s.store.RecordExternalThread(ctx, request.ID, thread.ID); err != nil {
+		s.abortExternalLease(ctx, lease)
+		s.failExternalDispatch(ctx, *request, "thread_persistence", err, true)
+		return
 	}
-	s.finishExternalLaunchDispatch()
+	request.DispatchPhase = model.ExternalDispatchThreadReady
+	thread.Title = syncPromptTopicTitle(externalLaunchTelegramPreview(*request))
+	if err = s.store.UpsertThread(ctx, thread); err != nil {
+		s.abortExternalLease(ctx, lease)
+		s.failExternalDispatch(ctx, *request, "thread_persistence", err, false)
+		return
+	}
+	s.startExternalTurnLocked(rpcCtx, *request, thread, lease)
 }
 
+func (s *Service) abortExternalLease(ctx context.Context, lease appserver.WriterLease[Session]) {
+	delete(s.syncLeases, lease.ThreadID)
+	delete(s.boardContinuationLeases, lease.ThreadID)
+	s.unsubscribeSyncWriterLeaseLocked(ctx, lease)
+	_ = s.syncWriter.Abort(lease)
+}
+func (s *Service) failExternalDispatch(ctx context.Context, r model.ExternalLaunchRequest, kind string, err error, unknown bool) {
+	status := model.ExternalLaunchFailed
+	if unknown {
+		status = model.ExternalLaunchOutcomeUnknown
+	}
+	_, _ = s.store.CompleteExternalLaunchRequest(ctx, r.ID, status, r.ThreadID, r.TurnID, kind, sanitizeDiagnosticString(err.Error()))
+}
 func (s *Service) finishExternalLaunchDispatch() {
 	s.wakeExternalLaunchRenderer()
+	s.wakeSyncReconcile()
 }
-
 func frozenExternalSetting(value *string, fallback string) string {
 	if value != nil {
 		return *value
@@ -188,34 +120,33 @@ func frozenExternalSetting(value *string, fallback string) string {
 	return fallback
 }
 
-// The durable starting request is the dispatch receipt. Once TurnStart may have
-// reached App Server it can only become started or unknown, never pending again.
-func (s *Service) dispatchExternalContinuationLocked(ctx context.Context, request model.ExternalLaunchRequest) {
-	defer s.finishExternalLaunchDispatch()
-	threadID := strings.TrimSpace(request.TargetThreadID)
-	initialState, stateErr := s.store.GetSyncState(ctx)
-	if stateErr != nil || initialState.State != model.SyncStateActive || s.syncMutationErrorLocked(ctx) != nil {
-		_, _ = s.store.ResetExternalLaunchRequestPending(ctx, request.ID, "sync_inactive", continuationRetryText(request, "Sync is inactive; enable Sync and press Start again.", "Sync is inactive; the prompt will start automatically after Sync is enabled."))
+func (s *Service) dispatchExternalContinuationLocked(ctx context.Context, r model.ExternalLaunchRequest) {
+	threadID := strings.TrimSpace(r.ThreadID)
+	if threadID == "" {
+		threadID = strings.TrimSpace(r.TargetThreadID)
+	}
+	if r.TargetThreadID != "" && threadID != r.TargetThreadID {
+		s.failExternalDispatch(ctx, r, "target_thread", fmt.Errorf("continuation target changed"), false)
 		return
 	}
-
-	ctx = s.syncRPCContextLocked(ctx, initialState.SessionID)
-	fail := func(kind, message string) {
-		_, _ = s.store.CompleteExternalLaunchRequest(ctx, request.ID, model.ExternalLaunchFailed, "", "", kind, message)
+	state, err := s.store.GetSyncState(ctx)
+	if err != nil {
+		return
 	}
+	ctx = s.syncRPCContextLocked(ctx, state.SessionID)
 	busy := func() {
-		_, _ = s.store.ResetExternalLaunchRequestPending(ctx, request.ID, "thread_busy", continuationRetryText(request, "The target chat is busy; press Start again after its current turn completes.", "The target chat is busy; the prompt will start automatically when it is idle."))
+		_, _ = s.store.ResetExternalLaunchRequestPending(ctx, r.ID, "thread_busy", continuationRetryText(r, "The target chat is busy; press Start again when it is idle.", "The target chat is busy; the prompt will start automatically when it is idle."))
 	}
 	s.mu.RLock()
 	poll, connected := s.poll, s.pollConnected
 	s.mu.RUnlock()
 	if poll == nil || !connected {
-		_, _ = s.store.ResetExternalLaunchRequestPending(ctx, request.ID, "appserver_unavailable", continuationRetryText(request, "App Server is unavailable; press Start after connectivity returns.", "App Server is unavailable; the prompt will start automatically after connectivity returns."))
+		_, _ = s.store.ResetExternalLaunchRequestPending(ctx, r.ID, "appserver_unavailable", "App Server is unavailable; press Start after connectivity returns.")
 		return
 	}
 	current, err := readAuthoritativeSyncSnapshot(ctx, poll, threadID)
 	if err != nil {
-		fail("target_read", "Could not read the original chat; no replacement chat was created: "+sanitizeDiagnosticString(err.Error()))
+		s.failExternalDispatch(ctx, r, "target_read", err, false)
 		return
 	}
 	if activeTurnIDFromSyncSnapshot(current) != "" || threadLooksActiveForInput(&current.Thread) {
@@ -231,120 +162,90 @@ func (s *Service) dispatchExternalContinuationLocked(ctx context.Context, reques
 		busy()
 		return
 	}
-	abort := func() {
-		delete(s.syncLeases, threadID)
-		delete(s.boardContinuationLeases, threadID)
-		s.unsubscribeSyncWriterLeaseLocked(ctx, lease)
-		_ = s.syncWriter.Abort(lease)
-	}
 	s.syncLeases[threadID] = lease
 	s.installSyncWriterLocked(lease)
-	cwd := strings.TrimSpace(request.CWD)
-	if cwd == "" {
-		cwd = current.Thread.CWD
-	}
-	if _, err := lease.Process.ThreadResume(ctx, threadID, cwd); err != nil {
-		abort()
-		fail("target_resume", "Could not resume the original chat; no replacement chat was created: "+sanitizeDiagnosticString(err.Error()))
+	if _, err = lease.Process.ThreadResume(ctx, threadID, r.CWD); err != nil {
+		s.abortExternalLease(ctx, lease)
+		s.failExternalDispatch(ctx, r, "target_resume", err, false)
 		return
 	}
-	// Resume may attach to a chat that became busy after the first read.
 	current, err = readAuthoritativeSyncSnapshot(ctx, lease.Process, threadID)
 	if err != nil {
-		abort()
-		fail("target_read", "Could not verify the original chat before starting: "+sanitizeDiagnosticString(err.Error()))
+		s.abortExternalLease(ctx, lease)
+		s.failExternalDispatch(ctx, r, "target_read", err, false)
 		return
 	}
 	if activeTurnIDFromSyncSnapshot(current) != "" || threadLooksActiveForInput(&current.Thread) {
-		abort()
+		s.abortExternalLease(ctx, lease)
 		busy()
 		return
 	}
-	var receipt *model.SyncMessageReceipt
-	state, stateErr := s.store.GetSyncState(ctx)
-	if stateErr == nil && state.State == model.SyncStateActive && s.syncAccessErrorLocked(ctx) == nil {
-		topic, topicErr := s.store.GetActiveSyncTopicByThread(ctx, state.SessionID, threadID)
-		forum := s.getSyncForum()
-		if topicErr != nil {
-			abort()
-			fail("target_topic", "Could not verify the original chat's Telegram route.")
-			return
-		}
-		if topic != nil && forum != nil {
-			if topic.ActiveTurnState == model.SyncTurnStarting || topic.ActiveTurnState == model.SyncTurnUnknown {
-				abort()
-				busy()
-				return
-			}
-			messageID, err := forum.SendSyncMessage(ctx, topic.TopicID, model.RenderedMessage{Text: syncUserHeader + "\n" + externalLaunchTelegramPreview(request)}, model.SendOptions{Silent: true})
-			if err != nil {
-				abort()
-				fail("telegram_prompt", "Could not write the continuation into the original chat topic.")
-				return
-			}
-			accepted, created, err := s.store.AcceptSyncMessage(ctx, topic.ChatID, topic.TopicID, messageID)
-			if err != nil || !created {
-				abort()
-				fail("sync_claim", "Could not claim the continuation in its existing chat topic.")
-				return
-			}
-			if err := s.store.MarkSyncStarting(ctx, accepted, lease.Generation); err != nil {
-				abort()
-				_ = s.store.MarkSyncReceiptState(ctx, accepted, model.SyncReceiptRejected)
-				busy()
-				return
-			}
-			receipt = &accepted
-		}
-	}
-	options := s.turnStartOptions(ctx, "", &current.Thread)
-	options.Model = strings.TrimSpace(request.Model)
-	options.ReasoningEffort = strings.TrimSpace(request.ReasoningEffort)
-	options.ApprovalPolicy = frozenExternalSetting(request.ApprovalPolicy, s.cfg.ExternalApprovalPolicy)
-	options.ApprovalsReviewer = frozenExternalSetting(request.ApprovalsReviewer, s.cfg.ExternalApprovalsReviewer)
-	options.SandboxMode = frozenExternalSetting(request.SandboxMode, s.cfg.ExternalSandboxMode)
-	result, turnErr := lease.Process.TurnStart(ctx, threadID, request.Prompt, cwd, options)
-	turnID := appserverThreadTurnID(result)
-	if turnErr != nil || turnID == "" {
-		if syncDispatchAmbiguous(turnErr, turnID) {
-			_ = s.syncWriter.MarkUnknown(lease)
-			if receipt != nil {
-				_ = s.store.MarkSyncDispatchFailure(ctx, *receipt, model.SyncReceiptUnknown, model.SyncTurnUnknown, lease.Generation)
-			}
-			_, _ = s.store.CompleteExternalLaunchRequest(ctx, request.ID, model.ExternalLaunchOutcomeUnknown, threadID, turnID, "dispatch_unknown", "Continuation outcome is unknown; this request will never be replayed automatically.")
-		} else {
-			abort()
-			if receipt != nil {
-				_ = s.store.MarkSyncDispatchFailure(ctx, *receipt, model.SyncReceiptRejected, model.SyncTurnTerminal, lease.Generation)
-			}
-			fail("dispatch_rejected", fmt.Sprintf("The original chat rejected the continuation: %v", turnErr))
-		}
+	r.ThreadID = threadID
+	if err = s.store.RecordExternalThread(ctx, r.ID, threadID); err != nil {
+		s.abortExternalLease(ctx, lease)
+		s.failExternalDispatch(ctx, r, "thread_persistence", err, false)
 		return
 	}
-	s.boardContinuationLeases[threadID] = boardContinuationLease{Lease: lease, RequestID: request.ID, TurnID: turnID}
-	if err := s.syncWriter.MarkActive(lease); err != nil {
-		_ = s.syncWriter.MarkUncertain(lease)
-		_, _ = s.store.CompleteExternalLaunchRequest(ctx, request.ID, model.ExternalLaunchOutcomeUnknown, threadID, turnID, "ownership_unknown", "Continuation started but ownership confirmation failed; it will not be replayed.")
-		return
+	if r.CWD == "" {
+		r.CWD = current.Thread.CWD
 	}
-	if receipt != nil {
-		if err := s.store.MarkSyncDispatchStateWithTelegramUser(ctx, *receipt, model.SyncReceiptDispatched, turnID, model.SyncTurnActive, lease.Generation, syncUserTextFingerprint(turnID, request.Prompt)); err != nil {
-			_ = s.syncWriter.MarkUncertain(lease)
-			_ = s.store.MarkSyncDispatchFailure(ctx, *receipt, model.SyncReceiptUnknown, model.SyncTurnUnknown, lease.Generation)
-			_, _ = s.store.CompleteExternalLaunchRequest(ctx, request.ID, model.ExternalLaunchOutcomeUnknown, threadID, turnID, "receipt_unknown", "Continuation started but its Telegram receipt could not be confirmed; it will not be replayed.")
-			return
-		}
-	}
-	changed, err := s.store.CompleteExternalLaunchRequest(ctx, request.ID, model.ExternalLaunchSessionStarted, threadID, turnID, "", "")
-	if err != nil || !changed {
-		_ = s.syncWriter.MarkUncertain(lease)
-		_, _ = s.store.CompleteExternalLaunchRequest(ctx, request.ID, model.ExternalLaunchOutcomeUnknown, threadID, turnID, "persistence_unknown", "Continuation started but persistence is uncertain; it will not be replayed.")
-		return
-	}
-	s.markSyncThreadDirty(threadID)
-	s.queueExternalReplyFromStoredSnapshot(ctx, threadID)
+	r.DispatchPhase = model.ExternalDispatchThreadReady
+	s.startExternalTurnLocked(ctx, r, current.Thread, lease)
 }
 
+func (s *Service) startExternalTurnLocked(ctx context.Context, r model.ExternalLaunchRequest, thread model.Thread, lease appserver.WriterLease[Session]) {
+	if err := s.store.SetExternalDispatchPhase(ctx, r.ID, model.ExternalDispatchThreadReady, model.ExternalDispatchTurnSending); err != nil {
+		s.abortExternalLease(ctx, lease)
+		s.failExternalDispatch(ctx, r, "journal_persistence", err, false)
+		return
+	}
+	s.boardContinuationLeases[r.ThreadID] = boardContinuationLease{Lease: lease, RequestID: r.ID}
+	options := s.turnStartOptions(ctx, "", &thread)
+	options.Model = r.Model
+	options.ReasoningEffort = r.ReasoningEffort
+	options.ApprovalPolicy = frozenExternalSetting(r.ApprovalPolicy, s.cfg.ExternalApprovalPolicy)
+	options.ApprovalsReviewer = frozenExternalSetting(r.ApprovalsReviewer, s.cfg.ExternalApprovalsReviewer)
+	options.SandboxMode = frozenExternalSetting(r.SandboxMode, s.cfg.ExternalSandboxMode)
+	result, err := lease.Process.TurnStart(ctx, r.ThreadID, r.Prompt, r.CWD, options)
+	turnID := appserverThreadTurnID(result)
+	if err != nil || turnID == "" {
+		unknown := syncDispatchAmbiguous(err, turnID)
+		if unknown {
+			_ = s.syncWriter.MarkUnknown(lease)
+		} else {
+			s.abortExternalLease(ctx, lease)
+			_ = s.store.SetExternalDispatchPhase(ctx, r.ID, model.ExternalDispatchTurnSending, model.ExternalDispatchThreadReady)
+		}
+		if err == nil {
+			err = fmt.Errorf("turn/start returned no id")
+		}
+		s.failExternalDispatch(ctx, r, "dispatch_rejected", err, unknown)
+		return
+	}
+	r.TurnID = turnID
+	s.boardContinuationLeases[r.ThreadID] = boardContinuationLease{Lease: lease, RequestID: r.ID, TurnID: turnID}
+	if err = s.store.RecordExternalTurn(ctx, r.ID, r.ThreadID, turnID); err != nil {
+		_ = s.syncWriter.MarkUncertain(lease)
+		s.failExternalDispatch(ctx, r, "persistence_unknown", err, true)
+		return
+	}
+	_ = s.markTelegramOriginTurn(ctx, r.ThreadID, turnID)
+	if err = s.syncWriter.MarkActive(lease); err != nil {
+		_ = s.syncWriter.MarkUncertain(lease)
+		s.logLifecycle("external_ownership_confirmation_failed", lifecycleFields{"request_id": r.ID, "thread_id": r.ThreadID, "turn_id": turnID, "error": err})
+	}
+	if _, err = s.store.CompleteExternalLaunchRequest(ctx, r.ID, model.ExternalLaunchSessionStarted, r.ThreadID, turnID, "", ""); err != nil {
+		_ = s.syncWriter.MarkUncertain(lease)
+		s.logLifecycle("external_completion_persistence_failed", lifecycleFields{"request_id": r.ID, "thread_id": r.ThreadID, "turn_id": turnID, "error": err})
+		return
+	}
+	state, _ := s.store.GetSyncState(ctx)
+	s.attachExternalTopicOwnerLocked(ctx, state.SessionID, r.ThreadID)
+	s.ensureStartedTurnSnapshot(ctx, &thread, turnID)
+	s.enqueueSyncDelivery(r.ThreadID)
+	s.markSyncThreadDirty(r.ThreadID)
+	s.queueExternalReplyFromStoredSnapshot(ctx, r.ThreadID)
+}
 func continuationRetryText(r model.ExternalLaunchRequest, manual, auto string) string {
 	if r.AutoStart {
 		return auto

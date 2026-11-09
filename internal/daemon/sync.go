@@ -712,8 +712,8 @@ func (s *Service) syncStatus(ctx context.Context) (*DirectResponse, error) {
 func (s *Service) reconcileSync(ctx context.Context) {
 	s.syncMu.Lock()
 	defer s.syncMu.Unlock()
-	_, _ = s.reconcileSyncLocked(ctx)
 	s.reconcileBoardThreadsLocked(ctx)
+	_, _ = s.reconcileSyncLocked(ctx)
 }
 
 type reconcileSyncResult struct {
@@ -864,6 +864,13 @@ func (s *Service) discoverSyncThreadsLocked(ctx context.Context, state model.Syn
 	if err := s.reconcileTopicCreations(ctx); err != nil {
 		return 0, 0, err
 	}
+	// Confirmation/delivery workers may have added a route since the caller's list.
+	var readErr error
+	topics, readErr = s.store.ListSyncTopics(ctx, state.SessionID)
+	if readErr != nil {
+		return 0, 0, readErr
+	}
+
 	cutoff := s.now().UTC().Add(-syncTopicInactiveAge).Unix()
 	threads, err := listSyncThreads(ctx, poll)
 	if err != nil {
@@ -945,6 +952,7 @@ func (s *Service) discoverSyncThreadsLocked(ctx context.Context, state model.Syn
 			continue
 		}
 		nextRank++
+		s.attachExternalTopicOwnerLocked(ctx, state.SessionID, thread.ID)
 		bound[thread.ID] = struct{}{}
 		discovered++
 	}
@@ -954,6 +962,14 @@ func (s *Service) discoverSyncThreadsLocked(ctx context.Context, state model.Syn
 func syncTopicCreationKey(sessionID string) string { return "sync.topic_create." + sessionID }
 
 func (s *Service) createSyncThreadTopic(ctx context.Context, forum SyncForum, sessionID string, chatID int64, rank int, thread model.Thread) (int64, error) {
+	if err := s.store.NormalizeExternalTopicAliases(ctx, thread.ID); err != nil {
+		return 0, err
+	}
+	if existing, err := s.store.GetActiveSyncTopicByThread(ctx, sessionID, thread.ID); err != nil {
+		return 0, err
+	} else if existing != nil {
+		return existing.TopicID, nil
+	}
 	op, fresh, err := s.prepareTopicCreation(ctx, storage.TopicCreation{SessionID: sessionID, ChatID: chatID, Target: "thread:" + thread.ID, ThreadID: thread.ID, Rank: rank, Title: syncTopicTitle(thread)})
 	if err != nil {
 		return 0, err
@@ -961,7 +977,16 @@ func (s *Service) createSyncThreadTopic(ctx context.Context, forum SyncForum, se
 	if !fresh {
 		return 0, NewSyncForumFailure(SyncForumFailureDefinitive, errors.New("topic creation already attempted; waiting for confirmation"))
 	}
-	id, err := s.createTopicIO(ctx, sessionID, func(ioCtx context.Context) (int64, error) { return forum.CreateSyncTopic(ioCtx, op.Title) })
+	id, err := s.createTopicIO(ctx, sessionID, func(ioCtx context.Context) (int64, error) {
+		external, readErr := s.store.HasExternalLaunchThread(ioCtx, thread.ID)
+		if readErr != nil {
+			return 0, readErr
+		}
+		if external {
+			return forum.CreateLaunchTopic(ioCtx, op.Title)
+		}
+		return forum.CreateSyncTopic(ioCtx, op.Title)
+	})
 	return s.finishTopicCreation(ctx, op, id, err)
 }
 
@@ -1409,13 +1434,13 @@ func (s *Service) processSyncSnapshotLocked(ctx context.Context, state model.Syn
 	if err != nil {
 		return
 	}
+	s.queueExternalReplyFromSnapshot(ctx, observed)
 	if superseded {
 		if !s.releaseSyncTurnLeaseLocked(ctx, state, topic, activeTurnID) {
 			return
 		}
 		topic.ActiveTurnState = model.SyncTurnTerminal
 	}
-	s.queueExternalReplyFromSnapshot(ctx, observed)
 	if forum != nil {
 		s.mu.RLock()
 		started := s.started
@@ -1439,6 +1464,9 @@ func (s *Service) completeSyncTurnLocked(ctx context.Context, state model.SyncSt
 }
 
 func (s *Service) releaseSyncTurnLeaseLocked(ctx context.Context, state model.SyncState, topic model.SyncTopic, turnID string) bool {
+	if !s.externalTerminalIsDurable(ctx, topic.ThreadID) {
+		return false
+	}
 	lease, ok := s.syncLeases[topic.ThreadID]
 	if !ok || lease.Generation != topic.WriterGeneration {
 		return false
@@ -1601,39 +1629,65 @@ func syncDetailItemKey(item model.DetailItem, index int) string {
 	return fmt.Sprintf("%s:%d:%d", item.Kind, item.CommentaryIndex, index)
 }
 
-func (s *Service) deliverSyncSnapshot(ctx context.Context, forum SyncForum, topic model.SyncTopic, current appserver.ThreadReadSnapshot, observedAt time.Time) {
+func (s *Service) deliverSyncSnapshot(ctx context.Context, forum SyncForum, topic model.SyncTopic, current appserver.ThreadReadSnapshot, observedAt time.Time) (deliveryErr error) {
+	if !syncTurnUserPresentationReady(topic, current) {
+		return nil
+	}
+	revision, err := s.store.SyncDeliveryRevision(ctx, topic.SessionID, topic.TopicID)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		message := ""
+		if deliveryErr != nil {
+			message = sanitizeDiagnosticString(deliveryErr.Error())
+		}
+		_ = s.store.SetSyncDeliveryError(ctx, topic.SessionID, topic.TopicID, revision, message)
+		s.wakeExternalLaunchRenderer()
+	}()
 	currentTurnID := strings.TrimSpace(current.LatestTurnID)
 	desiredTitle := strings.TrimSpace(current.Thread.Title)
 	if desiredTitle != "" && desiredTitle != current.Thread.ID {
 		desiredTitle = syncTopicTitle(current.Thread)
-		if desiredTitle != topic.Title && forum.RenameSyncTopic(ctx, topic.TopicID, desiredTitle) == nil {
-			_ = s.store.UpdateSyncTopicTitle(ctx, topic.SessionID, topic.TopicID, desiredTitle)
+		if desiredTitle != topic.Title {
+			if err = forum.RenameSyncTopic(ctx, topic.TopicID, desiredTitle); err != nil {
+				deliveryErr = err
+			} else if err = s.store.UpdateSyncTopicTitle(ctx, topic.SessionID, topic.TopicID, desiredTitle); err != nil {
+				deliveryErr = err
+			}
 		}
 	}
-	if !syncTurnUserPresentationReady(topic, current) {
-		return
+	var userOK bool
+	topic, userOK = s.deliverSyncUserMessageLocked(ctx, forum, topic, current)
+	if !userOK {
+		return errors.Join(deliveryErr, errors.New("Telegram User delivery failed"))
 	}
-	var userDeliveryOK bool
-	topic, userDeliveryOK = s.deliverSyncUserMessageLocked(ctx, forum, topic, current)
-	statusNeedsCreate := topic.StatusMessageID == 0 ||
-		(strings.TrimSpace(topic.StatusTurnID) != "" && currentTurnID != "" && strings.TrimSpace(topic.StatusTurnID) != currentTurnID)
+	statusNeedsCreate := topic.StatusMessageID == 0 || (strings.TrimSpace(topic.StatusTurnID) != "" && currentTurnID != "" && strings.TrimSpace(topic.StatusTurnID) != currentTurnID)
 	terminal := isTerminalStatus(current.LatestTurnStatus)
-	if !userDeliveryOK {
-		return
+	status := func() {
+		var ok bool
+		topic, ok = s.deliverSyncStatus(ctx, forum, topic, current, observedAt)
+		if !ok {
+			deliveryErr = errors.Join(deliveryErr, errors.New("Telegram Status delivery failed"))
+		}
+	}
+	final := func() {
+		var err error
+		topic.LastFinalFP, err = s.deliverSyncFinal(ctx, forum, topic, current)
+		deliveryErr = errors.Join(deliveryErr, err)
 	}
 	if terminal && statusNeedsCreate {
-		topic, _ = s.deliverSyncStatus(ctx, forum, topic, current, observedAt)
-		finalFP, _ := s.deliverSyncFinal(ctx, forum, topic, current)
-		topic.LastFinalFP = finalFP
-		return
+		status()
+		final()
+		return deliveryErr
 	}
 	if terminal {
-		finalFP, _ := s.deliverSyncFinal(ctx, forum, topic, current)
-		topic.LastFinalFP = finalFP
-		s.deliverSyncStatus(ctx, forum, topic, current, observedAt)
-		return
+		final()
+		status()
+		return deliveryErr
 	}
-	topic, _ = s.deliverSyncStatus(ctx, forum, topic, current, observedAt)
+	status()
+	return deliveryErr
 }
 
 func syncTurnUserPresentationReady(topic model.SyncTopic, current appserver.ThreadReadSnapshot) bool {
@@ -1807,9 +1861,21 @@ func (s *Service) runSyncDelivery(ctx context.Context, threadID string) {
 	if err != nil || (state.State != model.SyncStateActive && state.State != model.SyncStateDraining) {
 		return
 	}
+	s.syncMu.Lock()
+	s.attachExternalTopicOwnerLocked(ctx, state.SessionID, threadID)
+	s.syncMu.Unlock()
 	topic, err := s.store.GetActiveSyncTopicByThread(ctx, state.SessionID, threadID)
-	if err != nil || topic == nil {
+	if err != nil {
 		return
+	}
+	if topic == nil {
+		if err = s.ensureExternalTopic(ctx, threadID); err != nil {
+			return
+		}
+		topic, err = s.store.GetActiveSyncTopicByThread(ctx, state.SessionID, threadID)
+		if err != nil || topic == nil {
+			return
+		}
 	}
 	stored, err := s.store.GetSnapshot(ctx, threadID)
 	if err != nil || stored == nil || len(stored.CompactJSON) == 0 {
