@@ -70,6 +70,7 @@ type Task struct {
 	Version      int64                `json:"version"`
 	CreatedAt    TimeString           `json:"created_at"`
 	UpdatedAt    TimeString           `json:"updated_at"`
+	DoneAt       TimeString           `json:"done_at"`
 	Polling      *TaskPolling         `json:"polling,omitempty"`
 	Execution    *ThreadSnapshotState `json:"execution,omitempty"`
 	Requests     []TaskRequestInfo    `json:"requests"`

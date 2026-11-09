@@ -18,6 +18,7 @@ type TaskCardDTO struct {
 	Version      int64              `json:"version"`
 	CreatedAt    TimeString         `json:"created_at"`
 	UpdatedAt    TimeString         `json:"updated_at"`
+	DoneAt       TimeString         `json:"done_at"`
 	Execution    *TaskCardExecution `json:"execution,omitempty"`
 	Polling      *TaskCardPolling   `json:"polling,omitempty"`
 	Requests     []TaskCardRequest  `json:"requests"`

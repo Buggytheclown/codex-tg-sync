@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import type { FormEvent, ReactNode } from "react";
 import { api, APIError } from "./api";
-import { compareTasks, placeTask } from "./taskOrder";
+import { compareBoardTasks, placeTask } from "./taskOrder";
+import { doneDay, doneDayLabel } from "./doneChronology";
 import { BoardMotion } from "./boardMotion";
 import type { DropPosition } from "./boardMotion";
 import type { Column, Polling, Priority, Task, TaskCard as Card, TaskEvent, SourceKind } from "./model";
@@ -534,13 +535,13 @@ export function App() {
         latestDetail.current.version === expectedVersion &&
         saved.version === expectedVersion + 1 && saved.priority === priority;
       if (draft && draft.baseline.version === expectedVersion && saved.version === expectedVersion + 1 && saved.priority === priority) {
-        draft.receive({ ...draft.baseline, priority: saved.priority, version: saved.version, updated_at: saved.updated_at });
+        draft.receive({ ...draft.baseline, priority: saved.priority, version: saved.version, updated_at: saved.updated_at, done_at: saved.done_at });
       }
       if (detailSelection.current === saved.id && knownSettings) detailVersion.current = saved.version;
       setDetail(old => {
         if (old?.id !== saved.id || old.version !== expectedVersion ||
           saved.version !== expectedVersion + 1 || saved.priority !== priority) return old;
-        return { ...old, priority: saved.priority, version: saved.version, updated_at: saved.updated_at };
+        return { ...old, priority: saved.priority, version: saved.version, updated_at: saved.updated_at, done_at: saved.done_at };
       });
       setTasks(current => current.map(card => card.id === saved.id && card.version <= saved.version ? saved : card));
       await refresh();
@@ -565,13 +566,13 @@ export function App() {
         latestDetail.current.version === expectedVersion &&
         saved.version === expectedVersion + 1 && (saved.ticket_url || "") === ticketURL;
       if (draft && draft.baseline.version === expectedVersion && saved.version === expectedVersion + 1 && (saved.ticket_url || "") === ticketURL) {
-        draft.receive({ ...draft.baseline, ticket_url: saved.ticket_url, version: saved.version, updated_at: saved.updated_at });
+        draft.receive({ ...draft.baseline, ticket_url: saved.ticket_url, version: saved.version, updated_at: saved.updated_at, done_at: saved.done_at });
       }
       if (detailSelection.current === saved.id && knownSettings) detailVersion.current = saved.version;
       setDetail(old => {
         if (old?.id !== saved.id || old.version !== expectedVersion ||
           saved.version !== expectedVersion + 1 || (saved.ticket_url || "") !== ticketURL) return old;
-        return { ...old, ticket_url: saved.ticket_url, version: saved.version, updated_at: saved.updated_at };
+        return { ...old, ticket_url: saved.ticket_url, version: saved.version, updated_at: saved.updated_at, done_at: saved.done_at };
       });
       setTasks(current => current.map(card => card.id === saved.id && card.version <= saved.version ? saved : card));
       await refresh();
@@ -610,7 +611,8 @@ export function App() {
     } finally { if (mounted.current) setBusy(false); }
   };
   const move = async (task: Card, column: Column, beforeID = "") => {
-    if (pendingMove.current || busy) return;
+    if (pendingMove.current || busy || (column === "done" && task.column === "done")) return;
+    if (column === "done") beforeID = "";
     if (column === "polling" && task.column !== column) {
       const problem = task.polling ? task.polling.problem : pollingProblem();
       if (problem) {
@@ -651,7 +653,7 @@ export function App() {
       if (draft) {
         if ("config" in response) draft.receive(response);
         else if (draft.baseline.version === expectedVersion && saved.version === expectedVersion + 1) {
-          draft.receive({ ...draft.baseline, position: saved.position, column: saved.column, version: saved.version, updated_at: saved.updated_at });
+          draft.receive({ ...draft.baseline, position: saved.position, column: saved.column, version: saved.version, updated_at: saved.updated_at, done_at: saved.done_at });
         }
       }
       if (detailSelection.current === saved.id && ("config" in response || knownSettings)) {
@@ -661,7 +663,7 @@ export function App() {
         if (old?.id !== saved.id || old.version > saved.version) return old;
         if ("config" in response) return response;
         if (old.version !== expectedVersion || saved.version !== expectedVersion + 1) return old;
-        return { ...old, position: saved.position, column: saved.column, version: saved.version, updated_at: saved.updated_at };
+        return { ...old, position: saved.position, column: saved.column, version: saved.version, updated_at: saved.updated_at, done_at: saved.done_at };
       });
       setTasks((current) =>
         current.map((t) => {
@@ -701,6 +703,7 @@ export function App() {
     }
   };
   const insertionAt = (element: HTMLElement, y: number, column: Column) => {
+    if (column === "done") return { column, beforeID: "" };
     const candidates = Array.from(element.querySelectorAll<HTMLElement>("[data-task-id]"))
       .filter((card) => card.dataset.taskId !== dragRef.current);
     const before = candidates.find((card) => {
@@ -712,9 +715,9 @@ export function App() {
   const finishDrag = (target: DropPosition | null) => {
     const task = tasks.find(t => t.id === dragRef.current);
     clearDrag(false);
-    const original = cards.filter(t => t.column === task?.column).sort(compareTasks);
+    const original = cards.filter(t => t.column === task?.column).sort(compareBoardTasks);
     const next = original[original.findIndex(t => t.id === task?.id) + 1]?.id || "";
-    if (task && target && !(task.column === target.column && next === target.beforeID)) {
+    if (task && target && !(task.column === target.column && (target.column === "done" || next === target.beforeID))) {
       void move(task, target.column, target.beforeID);
     } else if (queuedRefresh.current) void refresh();
   };
@@ -754,7 +757,7 @@ export function App() {
     dragRef.current = id;
     queuedRefresh.current = true;
     ++refreshID.current;
-    const list = cards.filter(t => t.column === task.column).sort(compareTasks);
+    const list = cards.filter(t => t.column === task.column).sort(compareBoardTasks);
     const beforeID = list[list.findIndex(t => t.id === id) + 1]?.id || "";
     setDrag({ id, height });
     setInsertion({ column: task.column, beforeID });
@@ -898,8 +901,8 @@ export function App() {
           {visibleColumns.map((column) => {
             const list = cards
               .filter((t) => t.column === column)
-              .sort(compareTasks);
-            const placeholder = drag && insertion?.column === column ? (
+              .sort(compareBoardTasks);
+            const placeholder = column !== "done" && drag && insertion?.column === column ? (
               <div
                 className="drop-placeholder"
                 role="status"
@@ -910,7 +913,7 @@ export function App() {
             return (
               <section
                 key={column}
-                className={`column ${column}`}
+                className={`column ${column}${column === "done" && drag && insertion?.column === "done" && cards.find(t => t.id === drag.id)?.column !== "done" ? " done-drop-active" : ""}`}
                 data-column={column}
                 aria-label={`${labels[column]} column`}
                 onDragOver={(e) => {
@@ -937,30 +940,35 @@ export function App() {
                   )}
                 </div>
                 <div className="column-cards">
-                  {list.map((task) => (
-                    <div className={`card-slot${drag?.id === task.id ? " drag-origin" : ""}`} key={task.id}>
-                      {insertion?.beforeID === task.id && placeholder}
-                      <TaskCard
-                        task={task}
-                        sourceKind={taskSourceKind(task, sources.find(s => s.id === task.source_task_id))}
-                        selected={visibleSelection === task.id}
-                        grabbed={drag?.id === task.id}
-                        saving={savingID === task.id}
-                        disabled={busy}
-                        onSelect={() => select(task)}
-                        controlsDisabled={busy || !!drag}
-                        onPriority={(priority) => saveCardPriority(task, priority)}
-                        onTicket={(url, version) => saveTicket(task, url, version)}
-                        onPR={(url, version) => savePR(task, url, version)}
-                        onLink={(thread_id, expected_version) => mutate<Task>(`/v1/tasks/${task.id}/chat`, "POST", { expected_version, thread_id })}
-                        onPointerDown={e => motion.current!.pointerDown(e.nativeEvent, task.id, e.currentTarget, busy)}
-                        onDragStart={e => {
-                          if (busy) { e.preventDefault(); return; }
-                          beginDrag(task.id, (e.currentTarget.closest(".card-with-link") || e.currentTarget).getBoundingClientRect().height);
-                        }}
-                        onDragEnd={() => clearDrag()}
-                      />
-                    </div>
+                  {list.map((task, index) => (
+                    <Fragment key={task.id}>
+                      {column === "done" && (index === 0 || doneDay(task.done_at) !== doneDay(list[index - 1].done_at)) && (
+                        <h3 className="done-day">{doneDayLabel(doneDay(task.done_at))}</h3>
+                      )}
+                      <div className={`card-slot${drag?.id === task.id ? " drag-origin" : ""}`}>
+                        {insertion?.beforeID === task.id && placeholder}
+                        <TaskCard
+                          task={task}
+                          sourceKind={taskSourceKind(task, sources.find(s => s.id === task.source_task_id))}
+                          selected={visibleSelection === task.id}
+                          grabbed={drag?.id === task.id}
+                          saving={savingID === task.id}
+                          disabled={busy}
+                          onSelect={() => select(task)}
+                          controlsDisabled={busy || !!drag}
+                          onPriority={(priority) => saveCardPriority(task, priority)}
+                          onTicket={(url, version) => saveTicket(task, url, version)}
+                          onPR={(url, version) => savePR(task, url, version)}
+                          onLink={(thread_id, expected_version) => mutate<Task>(`/v1/tasks/${task.id}/chat`, "POST", { expected_version, thread_id })}
+                          onPointerDown={e => motion.current!.pointerDown(e.nativeEvent, task.id, e.currentTarget, busy)}
+                          onDragStart={e => {
+                            if (busy) { e.preventDefault(); return; }
+                            beginDrag(task.id, (e.currentTarget.closest(".card-with-link") || e.currentTarget).getBoundingClientRect().height);
+                          }}
+                          onDragEnd={() => clearDrag()}
+                        />
+                      </div>
+                    </Fragment>
                   ))}
                   {insertion?.beforeID === "" && placeholder}
                   {!list.length && !placeholder && (

@@ -443,3 +443,63 @@ it("removes the pointer overlay and global drag state on unmount", async () => {
   fireEvent.pointerUp(window, { pointerId: 7 });
   expect(writes).toEqual([]);
 });
+
+it("groups Done by last entry, filters empty days and rolls labels over at midnight", async () => {
+  vi.useFakeTimers({ toFake: ["Date"] });
+  try {
+    vi.setSystemTime(new Date(2026, 10, 9, 23, 59));
+    rows = [
+      task("old", { column: "done", position: 0, done_at: new Date(2026, 10, 8, 18).toISOString() }),
+      task("new", { column: "done", position: 99, done_at: new Date(2026, 10, 9, 15).toISOString() }),
+      task("morning", { column: "done", position: 1, done_at: new Date(2026, 10, 9, 10).toISOString() }),
+      task("unknown", { column: "done" }),
+    ];
+    window.localStorage.setItem("codex-tg.show-done", "true");
+    render(<App />);
+    await screen.findByText("Task new");
+    expect(order("Done")).toEqual(["new", "morning", "old", "unknown"]);
+    const done = screen.getByRole("region", { name: "Done column" });
+    const headings = () => within(done).getAllByRole("heading", { level: 3 }).map(e => e.textContent);
+    expect(headings()).toEqual(["Today", "Yesterday", "Unknown date"]);
+    fireEvent.change(screen.getByRole("textbox", { name: "Search tasks" }), { target: { value: "Task new" } });
+    expect(headings()).toEqual(["Today"]);
+    vi.setSystemTime(new Date(2026, 10, 10, 0, 1));
+    await act(async () => invalidate());
+    expect(headings()).toEqual(["Yesterday"]);
+  } finally { vi.useRealTimers(); }
+});
+
+it("uses the whole expanded Done target without an insertion gap and rolls back its day group", async () => {
+  rows.push(task("old", { column: "done", done_at: "2026-10-01T00:00:00Z" }));
+  window.localStorage.setItem("codex-tg.show-done", "true");
+  const move = deferred<Reply>();
+  heldMove = move.promise;
+  render(<App />);
+  const transfer = await startDrag();
+  const done = screen.getByRole("region", { name: "Done column" });
+  dragEvent(done, "dragover", 9999, transfer);
+  expect(done.classList.contains("done-drop-active")).toBe(true);
+  expect(within(done).queryByLabelText("Drop task here")).toBeNull();
+  dragEvent(done, "drop", 9999, transfer);
+  expect(order("Done")).toEqual(["c", "old"]);
+  expect(within(done).getByRole("heading", { name: "Today" })).toBeTruthy();
+  await act(async () => move.resolve(reply({ error: "Move rejected" }, 409)));
+  expect(order("Done")).toEqual(["old"]);
+  expect(within(done).queryByRole("heading", { name: "Today" })).toBeNull();
+  expect(writes[0].body.before_task_id).toBe("");
+});
+
+it("does not reorder a card within chronological Done and resumes queued refresh", async () => {
+  rows = rows.map(t => ({ ...t, column: "done" }));
+  window.localStorage.setItem("codex-tg.show-done", "true");
+  render(<App />);
+  const transfer = await startDrag();
+  const reads = () => vi.mocked(fetch).mock.calls.filter(([path]) => path === "/v1/task-cards").length;
+  const before = reads();
+  const done = screen.getByRole("region", { name: "Done column" });
+  dragEvent(done, "dragover", 0, transfer);
+  dragEvent(done, "drop", 0, transfer);
+  expect(writes).toHaveLength(0);
+  expect(order("Done")).toEqual(["a", "b", "c"]);
+  await waitFor(() => expect(reads()).toBeGreaterThan(before));
+});

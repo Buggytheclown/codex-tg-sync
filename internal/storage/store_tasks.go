@@ -52,7 +52,10 @@ func (s *Store) initializeTasks(ctx context.Context) error {
 	if err := s.ensureColumn(ctx, "tasks", "ticket_url", `ALTER TABLE tasks ADD COLUMN ticket_url TEXT NOT NULL DEFAULT ''`); err != nil {
 		return err
 	}
-	return s.migrateOwnedSourceDefinitions(ctx)
+	if err := s.migrateOwnedSourceDefinitions(ctx); err != nil {
+		return err
+	}
+	return s.migrateTaskDoneDates(ctx)
 }
 
 func validTaskColumn(c string) bool {
@@ -145,12 +148,12 @@ func validatePolling(p model.TaskPolling) error {
 	return nil
 }
 
-const taskColumns = `ticket_url,priority,id,title,description,column,position,coalesce(thread_id,''),coalesce(source_url,''),coalesce(source_key,''),coalesce(source_task_id,''),coalesce(source_author,''),task_config_json,version,created_at,updated_at`
+const taskColumns = `ticket_url,priority,id,title,description,column,position,coalesce(thread_id,''),coalesce(source_url,''),coalesce(source_key,''),coalesce(source_task_id,''),coalesce(source_author,''),task_config_json,version,created_at,updated_at,done_at`
 
 func scanTask(row rowScanner) (*model.Task, error) {
 	var t model.Task
 	var raw string
-	err := row.Scan(&t.TicketURL, &t.Priority, &t.ID, &t.Title, &t.Description, &t.Column, &t.Position, &t.ThreadID, &t.SourceURL, &t.SourceKey, &t.SourceTaskID, &t.SourceAuthor, &raw, &t.Version, &t.CreatedAt, &t.UpdatedAt)
+	err := row.Scan(&t.TicketURL, &t.Priority, &t.ID, &t.Title, &t.Description, &t.Column, &t.Position, &t.ThreadID, &t.SourceURL, &t.SourceKey, &t.SourceTaskID, &t.SourceAuthor, &raw, &t.Version, &t.CreatedAt, &t.UpdatedAt, &t.DoneAt)
 	if err != nil {
 		return nil, err
 	}
@@ -276,6 +279,9 @@ func (s *Store) ListTrackedTaskThreadIDs(ctx context.Context) ([]string, error) 
 }
 
 func insertTaskTx(ctx context.Context, tx *sql.Tx, t model.Task) error {
+	if t.Column == model.TaskDone {
+		t.DoneAt = t.CreatedAt
+	}
 	if t.Priority == "" {
 		t.Priority = "normal"
 	}
@@ -286,7 +292,7 @@ func insertTaskTx(ctx context.Context, tx *sql.Tx, t model.Task) error {
 	if err != nil {
 		return err
 	}
-	_, err = tx.ExecContext(ctx, `INSERT INTO tasks(ticket_url,priority,id,title,description,column,position,thread_id,source_url,source_key,source_task_id,source_author,task_config_json,version,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, t.TicketURL, t.Priority, t.ID, t.Title, t.Description, t.Column, t.Position, nullable(t.ThreadID), nullable(t.SourceURL), nullable(t.SourceKey), nullable(t.SourceTaskID), nullable(t.SourceAuthor), string(raw), t.Version, t.CreatedAt, t.UpdatedAt)
+	_, err = tx.ExecContext(ctx, `INSERT INTO tasks(ticket_url,priority,id,title,description,column,position,thread_id,source_url,source_key,source_task_id,source_author,task_config_json,version,created_at,updated_at,done_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, t.TicketURL, t.Priority, t.ID, t.Title, t.Description, t.Column, t.Position, nullable(t.ThreadID), nullable(t.SourceURL), nullable(t.SourceKey), nullable(t.SourceTaskID), nullable(t.SourceAuthor), string(raw), t.Version, t.CreatedAt, t.UpdatedAt, t.DoneAt)
 	return err
 }
 func setPollingTx(ctx context.Context, tx *sql.Tx, p model.TaskPolling) error {
@@ -546,7 +552,7 @@ func (s *Store) moveTask(ctx context.Context, id string, in model.MoveTaskInput,
 			return err
 		}
 	}
-	if in.BeforeTaskID != nil {
+	if in.BeforeTaskID != nil && in.Column != model.TaskDone {
 		position, err := reorderTaskTx(ctx, tx, t, in.Column, *in.BeforeTaskID)
 		if err != nil {
 			return err
@@ -554,7 +560,14 @@ func (s *Store) moveTask(ctx context.Context, id string, in model.MoveTaskInput,
 		in.Position = position
 	}
 	now := model.NowString()
-	_, err = tx.ExecContext(ctx, `UPDATE tasks SET column=?,position=?,version=version+1,updated_at=? WHERE id=?`, in.Column, in.Position, now, id)
+	doneAt := t.DoneAt
+	if t.Column != in.Column {
+		doneAt = ""
+		if in.Column == model.TaskDone {
+			doneAt = now
+		}
+	}
+	_, err = tx.ExecContext(ctx, `UPDATE tasks SET column=?,position=?,version=version+1,updated_at=?,done_at=? WHERE id=?`, in.Column, in.Position, now, doneAt, id)
 	if err != nil {
 		return err
 	}

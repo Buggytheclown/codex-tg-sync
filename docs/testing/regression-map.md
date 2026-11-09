@@ -523,3 +523,25 @@ For live Telegram QA, verify:
   test bot. Never run it against the production update consumer.
 - `tests/probes/pending_requests.py`: opt-in input/approval handoff across two
   clients of the same App Server; creates and archives its own test chat.
+
+## Done chronology and calendar dividers
+
+- `internal/storage/store_task_done_test.go`: direct creation, accepted manual entry,
+  same-column reorder/edit preservation, exit/re-entry, conflict and transactional
+  rollback, compact projection, reopen persistence, ordinary rule and legacy merge
+  completion using acceptance time rather than stale observation time.
+- Old-schema fixtures cover known last entries, ignored later edits/reorders, legacy
+  polling ambiguity after an earlier completion, missing/invalid evidence, conflicting
+  same-instant evidence, sub-millisecond history ordering and one-time backfill.
+- `internal/storage/store_task_rules_test.go`: source children created directly in
+  Done receive their creation instant without generating a launch request.
+- `ui/src/doneChronology.test.ts`: descending completion order independent of manual
+  positions, sub-millisecond precision, stable ties/unknowns, browser calendar days,
+  yesterday across DST, older years and optimistic cross-column dates.
+- `ui/src/drag.test.tsx`: grouped Done/search, midnight relabeling, whole expanded
+  target without an insertion gap, failed-save day-group rollback, no intra-Done
+  reorder; existing hidden Done and other-column drag regressions remain required.
+- Browser acceptance: inspect day divider spacing and narrow wrapping in the existing
+  palette; drag from/to populated and empty Done, verify outline/no insertion gaps,
+  no lift jump for Done neighbors, smooth landing/rollback and unchanged collapsed
+  target bounds. Native visual acceptance requires an available browser surface.

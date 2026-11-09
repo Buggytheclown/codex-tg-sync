@@ -75,7 +75,7 @@ func (s *Store) AcceptTaskPollingOutcome(ctx context.Context, out model.TaskPoll
 			return false, err
 		}
 		if complete {
-			if _, err := tx.ExecContext(ctx, `UPDATE tasks SET column='done',version=version+1,updated_at=? WHERE id=?`, now, t.ID); err != nil {
+			if _, err := tx.ExecContext(ctx, `UPDATE tasks SET column='done',version=version+1,updated_at=?,done_at=? WHERE id=?`, now, model.NowString(), t.ID); err != nil {
 				return false, err
 			}
 			if _, err := tx.ExecContext(ctx, `UPDATE task_polling SET generation=generation+1,last_attempt_at=?,last_success_at=?,last_error='',next_check_at='' WHERE task_id=?`, now, now, t.ID); err != nil {
@@ -237,7 +237,11 @@ func (s *Store) AcceptTaskPollingOutcome(ctx context.Context, out model.TaskPoll
 		return false, err
 	}
 	if acceptedEvent && p.Mode == model.PollingOnce {
-		_, err = tx.ExecContext(ctx, `UPDATE tasks SET column=?,version=version+1,updated_at=? WHERE id=?`, pollingDestination(p.Action), now, t.ID)
+		doneAt := model.TimeString("")
+		if pollingDestination(p.Action) == model.TaskDone {
+			doneAt = model.NowString()
+		}
+		_, err = tx.ExecContext(ctx, `UPDATE tasks SET column=?,version=version+1,updated_at=?,done_at=? WHERE id=?`, pollingDestination(p.Action), now, doneAt, t.ID)
 		if err != nil {
 			return false, err
 		}

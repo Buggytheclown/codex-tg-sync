@@ -112,7 +112,7 @@ func TestSourceCanCreateDoneTaskWithoutLaunch(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, task := range tasks {
-		if task.SourceTaskID == source.ID && (task.Column != model.TaskDone || len(task.Requests) > 0) {
+		if task.SourceTaskID == source.ID && (task.Column != model.TaskDone || task.DoneAt == "" || task.DoneAt != task.CreatedAt || len(task.Requests) > 0) {
 			t.Fatal(task)
 		}
 	}

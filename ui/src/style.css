@@ -584,3 +584,10 @@ body.board-dragging .board .card-with-link { transform: none; transition: border
 .detail-tab-stage { position: relative; min-width: 0; }
 .detail-tab-stage.is-sliding { overflow: clip; }
 .tab-exit-view { position: absolute; left: 0; top: 0; width: 100%; margin: 0; pointer-events: none; }
+
+/* Done keeps its chronology; a column outline accepts completion without a gap. */
+.done-day { display: flex; align-items: center; gap: 10px; margin: 8px 4px 0; color: var(--muted); font-size: 12px; line-height: 1.5; font-weight: 500; }
+.done-day:first-child { margin-top: 0; }
+.done-day::after { content: ""; flex: 1; height: 1px; background: var(--border); opacity: .6; }
+.column.done.done-drop-active { outline: 1px solid var(--blue-border); outline-offset: -1px; }
+.done .card-slot.drag-origin { position: relative; }

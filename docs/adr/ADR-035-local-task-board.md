@@ -392,3 +392,31 @@ recognizes its original flat keys. Compatibility does not rewrite history,
 child source keys or frozen requests, and needs no migration job or schema.
 Repeated or interrupted updates retain the same durable protection. The retired
 file-based poller keeps its historical date keys for existing import records.
+
+## Done chronology amendment
+
+Done uses `done_at`, the UTC time of the last accepted entry, rather than manual
+`position` or mutable `updated_at`. Creation directly in Done uses creation time;
+manual moves and both polling completion paths write the entry date in their existing
+transaction. Polling observation time does not backdate acceptance. Leaving Done
+clears the date; re-entry starts a new stint. Same-column operations, edits, duplicate
+or stale polling outcomes preserve it. Full tasks and compact cards expose the date.
+
+An additive, one-time transactional migration restores current Done dates only from
+an unambiguous latest column-affecting history event. A destination-free legacy
+polling event cannot inherit an earlier completion. Missing/invalid/ambiguous evidence
+stays unknown; history, task versions and unrelated state are preserved. This avoids
+new per-card history reads on board refresh.
+
+The board sorts Done by descending entry instant with stable ID ties and unknowns
+last, then inserts compact Today/Yesterday/calendar-date headings in the browser's
+local timezone. Other-year dates include the year. Unknown dates have their own last
+group. Search precedes grouping; the existing reconcile/focus refresh updates day
+labels without reload. Other columns retain manual order and existing controls.
+
+Expanded Done accepts a whole-column drop with an outline, without an insertion gap
+or arbitrary insertion anchor. A cross-column completion appears at the top, with a
+provisional client date replaced by the server date; failure restores its previous
+column/date/group. Drag within Done is a no-op; dragging out retains normal placement.
+The lifted Done card retains its original hidden footprint until release, so no
+neighbor shifts merely on lift. The collapsed Done target keeps its fixed geometry.
