@@ -27,7 +27,7 @@ type Session = control.RuntimeSession
 type Sender interface {
 	SendMessage(ctx context.Context, chatID, topicID int64, text string, buttons [][]model.ButtonSpec, options model.SendOptions) (int64, error)
 	SendRenderedMessages(ctx context.Context, chatID, topicID int64, messages []model.RenderedMessage, buttons [][]model.ButtonSpec, options model.SendOptions) ([]int64, error)
-	EditMessage(ctx context.Context, chatID, topicID, messageID int64, text string, buttons [][]model.ButtonSpec) error
+	EditMessage(ctx context.Context, chatID, topicID, messageID int64, text string, buttons [][]model.ButtonSpec, options model.SendOptions) error
 	EditRenderedMessage(ctx context.Context, chatID, topicID, messageID int64, rendered model.RenderedMessage, buttons [][]model.ButtonSpec) error
 	DeleteMessage(ctx context.Context, chatID, topicID, messageID int64) error
 	SendDocumentData(ctx context.Context, chatID, topicID int64, fileName string, data []byte, caption string, options model.SendOptions) (int64, error)
@@ -58,10 +58,14 @@ func notifySendOptions() model.SendOptions {
 }
 
 type Service struct {
-	externalDispatchInFlight sync.Map
-	cfg                      config.Config
-	store                    *storage.Store
-	taskBoard                *tasks.Service
+	externalRenderMu            sync.Mutex
+	externalRenderInFlight      map[string]*externalRenderAttempt
+	externalBackgroundRendering bool
+	syncSubscriptionOperations  map[syncSubscriptionOperation]chan struct{}
+	externalDispatchInFlight    sync.Map
+	cfg                         config.Config
+	store                       *storage.Store
+	taskBoard                   *tasks.Service
 
 	liveFactory  func() Session
 	pollFactory  func() Session
@@ -686,7 +690,7 @@ func (s *Service) softResetSyncAfterTransportLoss(ctx context.Context, cause err
 	s.syncSubscribedThreads = map[string]bool{}
 	s.syncLeases = map[string]appserver.WriterLease[Session]{}
 	s.boardContinuationLeases = map[string]boardContinuationLease{}
-	if err := s.syncWriter.ForceClose(); err != nil {
+	if err := s.syncForumCallLocked(s.syncWriter.ForceClose); err != nil {
 		s.logLifecycle("sync_writer_close_failed", lifecycleFields{"error": err})
 	} else {
 		state, _ := s.store.GetSyncState(ctx)

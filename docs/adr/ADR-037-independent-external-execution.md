@@ -3,6 +3,8 @@
 Status: implemented; local validation is recorded in
 [the validation report](../process/external-launch-independent-of-telegram-validation.md).
 Amends ADR-029, ADR-032 and ADR-036 for accepted external launches.
+Manual rendering priority and background observation ownership are amended by
+[ADR-038](ADR-038-manual-action-priority.md).
 
 ## Decision
 

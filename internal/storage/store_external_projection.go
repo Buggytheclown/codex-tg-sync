@@ -84,7 +84,7 @@ func (s *Store) ClaimTelegramProjectionRetry(ctx context.Context, token, newID s
 		return nil, false, err
 	}
 	if expected.TopicID > 0 && expected.AttemptID == "" {
-		r, e := tx.ExecContext(ctx, `UPDATE sync_topics SET delivery_error='',delivery_revision=delivery_revision+1 WHERE session_id=? AND topic_id=? AND thread_id=? AND delivery_revision=? AND delivery_error<>'' AND telegram_state='connected'`, expected.SessionID, expected.TopicID, expected.ThreadID, expected.Revision)
+		r, e := tx.ExecContext(ctx, `UPDATE sync_topics SET delivery_request_id=(SELECT request_id FROM callback_routes WHERE route_token=?),delivery_error='',delivery_revision=delivery_revision+1 WHERE session_id=? AND topic_id=? AND thread_id=? AND delivery_revision=? AND delivery_error<>'' AND telegram_state='connected'`, token, expected.SessionID, expected.TopicID, expected.ThreadID, expected.Revision)
 		if e != nil {
 			return nil, false, e
 		}
@@ -100,6 +100,9 @@ func (s *Store) ClaimTelegramProjectionRetry(ctx context.Context, token, newID s
 		if n != 1 {
 			return nil, false, nil
 		}
+		if _, err = tx.ExecContext(ctx, `UPDATE external_launch_requests SET telegram_priority_version=telegram_priority_version+1 WHERE id=(SELECT request_id FROM callback_routes WHERE route_token=?)`, token); err != nil {
+			return nil, false, err
+		}
 		return nil, true, tx.Commit()
 	}
 	var payload string
@@ -112,6 +115,9 @@ func (s *Store) ClaimTelegramProjectionRetry(ctx context.Context, token, newID s
 	}
 	var op TopicCreation
 	if err = json.Unmarshal([]byte(payload), &op); err != nil {
+		return nil, false, err
+	}
+	if err = tx.QueryRowContext(ctx, `SELECT coalesce(request_id,'') FROM callback_routes WHERE route_token=?`, token).Scan(&op.ManualRequestID); err != nil {
 		return nil, false, err
 	}
 	op.ID = newID
@@ -133,15 +139,29 @@ func (s *Store) ClaimTelegramProjectionRetry(ctx context.Context, token, newID s
 	if err != nil {
 		return nil, false, err
 	}
+	if _, err = tx.ExecContext(ctx, `UPDATE external_launch_requests SET telegram_priority_version=telegram_priority_version+1 WHERE id=(SELECT request_id FROM callback_routes WHERE route_token=?)`, token); err != nil {
+		return nil, false, err
+	}
 	return &op, true, tx.Commit()
 }
+
+// Completion consumes the manual marker only for the delivery revision that
+// claimed it. A late old worker cannot acknowledge a newer recovery action.
 func (s *Store) SetSyncDeliveryError(ctx context.Context, session string, topic int64, revision int64, message string) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer rollback(tx)
-	r, err := tx.ExecContext(ctx, `UPDATE sync_topics SET delivery_error=?,delivery_revision=delivery_revision+1 WHERE session_id=? AND topic_id=? AND delivery_revision=? AND delivery_error<>? AND telegram_state='connected'`, message, session, topic, revision, message)
+	var request string
+	err = tx.QueryRowContext(ctx, `SELECT delivery_request_id FROM sync_topics WHERE session_id=? AND topic_id=? AND delivery_revision=? AND telegram_state='connected'`, session, topic, revision).Scan(&request)
+	if err == sql.ErrNoRows {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	r, err := tx.ExecContext(ctx, `UPDATE sync_topics SET delivery_error=?,delivery_revision=delivery_revision+1,delivery_request_id='' WHERE session_id=? AND topic_id=? AND delivery_revision=? AND (delivery_error<>? OR delivery_request_id<>'') AND telegram_state='connected'`, message, session, topic, revision, message)
 	if err != nil {
 		return err
 	}
@@ -149,7 +169,7 @@ func (s *Store) SetSyncDeliveryError(ctx context.Context, session string, topic 
 	if n == 0 {
 		return nil
 	}
-	_, err = tx.ExecContext(ctx, `UPDATE external_launch_requests SET telegram_rendered_fp='' WHERE thread_id IN (SELECT thread_id FROM sync_topics WHERE session_id=? AND topic_id=?)`, session, topic)
+	_, err = tx.ExecContext(ctx, `UPDATE external_launch_requests SET telegram_rendered_fp='',telegram_priority_version=telegram_priority_version+CASE WHEN id=? THEN 1 ELSE 0 END WHERE thread_id IN (SELECT thread_id FROM sync_topics WHERE session_id=? AND topic_id=?)`, request, session, topic)
 	if err != nil {
 		return err
 	}
@@ -161,7 +181,7 @@ func (s *Store) SyncDeliveryRevision(ctx context.Context, session string, topic 
 	err := s.db.QueryRowContext(ctx, `SELECT delivery_revision FROM sync_topics WHERE session_id=? AND topic_id=?`, session, topic).Scan(&n)
 	return n, err
 }
-func (s *Store) MarkExternalTelegramFingerprint(ctx context.Context, id, fp string, expected ThreadTelegramProjection) error {
+func (s *Store) MarkExternalTelegramFingerprint(ctx context.Context, id, fp string, expected ThreadTelegramProjection, priorityVersion int64) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -174,7 +194,7 @@ func (s *Store) MarkExternalTelegramFingerprint(ctx context.Context, id, fp stri
 	if current != expected {
 		return nil
 	}
-	_, err = tx.ExecContext(ctx, `UPDATE external_launch_requests SET telegram_rendered_fp=? WHERE id=?`, fp, id)
+	_, err = tx.ExecContext(ctx, `UPDATE external_launch_requests SET telegram_rendered_fp=?,telegram_rendered_priority_version=? WHERE id=? AND telegram_priority_version=?`, fp, priorityVersion, id, priorityVersion)
 	if err != nil {
 		return err
 	}

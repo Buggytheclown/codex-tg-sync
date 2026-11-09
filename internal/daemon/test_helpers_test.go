@@ -87,11 +87,11 @@ func (s *recordingSender) SendRenderedMessages(_ context.Context, chatID, topicI
 	return ids, nil
 }
 
-func (s *recordingSender) EditMessage(_ context.Context, chatID, topicID, messageID int64, text string, buttons [][]model.ButtonSpec) error {
+func (s *recordingSender) EditMessage(_ context.Context, chatID, topicID, messageID int64, text string, buttons [][]model.ButtonSpec, options model.SendOptions) error {
 	if s.editErr != nil {
 		return s.editErr
 	}
-	s.edits = append(s.edits, recordedMessage{chatID: chatID, topicID: topicID, messageID: messageID, text: text, buttons: buttons})
+	s.edits = append(s.edits, recordedMessage{chatID: chatID, topicID: topicID, messageID: messageID, text: text, buttons: buttons, options: options})
 	return nil
 }
 

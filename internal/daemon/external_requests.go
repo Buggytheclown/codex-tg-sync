@@ -78,11 +78,12 @@ func (s *Service) processExternalLaunchRequests(ctx context.Context) {
 	s.externalRequestMu.Lock()
 	s.renderExternalLaunchRequestsLocked(ctx, sender)
 	s.externalRequestMu.Unlock()
+	s.startExternalBackgroundRender(ctx, sender)
 }
 
 func (s *Service) renderExternalLaunchRequestsLocked(ctx context.Context, sender Sender) {
 	if sender != nil && s.cfg.SyncGroupID != 0 {
-		requests, err := s.store.ListExternalLaunchRequestsForTelegram(ctx, 20)
+		requests, err := s.store.ListExternalTelegramPriority(ctx, 20, false)
 		if err != nil {
 			s.logLifecycle("external_launch_telegram_list_failed", lifecycleFields{"error": err})
 		} else {
@@ -288,7 +289,7 @@ func (s *Service) deliverExternalMessage(ctx context.Context, sender ExternalRep
 	s.logLifecycle("external_"+kind+"_failed", lifecycleFields{"request_id": request.ID, "source": request.Source, "attempt": attempt, "dead": dead, "error": sendErr})
 }
 
-func (s *Service) renderExternalLaunchRequest(ctx context.Context, sender Sender, request model.ExternalLaunchRequest) error {
+func (s *Service) renderOwnedExternalLaunchRequest(ctx context.Context, sender Sender, request model.ExternalLaunchRequest) error {
 	p, err := s.externalTelegramProjection(ctx, request)
 	if err != nil {
 		return err
@@ -301,7 +302,7 @@ func (s *Service) renderExternalLaunchRequest(ctx context.Context, sender Sender
 		}
 	}
 	fp := syncFingerprint(text + storage.MustJSON(p) + request.DispatchPhase)
-	if request.TelegramMessageID != 0 && request.TelegramRenderedStatus == request.Status && request.TelegramRenderedFP == fp {
+	if request.TelegramMessageID != 0 && request.TelegramRenderedStatus == request.Status && request.TelegramRenderedFP == fp && request.TelegramPriorityVersion == request.TelegramRenderedPriorityVersion {
 		return nil
 	}
 	if err := s.enqueueExternalTerminalNotice(ctx, request); err != nil {
@@ -328,9 +329,11 @@ func (s *Service) renderExternalLaunchRequest(ctx context.Context, sender Sender
 		if err := s.store.MarkExternalLaunchRequestTelegramSent(ctx, request.ID, messageID, request.Status); err != nil {
 			return err
 		}
-		return s.store.MarkExternalTelegramFingerprint(ctx, request.ID, fp, p)
+		return s.store.MarkExternalTelegramFingerprint(ctx, request.ID, fp, p, request.TelegramPriorityVersion)
 	}
-	_ = s.store.ExpireExternalLaunchCallbackRoutes(ctx, request.ID)
+	if request.TelegramForeground() {
+		_ = s.store.ExpireExternalLaunchCallbackRoutes(ctx, request.ID)
+	}
 	buttons, routes, err := s.externalLaunchActionsForProjection(ctx, request, p)
 	if err != nil {
 		return err
@@ -341,13 +344,18 @@ func (s *Service) renderExternalLaunchRequest(ctx context.Context, sender Sender
 			return err
 		}
 	}
-	if err := sender.EditMessage(ctx, s.cfg.SyncGroupID, request.TelegramTopicID, request.TelegramMessageID, text, buttons); err != nil {
+	if err := sender.EditMessage(ctx, s.cfg.SyncGroupID, request.TelegramTopicID, request.TelegramMessageID, text, buttons, model.SendOptions{Background: !request.TelegramForeground()}); err != nil {
 		return err
+	}
+	if !request.TelegramForeground() {
+		if err := s.store.ExpireExternalLaunchRoutesExcept(ctx, request.ID, routes); err != nil {
+			return err
+		}
 	}
 	if err := s.store.MarkExternalLaunchRequestTelegramRendered(ctx, request.ID, request.TelegramMessageID, request.Status); err != nil {
 		return err
 	}
-	return s.store.MarkExternalTelegramFingerprint(ctx, request.ID, fp, p)
+	return s.store.MarkExternalTelegramFingerprint(ctx, request.ID, fp, p, request.TelegramPriorityVersion)
 }
 
 func (s *Service) externalLaunchActions(ctx context.Context, request model.ExternalLaunchRequest) ([][]model.ButtonSpec, []model.CallbackRoute, error) {

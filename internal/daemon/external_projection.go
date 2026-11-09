@@ -41,7 +41,11 @@ func (s *Service) handleExternalTelegramRetry(ctx context.Context, r model.Exter
 	_ = s.store.InvalidateExternalProjection(ctx, r.ThreadID)
 	s.wakeExternalLaunchRenderer()
 	if op != nil {
-		s.spawn(ctx, func(ctx context.Context) { s.runExternalTopicRetry(ctx, *op) })
+		s.spawn(ctx, func(ctx context.Context) {
+			s.runExternalTopicRetry(ctx, *op)
+			s.enqueueSyncDelivery(r.ThreadID)
+			s.wakeExternalLaunchRenderer()
+		})
 	} else {
 		s.enqueueSyncDelivery(r.ThreadID)
 	}

@@ -42,7 +42,7 @@ func (s *Service) reconcileBoardThreadsLocked(ctx context.Context) {
 		if lease, ok := s.syncLeases[id]; ok {
 			reader = lease.Process
 		}
-		current, err := readAuthoritativeSyncSnapshot(ctx, reader, id)
+		current, err := s.readSyncObservationLocked(ctx, reader, id, false)
 		if err != nil {
 			continue
 		}

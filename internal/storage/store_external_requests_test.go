@@ -422,7 +422,7 @@ func TestRefreshExternalLaunchActionCardsForStartup(t *testing.T) {
 		t.Fatalf("refresh=%d err=%v", changed, err)
 	}
 	stored, _ := store.GetExternalLaunchRequest(ctx, request.ID)
-	if stored.Status != model.ExternalLaunchFailed || stored.TelegramRenderedStatus != "" {
+	if stored.Status != model.ExternalLaunchFailed || stored.TelegramRenderedStatus != model.ExternalLaunchFailed || stored.TelegramForeground() {
 		t.Fatalf("refreshed request=%#v", stored)
 	}
 }

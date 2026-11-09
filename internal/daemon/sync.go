@@ -213,6 +213,21 @@ func (s *Service) dispatchSyncMessage(ctx context.Context, topic model.SyncTopic
 	if err := s.syncMutationErrorLocked(ctx); err != nil {
 		return &DirectResponse{Text: err.Error()}, nil
 	}
+	if waited, err := s.waitSyncWriterCleanupLocked(ctx, topic.ThreadID); err != nil {
+		return nil, err
+	} else if waited {
+		if err := s.syncMutationErrorLocked(ctx); err != nil {
+			return &DirectResponse{Text: err.Error()}, nil
+		}
+		fresh, err := s.store.GetActiveSyncTopic(ctx, topic.ChatID, topic.TopicID)
+		if err != nil {
+			return nil, err
+		}
+		if fresh == nil || fresh.SessionID != topic.SessionID || fresh.ThreadID != topic.ThreadID {
+			return &DirectResponse{Text: "This Sync topic changed while its connection was being released."}, nil
+		}
+		topic = *fresh
+	}
 	ctx = s.syncRPCContextLocked(ctx, topic.SessionID)
 	receipt, created, err := s.store.AcceptSyncMessage(ctx, topic.ChatID, topic.TopicID, messageID)
 	if err != nil {
@@ -558,7 +573,7 @@ func (s *Service) activateSync(ctx context.Context, userID int64) (*DirectRespon
 	if err != nil {
 		return nil, err
 	}
-	threads, err := listSyncThreads(ctx, poll)
+	threads, err := s.listSyncObservationsLocked(ctx, poll)
 	if err != nil {
 		return nil, fmt.Errorf("Sync activation thread/list: %w", err)
 	}
@@ -753,7 +768,7 @@ func (s *Service) reconcileSyncLocked(ctx context.Context) (reconcileSyncResult,
 	}
 	s.reportHealthRecovered(ctx, "sync.resume", "Sync group and Control verified")
 	if s.syncWriter.Snapshot().State == appserver.WriterClosing {
-		if err := s.syncWriter.ForceClose(); err == nil {
+		if err := s.syncForumCallLocked(s.syncWriter.ForceClose); err == nil {
 			state, _ := s.store.GetSyncState(ctx)
 			if state.State == model.SyncStateActive {
 				_ = s.syncWriter.AcceptNewWork()
@@ -781,12 +796,32 @@ func (s *Service) reconcileSyncLocked(ctx context.Context) (reconcileSyncResult,
 	if err != nil {
 		return result, err
 	}
-	for _, topic := range topics {
+	observation, err := s.syncObservationOwnerLocked(ctx, "")
+	if err != nil {
+		return result, err
+	}
+	for _, candidate := range topics {
+		currentOwner, ownerErr := s.syncObservationOwnerLocked(ctx, "")
+		if ownerErr != nil {
+			return result, ownerErr
+		}
+		if currentOwner != observation {
+			return result, errStaleSyncObservation
+		}
+		fresh, topicErr := s.store.GetActiveSyncTopicByThread(ctx, state.SessionID, candidate.ThreadID)
+		if topicErr != nil || fresh == nil || fresh.TopicID != candidate.TopicID {
+			continue
+		}
+		topic := *fresh
+		owner, ownerErr := s.syncObservationOwnerLocked(ctx, topic.ThreadID)
+		if ownerErr != nil {
+			continue
+		}
 		if topic.TelegramState != model.SyncTopicConnected {
 			continue
 		}
 		result.Connected++
-		current, readErr := readLatestSyncSummary(ctx, poll, topic.ThreadID)
+		current, readErr := s.readSyncObservationLocked(ctx, poll, topic.ThreadID, true)
 		if readErr != nil {
 			result.ReadFailures++
 			continue
@@ -795,6 +830,10 @@ func (s *Service) reconcileSyncLocked(ctx context.Context) (reconcileSyncResult,
 			if err := s.updateSyncPollSubscriptionLocked(ctx, topic, current); err != nil {
 				result.SubscriptionFailures++
 			}
+		}
+		afterOwner, ownerErr := s.syncObservationOwnerLocked(ctx, topic.ThreadID)
+		if ownerErr != nil || afterOwner != owner {
+			continue
 		}
 		previous, _ := s.store.GetSnapshot(ctx, topic.ThreadID)
 		_, writerOwned := s.syncLeases[topic.ThreadID]
@@ -810,12 +849,23 @@ func (s *Service) reconcileSyncLocked(ctx context.Context) (reconcileSyncResult,
 				continue
 			}
 		}
-		current, readErr = readLatestSyncSnapshot(ctx, poll, topic.ThreadID)
+		current, readErr = s.readSyncObservationLocked(ctx, poll, topic.ThreadID, false)
 		if readErr != nil {
 			result.ReadFailures++
 			continue
 		}
+		afterOwner, ownerErr = s.syncObservationOwnerLocked(ctx, topic.ThreadID)
+		if ownerErr != nil || afterOwner != owner {
+			continue
+		}
 		s.processSyncSnapshotLocked(ctx, state, forum, topic, current, "sync_poll")
+	}
+	currentOwner, ownerErr := s.syncObservationOwnerLocked(ctx, "")
+	if ownerErr != nil {
+		return result, ownerErr
+	}
+	if currentOwner != observation {
+		return result, errStaleSyncObservation
 	}
 	var discoveryErr error
 	if state.State == model.SyncStateActive {
@@ -872,9 +922,13 @@ func (s *Service) discoverSyncThreadsLocked(ctx context.Context, state model.Syn
 	}
 
 	cutoff := s.now().UTC().Add(-syncTopicInactiveAge).Unix()
-	threads, err := listSyncThreads(ctx, poll)
+	threads, err := s.listSyncObservationsLocked(ctx, poll)
 	if err != nil {
 		return 0, 0, fmt.Errorf("Sync discovery thread/list: %w", err)
+	}
+	topics, err = s.store.ListSyncTopics(ctx, state.SessionID)
+	if err != nil {
+		return 0, 0, err
 	}
 	bound := make(map[string]struct{}, len(topics))
 	nextRank := 0
@@ -998,6 +1052,12 @@ func (s *Service) subscribeSyncThreadLocked(ctx context.Context, poll Session, p
 	if !s.usesSharedAppServer() {
 		return true
 	}
+	s.mu.RLock()
+	valid := poll == s.poll && pollGeneration == s.pollGeneration && s.pollConnected
+	s.mu.RUnlock()
+	if !valid {
+		return false
+	}
 	if s.syncSubscribedThreads == nil || s.syncSubscribedPollGeneration != pollGeneration {
 		s.syncSubscribedThreads = map[string]bool{}
 		s.syncSubscribedPollGeneration = pollGeneration
@@ -1006,7 +1066,9 @@ func (s *Service) subscribeSyncThreadLocked(ctx context.Context, poll Session, p
 		return true
 	}
 	s.syncSubscribedThreads[threadID] = false
-	if _, err := poll.ThreadResume(ctx, threadID, ""); err != nil {
+	if err := s.syncSubscriptionIOLocked(ctx, poll, threadID, func(o syncObservationOwner) bool {
+		return o.poll == poll && o.generation == pollGeneration && o.connected
+	}, func() error { _, err := poll.ThreadResume(ctx, threadID, ""); return err }); err != nil {
 		return false
 	}
 	s.syncSubscribedThreads[threadID] = true
@@ -1065,7 +1127,7 @@ func (s *Service) syncTelegramOriginHotPollOnce(ctx context.Context, threadID, t
 	if !connected || poll == nil {
 		return true
 	}
-	current, readErr := readLatestSyncSnapshot(ctx, poll, threadID)
+	current, readErr := s.readSyncObservationLocked(ctx, poll, threadID, false)
 	if readErr != nil {
 		return true
 	}
@@ -1381,7 +1443,7 @@ func (s *Service) reconcileSyncThread(ctx context.Context, threadID string) {
 	if session == nil || (session == poll && !connected) {
 		return
 	}
-	current, err := readAuthoritativeSyncSnapshot(ctx, session, threadID)
+	current, err := s.readSyncObservationLocked(ctx, session, threadID, false)
 	if err != nil {
 		s.wakeSyncReconcile()
 		return
@@ -2010,7 +2072,7 @@ func (s *Service) refreshSyncDirectDelivery(ctx context.Context, chatID, topicID
 	if !connected || poll == nil {
 		return
 	}
-	current, err := readLatestSyncSnapshot(ctx, poll, threadID)
+	current, err := s.readSyncObservationLocked(ctx, poll, threadID, false)
 	if err != nil {
 		return
 	}

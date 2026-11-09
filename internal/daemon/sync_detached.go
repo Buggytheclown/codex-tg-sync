@@ -22,7 +22,7 @@ func (s *Service) reconcileDetachedSyncWorkLocked(ctx context.Context) {
 		if process == nil {
 			continue
 		}
-		current, err := readAuthoritativeSyncSnapshot(ctx, process, topic.ThreadID)
+		current, err := s.readSyncObservationLocked(ctx, process, topic.ThreadID, false)
 		if err != nil {
 			continue
 		}

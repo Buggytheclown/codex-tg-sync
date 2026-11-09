@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/mideco-tech/codex-tg/internal/appserver"
 	"github.com/mideco-tech/codex-tg/internal/model"
@@ -15,10 +16,12 @@ func (s *Service) dispatchExternalLaunchRequest(ctx context.Context, requestID s
 	}
 	defer s.externalDispatchInFlight.Delete(requestID)
 	ctx = context.WithValue(ctx, syncExternalRequestKey{}, requestID)
+	waitStarted := time.Now()
 	s.syncMu.Lock()
 	defer s.syncMu.Unlock()
 	s.taskLaunchMu.Lock()
 	defer s.taskLaunchMu.Unlock()
+	s.logLifecycle("external_launch_dispatch_entered", lifecycleFields{"request_id": requestID, "gate_wait_ms": time.Since(waitStarted).Milliseconds()})
 	request, err := s.store.GetExternalLaunchRequest(ctx, requestID)
 	if err != nil || request == nil || request.Status != model.ExternalLaunchStarting {
 		return
@@ -129,8 +132,30 @@ func (s *Service) dispatchExternalContinuationLocked(ctx context.Context, r mode
 		s.failExternalDispatch(ctx, r, "target_thread", fmt.Errorf("continuation target changed"), false)
 		return
 	}
+	admitted, admissionErr := s.store.GetSyncState(ctx)
+	if admissionErr != nil {
+		return
+	}
+	waited, waitErr := s.waitSyncWriterCleanupLocked(ctx, threadID)
+	if waitErr != nil {
+		return
+	}
+	if waited {
+		latest, err := s.store.GetExternalLaunchRequest(ctx, r.ID)
+		if err != nil || latest == nil || latest.Status != model.ExternalLaunchStarting {
+			return
+		}
+		r = *latest
+	}
 	state, err := s.store.GetSyncState(ctx)
 	if err != nil {
+		return
+	}
+	if state.SessionID != admitted.SessionID || state.State != model.SyncStateActive || state.ChatID != s.cfg.SyncGroupID || state.SecurityState != model.SyncSecurityValid {
+		_, _ = s.store.ResetExternalLaunchRequestPending(ctx, r.ID, "sync_inactive", "Sync changed before dispatch; press Start again in the current session.")
+		return
+	}
+	if r.DispatchPhase != model.ExternalDispatchNotSent && r.DispatchPhase != model.ExternalDispatchThreadReady {
 		return
 	}
 	ctx = s.syncRPCContextLocked(ctx, state.SessionID)

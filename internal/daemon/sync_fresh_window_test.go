@@ -40,7 +40,7 @@ func TestSyncFreshWindowDiscoversAllPagesInSmallBatches(t *testing.T) {
 	state, _ := service.store.GetSyncState(ctx)
 	for pass := 0; pass < 20; pass++ {
 		topics, _ := service.store.ListSyncTopics(ctx, state.SessionID)
-		created, failures, err := service.discoverSyncThreadsLocked(ctx, state, forum, poll, topics)
+		created, failures, err := service.discoverSyncThreadsForTest(ctx, state, forum, poll, topics)
 		if err != nil || failures != 0 || created > 5 {
 			t.Fatalf("pass %d: created=%d failures=%d err=%v", pass, created, failures, err)
 		}
@@ -185,9 +185,10 @@ func TestSyncFreshWindowUnknownActivationBlocksAutomaticCreateRetry(t *testing.T
 	}
 	defer reloaded.Close()
 	reloaded.SetSyncForum(forum)
+	reloaded.poll, reloaded.pollConnected = poll, true
 	state, _ := reloaded.store.GetSyncState(ctx)
 	for pass := 0; pass < 2; pass++ {
-		created, _, err := reloaded.discoverSyncThreadsLocked(ctx, state, forum, poll, nil)
+		created, _, err := reloaded.discoverSyncThreadsForTest(ctx, state, forum, poll, nil)
 		if err != nil || created != 0 {
 			t.Fatalf("created=%d err=%v, want durable pause", created, err)
 		}
@@ -212,7 +213,7 @@ func TestSyncFreshWindowDiscoveryStopsAfterUnknownCreate(t *testing.T) {
 	forum := &fakeSyncForum{createErrAt: 1, createErr: NewSyncForumFailure(SyncForumFailureUnknown, errors.New("EOF"))}
 	for pass := 0; pass < 2; pass++ {
 		topics, _ := service.store.ListSyncTopics(ctx, "s")
-		created, _, err := service.discoverSyncThreadsLocked(ctx, state, forum, poll, topics)
+		created, _, err := service.discoverSyncThreadsForTest(ctx, state, forum, poll, topics)
 		if err != nil || (pass == 0 && created != 1) || (pass == 1 && created != 0) {
 			t.Fatalf("created=%d err=%v, want pause after unknown create", created, err)
 		}
@@ -242,7 +243,7 @@ func TestSyncFreshWindowDefinitiveFailuresDoNotStarveLaterChats(t *testing.T) {
 	}
 	for pass := 0; pass < 2; pass++ {
 		topics, _ := service.store.ListSyncTopics(ctx, "s")
-		if _, _, err := service.discoverSyncThreadsLocked(ctx, state, forum, poll, topics); err != nil {
+		if _, _, err := service.discoverSyncThreadsForTest(ctx, state, forum, poll, topics); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -336,7 +337,9 @@ func TestSyncTerminalReadPreservesStatusDeliveredAfterTopicRead(t *testing.T) {
 	service.syncBotReady = true
 	service.syncValidatedSession = state.SessionID
 	terminal := appserver.SnapshotFromThreadRead(syncCompletedPayload("thread-1", "turn-1", "done"))
+	service.syncMu.Lock()
 	service.processSyncSnapshotLocked(ctx, state, forum, *stale, terminal, "sync_poll")
+	service.syncMu.Unlock()
 	topic, err := service.store.GetActiveSyncTopic(ctx, -1001, 11)
 	if err != nil || topic == nil || topic.StatusMessageID != delivered.StatusMessageID {
 		t.Fatalf("topic=%#v err=%v, want confirmed Status anchor %d preserved", topic, err, delivered.StatusMessageID)
@@ -345,4 +348,11 @@ func TestSyncTerminalReadPreservesStatusDeliveredAfterTopicRead(t *testing.T) {
 	if len(forum.sends) != 2 || forum.sends[1].text != syncFinalHeader+"\ndone" {
 		t.Fatalf("sends=%#v, want original Status and Final without duplicate Status", forum.sends)
 	}
+}
+
+func (s *Service) discoverSyncThreadsForTest(ctx context.Context, state model.SyncState, forum SyncForum, poll Session, topics []model.SyncTopic) (int, int, error) {
+	s.syncMu.Lock()
+	defer s.syncMu.Unlock()
+	s.poll, s.pollConnected = poll, true
+	return s.discoverSyncThreadsLocked(ctx, state, forum, poll, topics)
 }

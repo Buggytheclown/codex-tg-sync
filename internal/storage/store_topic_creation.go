@@ -15,6 +15,7 @@ import (
 type TopicCreation struct {
 	ID, SessionID, Target, Title, ThreadID string
 	SupersedesID                           string
+	ManualRequestID                        string `json:",omitempty"`
 	LegacyTarget                           string
 	ChatID, TopicID                        int64
 	Rank                                   int
@@ -68,6 +69,15 @@ func (s *Store) TopicCreationResult(ctx context.Context, id string, topicID int6
 		return err
 	}
 	defer rollback(tx)
+	var priorState, payload string
+	var priorID int64
+	if err = tx.QueryRowContext(ctx, `SELECT state,topic_id,payload FROM sync_topic_creations WHERE id=?`, id).Scan(&priorState, &priorID, &payload); err != nil {
+		return err
+	}
+	var manual TopicCreation
+	if err = json.Unmarshal([]byte(payload), &manual); err != nil {
+		return err
+	}
 	if topicID > 0 {
 		_, err = tx.ExecContext(ctx, `UPDATE sync_topic_creations SET topic_id=? WHERE id=? AND (topic_id=0 OR topic_id=?)`, topicID, id, topicID)
 	} else {
@@ -86,6 +96,11 @@ func (s *Store) TopicCreationResult(ctx context.Context, id string, topicID int6
 			return err
 		}
 		if err = topicCreationNotice(ctx, tx, op, outcome); err != nil {
+			return err
+		}
+	}
+	if (topicID > 0 && priorID == 0) || (topicID == 0 && priorState != "confirmed" && priorState != outcome) {
+		if err = prioritizeManualTopicTx(ctx, tx, manual); err != nil {
 			return err
 		}
 	}
@@ -285,6 +300,16 @@ func (s *Store) MaterializeTopicCreation(ctx context.Context, op TopicCreation) 
 			return err
 		}
 	}
+	if op.ManualRequestID != "" {
+		if active != 0 && op.Draft == nil {
+			if _, err = tx.ExecContext(ctx, `UPDATE sync_topics SET delivery_request_id=?,delivery_revision=delivery_revision+1 WHERE session_id=? AND topic_id=? AND telegram_state='connected'`, op.ManualRequestID, op.SessionID, op.TopicID); err != nil {
+				return err
+			}
+		}
+		if err = prioritizeManualTopicTx(ctx, tx, op); err != nil {
+			return err
+		}
+	}
 	return tx.Commit()
 }
 
@@ -376,6 +401,9 @@ func (s *Store) RecoverTopicCreations(ctx context.Context) error {
 		return err
 	}
 	for _, op := range ops {
+		if err = prioritizeManualTopicTx(ctx, tx, op); err != nil {
+			return err
+		}
 		if err = topicCreationNotice(ctx, tx, op, "unknown after restart"); err != nil {
 			return err
 		}
@@ -412,4 +440,12 @@ func (s *Store) ReportSyncCleanup(ctx context.Context, session string, chatID, t
 		return err
 	}
 	return tx.Commit()
+}
+
+func prioritizeManualTopicTx(ctx context.Context, tx *sql.Tx, op TopicCreation) error {
+	if op.ManualRequestID == "" {
+		return nil
+	}
+	_, err := tx.ExecContext(ctx, `UPDATE external_launch_requests SET telegram_priority_version=telegram_priority_version+1,telegram_rendered_fp='' WHERE id=? AND status<>'dismissed'`, op.ManualRequestID)
+	return err
 }

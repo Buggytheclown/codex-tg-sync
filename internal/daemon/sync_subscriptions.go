@@ -53,7 +53,8 @@ func (s *Service) updateSyncPollSubscriptionLocked(ctx context.Context, topic mo
 	// Metadata and the last turn are separate reads; resolve contradictory activity before detaching.
 	status := syncSubscriptionStatus(current)
 	if (status == "idle" || status == "notloaded") && terminalGateSnapshotNeedsHotPolling(&current) {
-		payload, err := poll.ThreadRead(ctx, topic.ThreadID, false)
+		var payload map[string]any
+		err := s.syncValidatedIOLocked(ctx, topic.ThreadID, func(o syncObservationOwner) bool { return o.poll == poll && o.generation == generation && o.connected }, func() (err error) { payload, err = poll.ThreadRead(ctx, topic.ThreadID, false); return err })
 		if err != nil {
 			s.logLifecycle("sync_subscription_recheck_failed", lifecycleFields{"thread_id": topic.ThreadID, "error": err})
 			return err
@@ -82,13 +83,20 @@ func (s *Service) updateSyncPollSubscriptionLocked(ctx context.Context, topic mo
 }
 
 func (s *Service) unsubscribeSyncPollThreadLocked(ctx context.Context, poll Session, threadID string) error {
+	s.mu.RLock()
+	generation := s.pollGeneration
+	valid := poll == s.poll && s.pollConnected
+	s.mu.RUnlock()
+	if !valid {
+		return errStaleSyncObservation
+	}
 	if _, subscribed := s.syncSubscribedThreads[threadID]; !subscribed {
 		return nil
 	}
 	if ctx.Err() != nil {
 		return ctx.Err()
 	}
-	if err := poll.ThreadUnsubscribe(ctx, threadID); err != nil {
+	if err := s.syncSubscriptionIOLocked(ctx, poll, threadID, func(o syncObservationOwner) bool { return o.poll == poll && o.generation == generation && o.connected }, func() error { return poll.ThreadUnsubscribe(ctx, threadID) }); err != nil {
 		s.logLifecycle("sync_unsubscribe_failed", lifecycleFields{"thread_id": threadID, "role": "poll", "error": err})
 		return err
 	}
@@ -130,7 +138,7 @@ func (s *Service) unsubscribeSyncWriterLeaseLocked(ctx context.Context, lease ap
 	}
 	err := ctx.Err()
 	if err == nil {
-		err = lease.Process.ThreadUnsubscribe(ctx, lease.ThreadID)
+		err = s.syncSubscriptionIOLocked(ctx, lease.Process, lease.ThreadID, func(o syncObservationOwner) bool { return o.poolGeneration == lease.Generation }, func() error { return lease.Process.ThreadUnsubscribe(ctx, lease.ThreadID) })
 	}
 	if err != nil {
 		if s.syncPendingUnsubscribes == nil {
@@ -178,5 +186,51 @@ func (s *Service) closeSyncSubscriptionsLocked(ctx context.Context) {
 			return
 		}
 		s.unsubscribeSyncWriterLeaseLocked(ctx, lease)
+	}
+}
+
+type syncSubscriptionOperation struct {
+	session Session
+	thread  string
+}
+
+func (s *Service) syncSubscriptionIOLocked(ctx context.Context, source Session, thread string, valid func(syncObservationOwner) bool, call func() error) error {
+	key := syncSubscriptionOperation{source, thread}
+	if s.syncSubscriptionOperations[key] != nil {
+		return errStaleSyncObservation
+	}
+	if s.syncSubscriptionOperations == nil {
+		s.syncSubscriptionOperations = map[syncSubscriptionOperation]chan struct{}{}
+	}
+	done := make(chan struct{})
+	s.syncSubscriptionOperations[key] = done
+	defer func() { delete(s.syncSubscriptionOperations, key); close(done) }()
+	return s.syncValidatedIOLocked(ctx, thread, valid, call)
+}
+
+// A retry of an old writer unsubscribe is a same-target mutation prerequisite,
+// not a global maintenance gate. Ordering that exact connection/thread prevents
+// a late unsubscribe from detaching a newly resumed turn. Other targets pass.
+func (s *Service) waitSyncWriterCleanupLocked(ctx context.Context, thread string) (bool, error) {
+	waited := false
+	for {
+		pending, ok := s.syncPendingUnsubscribes[thread]
+		if !ok {
+			return waited, nil
+		}
+		done := s.syncSubscriptionOperations[syncSubscriptionOperation{pending.Process, thread}]
+		if done == nil {
+			return waited, nil
+		}
+		waited = true
+		s.unlockSyncDispatch(ctx)
+		select {
+		case <-done:
+		case <-ctx.Done():
+		}
+		s.lockSyncDispatch(ctx)
+		if ctx.Err() != nil {
+			return waited, ctx.Err()
+		}
 	}
 }

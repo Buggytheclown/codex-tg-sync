@@ -92,7 +92,7 @@ func (p *probeTelegram) SendMessage(ctx context.Context, chat, topic int64, text
 	}
 	return r.ID, err
 }
-func (p *probeTelegram) EditMessage(ctx context.Context, chat, topic, id int64, text string, buttons [][]model.ButtonSpec) error {
+func (p *probeTelegram) EditMessage(ctx context.Context, chat, topic, id int64, text string, buttons [][]model.ButtonSpec, options model.SendOptions) error {
 	err := p.call(ctx, "editMessageText", map[string]any{"chat_id": chat, "message_id": id, "text": text, "reply_markup": probeButtons(buttons)}, nil)
 	if err == nil && id == p.card {
 		p.buttons = buttons
@@ -122,7 +122,7 @@ func (p *probeTelegram) SendSyncMessage(ctx context.Context, topic int64, m mode
 	return p.SendMessage(ctx, p.group, topic, m.Text, nil, o)
 }
 func (p *probeTelegram) EditSyncMessage(ctx context.Context, topic, id int64, m model.RenderedMessage, o model.SendOptions) error {
-	return p.EditMessage(ctx, p.group, topic, id, m.Text, nil)
+	return p.EditMessage(ctx, p.group, topic, id, m.Text, nil, o)
 }
 func (p *probeTelegram) RenameSyncTopic(ctx context.Context, topic int64, title string) error {
 	return p.call(ctx, "editForumTopic", map[string]any{"chat_id": p.group, "message_thread_id": topic, "name": title}, nil)
@@ -217,7 +217,30 @@ func TestLiveExternalLaunchTelegramRetry(t *testing.T) {
 		t.Fatal(ok, err)
 	}
 	events := wire.Subscribe()
-	s.dispatchExternalLaunchRequest(ctx, r.ID)
+	// Hold a passive background observation while the real shared App Server
+	// confirms this new turn. The probe never starts a second production loop.
+	if _, err = s.taskBoard.AddChat(ctx, "probe-passive", "probe passive"); err != nil {
+		t.Fatal(err)
+	}
+	barrier := &priorityReadBarrier{stubSession: &stubSession{threadReads: map[string]map[string]any{"probe-passive": syncCompletedPayload("probe-passive", "old-turn", "old")}}, entered: make(chan struct{}), release: make(chan struct{})}
+	s.poll = barrier
+	backgroundDone := make(chan struct{})
+	go func() { s.syncMu.Lock(); s.reconcileBoardThreadsLocked(ctx); s.syncMu.Unlock(); close(backgroundDone) }()
+	<-barrier.entered
+	var release sync.Once
+	finishBackground := func() { release.Do(func() { close(barrier.release) }); <-backgroundDone }
+	defer finishBackground()
+	dispatched := make(chan struct{})
+	go func() { s.dispatchExternalLaunchRequest(ctx, r.ID); close(dispatched) }()
+	select {
+	case <-dispatched:
+	case <-time.After(20 * time.Second):
+		finishBackground()
+		<-dispatched
+		t.Fatal("real dispatch waited for blocked background IO")
+	}
+	finishBackground()
+	s.poll = writer
 	stored, _ := s.store.GetExternalLaunchRequest(ctx, r.ID)
 	if stored.Status != model.ExternalLaunchSessionStarted || len(tg.created) != 0 || writer.starts != 1 || writer.turns != 1 {
 		t.Fatalf("live launch not independently confirmed: status=%s", stored.Status)
@@ -272,7 +295,9 @@ func TestLiveExternalLaunchTelegramRetry(t *testing.T) {
 	if snapshot.LatestFinalText != "EXTERNAL_LAUNCH_PROBE_OK" {
 		t.Fatalf("unexpected live final: %q", snapshot.LatestFinalText)
 	}
+	s.syncMu.Lock()
 	s.processBoardSnapshotLocked(ctx, snapshot)
+	s.syncMu.Unlock()
 	s.runSyncDelivery(ctx, stored.ThreadID) // Real create succeeds, but its response is hidden from the daemon.
 	s.processExternalLaunchRequests(ctx)
 	token := callbackTokenForButton(tg.buttons, "Retry")

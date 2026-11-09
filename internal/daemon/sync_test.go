@@ -2138,8 +2138,10 @@ func TestSyncAuthoritativeSupersedingTurnReleasesStaleLocalLease(t *testing.T) {
 		t.Fatalf("topic=%#v err=%v", topic, err)
 	}
 	forum := &fakeSyncForum{}
+	service.syncMu.Lock()
 	service.processSyncSnapshotLocked(ctx, state, forum, *topic, appserver.SnapshotFromThreadRead(
 		syncRunningPayloadWithCommentary("thread-1", "desktop-turn", "desktop work")), "sync_poll")
+	service.syncMu.Unlock()
 
 	if snapshot := service.syncWriter.Snapshot(); snapshot.Active != 0 || snapshot.Unknown != 0 {
 		t.Fatalf("writer after supersession=%#v", snapshot)

@@ -360,12 +360,12 @@ func (b *Bot) SendRenderedMessages(ctx context.Context, chatID, topicID int64, m
 	return ids, nil
 }
 
-func (b *Bot) EditMessage(ctx context.Context, chatID, topicID, messageID int64, text string, buttons [][]model.ButtonSpec) error {
+func (b *Bot) EditMessage(ctx context.Context, chatID, topicID, messageID int64, text string, buttons [][]model.ButtonSpec, options model.SendOptions) error {
 	chunks := splitText(strings.TrimSpace(text), telegramMessageLimit)
 	if len(chunks) != 1 {
 		return fmt.Errorf("telegram editMessageText requires a single text chunk, got %d", len(chunks))
 	}
-	return b.groupWrite(ctx, egressOperationEditMessage, model.SendOptions{}, true, func() error {
+	return b.groupWrite(ctx, egressOperationEditMessage, options, true, func() error {
 		attemptCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
 		defer cancel()
 		_, err := b.client.EditMessageText(attemptCtx, chatID, messageID, chunks[0], toInlineKeyboard(buttons))

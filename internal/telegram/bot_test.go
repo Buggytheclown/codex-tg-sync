@@ -28,7 +28,7 @@ func TestBotEditMessageRejectsMultiChunkPayload(t *testing.T) {
 	t.Parallel()
 
 	bot := &Bot{client: NewClient("token")}
-	err := bot.EditMessage(context.Background(), 42, 0, 77, strings.Repeat("x", telegramMessageLimit+10), nil)
+	err := bot.EditMessage(context.Background(), 42, 0, 77, strings.Repeat("x", telegramMessageLimit+10), nil, model.SendOptions{})
 	if err == nil {
 		t.Fatal("EditMessage must reject multi-chunk payloads")
 	}
@@ -56,7 +56,7 @@ func TestBotUnchangedMessageEditIsDelivered(t *testing.T) {
 				if rendered {
 					err = bot.EditRenderedMessage(context.Background(), 42, 0, 77, model.RenderedMessage{Text: "existing card"}, nil)
 				} else {
-					err = bot.EditMessage(context.Background(), 42, 0, 77, "existing card", nil)
+					err = bot.EditMessage(context.Background(), 42, 0, 77, "existing card", nil, model.SendOptions{})
 				}
 				if (err == nil) != unchanged {
 					t.Fatalf("edit error=%v, unchanged=%t", err, unchanged)
@@ -667,4 +667,73 @@ func TestBotOffIsHandledWhileTopicCreationWaits(t *testing.T) {
 	if err != nil || len(targets) != 1 || targets[0].TopicID != 20 {
 		t.Fatal("late topic was not cleanup-only", targets, err)
 	}
+}
+
+func TestHistoricalCardEditsLeaveForegroundCapacity(t *testing.T) {
+	clock := newFakeEgressClock()
+	governor := newEgressGovernorWithClock(defaultTelegramGroupWriteInterval, clock)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	governor.Start(ctx)
+	observed := make(chan int64, 32)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			MessageID int64 `json:"message_id"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		if body.MessageID == 0 {
+			body.MessageID = 999
+		}
+		observed <- body.MessageID
+		_, _ = fmt.Fprintf(w, `{"ok":true,"result":{"message_id":%d}}`, body.MessageID)
+	}))
+	defer server.Close()
+	client := NewClient("token")
+	client.baseURL = server.URL
+	bot := &Bot{client: client, egress: governor}
+	for i := int64(1); i <= defaultTelegramBackgroundWriteLimit; i++ {
+		done := make(chan error, 1)
+		go func(id int64) {
+			done <- bot.EditMessage(ctx, 42, 0, id, "historical card", nil, model.SendOptions{Background: true})
+		}(i)
+		if i > 1 {
+			waitForCondition(t, func() bool { return clock.timerCount() > 0 })
+			clock.Advance(defaultTelegramGroupWriteInterval)
+		}
+		select {
+		case id := <-observed:
+			if id != i {
+				t.Fatal(id, i)
+			}
+		case <-time.After(time.Second):
+			t.Fatal("history edit not sent")
+		}
+		if err := receiveError(t, done); err != nil {
+			t.Fatal(err)
+		}
+	}
+	parked := make(chan error, 1)
+	go func() {
+		parked <- bot.EditMessage(ctx, 42, 0, 13, "historical card", nil, model.SendOptions{Background: true})
+	}()
+	waitForCondition(t, func() bool { return clock.timerCount() > 0 })
+	manual := make(chan error, 1)
+	go func() {
+		_, err := bot.SendMessage(ctx, 42, 0, "manual response", nil, model.SendOptions{})
+		manual <- err
+	}()
+	clock.Advance(defaultTelegramGroupWriteInterval)
+	select {
+	case id := <-observed:
+		if id != 999 {
+			t.Fatalf("historical edit consumed manual capacity: id=%d", id)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("manual response waited for background window")
+	}
+	if err := receiveError(t, manual); err != nil {
+		t.Fatal(err)
+	}
+	cancel()
+	_ = receiveError(t, parked)
 }

@@ -140,21 +140,33 @@ func (s *Store) GetExternalLaunchRequest(ctx context.Context, id string) (*model
 	return &request, nil
 }
 
+const externalTelegramForeground = `(telegram_message_id=0 OR coalesce(telegram_rendered_status,'')<>status OR telegram_priority_version>telegram_rendered_priority_version)`
+
 func (s *Store) ListExternalLaunchRequestsForTelegram(ctx context.Context, limit int) ([]model.ExternalLaunchRequest, error) {
+	return s.listExternalTelegram(ctx, limit, "")
+}
+func (s *Store) ListExternalTelegramPriority(ctx context.Context, limit int, background bool) ([]model.ExternalLaunchRequest, error) {
+	filter := externalTelegramForeground
+	if background {
+		filter = "NOT " + filter
+	}
+	return s.listExternalTelegram(ctx, limit, " AND "+filter)
+}
+func (s *Store) listExternalTelegram(ctx context.Context, limit int, filter string) ([]model.ExternalLaunchRequest, error) {
 	if limit <= 0 {
 		limit = 20
 	}
 	rows, err := s.db.QueryContext(ctx, `SELECT `+externalLaunchRequestColumns+`
 	FROM external_launch_requests
 	WHERE telegram_topic_id != 0 AND (
-		(auto_start=0 AND (telegram_message_id=0 OR coalesce(telegram_rendered_status,'') != status OR (coalesce(thread_id,'')<>'' AND telegram_rendered_fp='' AND status!='dismissed')))
+		(auto_start=0 AND (telegram_message_id=0 OR coalesce(telegram_rendered_status,'') != status OR ((coalesce(thread_id,'')<>'' OR status IN ('failed','outcome_unknown')) AND (telegram_rendered_fp='' OR telegram_priority_version>telegram_rendered_priority_version) AND status!='dismissed')))
 		OR
 		(auto_start=1 AND (
 			telegram_rendered_status=?
-			OR (telegram_message_id != 0 AND (coalesce(telegram_rendered_status,'') != status OR (coalesce(thread_id,'')<>'' AND telegram_rendered_fp='' AND status!='dismissed')))
+			OR (telegram_message_id != 0 AND (coalesce(telegram_rendered_status,'') != status OR ((coalesce(thread_id,'')<>'' OR status IN ('failed','outcome_unknown')) AND (telegram_rendered_fp='' OR telegram_priority_version>telegram_rendered_priority_version) AND status!='dismissed')))
 		))
 	)
-	ORDER BY created_at, id
+	 `+filter+` ORDER BY CASE WHEN `+externalTelegramForeground+` THEN 0 ELSE 1 END, created_at, id
 	LIMIT ?`, externalTelegramVisibilityPending, limit)
 	if err != nil {
 		return nil, err
@@ -202,7 +214,7 @@ const externalLaunchRequestColumns = `
 	coalesce(ack_status,''), coalesce(ack_text,''), ack_message_id, ack_attempts, coalesce(ack_available_at,''), coalesce(ack_error,''),
 	coalesce(reply_status,''), coalesce(reply_text,''), reply_message_id, reply_attempts, coalesce(reply_available_at,''), coalesce(reply_error,''),
 	coalesce(error_type,''), coalesce(error_summary,''), created_at, updated_at,
- coalesce(task_id,''), coalesce(trigger_event_id,''), coalesce(target_thread_id,''), approval_policy, approvals_reviewer, sandbox_mode, coalesce(dispatch_phase,''), coalesce(telegram_rendered_fp,'')`
+ coalesce(task_id,''), coalesce(trigger_event_id,''), coalesce(target_thread_id,''), approval_policy, approvals_reviewer, sandbox_mode, coalesce(dispatch_phase,''), coalesce(telegram_rendered_fp,''), telegram_priority_version, telegram_rendered_priority_version`
 
 type rowScanner interface {
 	Scan(dest ...any) error
@@ -217,7 +229,7 @@ func scanExternalLaunchRequest(scanner rowScanner, request *model.ExternalLaunch
 		&request.AckStatus, &request.AckText, &request.AckMessageID, &request.AckAttempts, &request.AckAvailableAt, &request.AckError,
 		&request.ReplyStatus, &request.ReplyText, &request.ReplyMessageID,
 		&request.ReplyAttempts, &request.ReplyAvailableAt, &request.ReplyError, &request.ErrorType, &request.ErrorSummary,
-		&request.CreatedAt, &request.UpdatedAt, &request.TaskID, &request.TriggerEventID, &request.TargetThreadID, &request.ApprovalPolicy, &request.ApprovalsReviewer, &request.SandboxMode, &request.DispatchPhase, &request.TelegramRenderedFP)
+		&request.CreatedAt, &request.UpdatedAt, &request.TaskID, &request.TriggerEventID, &request.TargetThreadID, &request.ApprovalPolicy, &request.ApprovalsReviewer, &request.SandboxMode, &request.DispatchPhase, &request.TelegramRenderedFP, &request.TelegramPriorityVersion, &request.TelegramRenderedPriorityVersion)
 	request.AutoStart = autoStart != 0
 	return err
 }
@@ -438,9 +450,8 @@ func (s *Store) RecoverStartingExternalLaunchRequests(ctx context.Context) (int6
 func (s *Store) RefreshExternalLaunchActionCards(ctx context.Context) (int64, error) {
 	result, err := s.db.ExecContext(ctx, `
 	UPDATE external_launch_requests
-	SET telegram_rendered_status=CASE WHEN status IN (?, ?) THEN '' ELSE telegram_rendered_status END,
-	    telegram_rendered_fp='', updated_at=?
- WHERE telegram_message_id<>0 AND (status IN (?, ?) OR coalesce(thread_id,'')<>'')`, model.ExternalLaunchFailed, model.ExternalLaunchOutcomeUnknown, model.NowString(), model.ExternalLaunchFailed, model.ExternalLaunchOutcomeUnknown)
+	SET telegram_rendered_fp='', updated_at=?
+ WHERE telegram_message_id<>0 AND (status IN (?, ?) OR coalesce(thread_id,'')<>'')`, model.NowString(), model.ExternalLaunchFailed, model.ExternalLaunchOutcomeUnknown)
 	if err != nil {
 		return 0, err
 	}
@@ -851,4 +862,22 @@ func bindExternalTaskThreadTx(ctx context.Context, tx *sql.Tx, requestID, thread
 		return err
 	}
 	return addTaskEventTx(ctx, tx, taskID, "thread_linked", map[string]string{"thread_id": threadID, "request_id": requestID})
+}
+
+func (s *Store) PrioritizeExternalTelegram(ctx context.Context, id string) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE external_launch_requests SET telegram_priority_version=telegram_priority_version+1 WHERE id=?`, id)
+	return err
+}
+
+// Replacing a maintenance card must not disable its still-visible buttons while
+// the new edit is parked in the governor. Consumed routes are never reactivated.
+func (s *Store) ExpireExternalLaunchRoutesExcept(ctx context.Context, request string, routes []model.CallbackRoute) error {
+	query := `UPDATE callback_routes SET status='expired' WHERE request_id=? AND action LIKE 'external_launch_%' AND status='active'`
+	args := []any{request}
+	for _, route := range routes {
+		query += ` AND route_token<>?`
+		args = append(args, route.Token)
+	}
+	_, err := s.db.ExecContext(ctx, query, args...)
+	return err
 }

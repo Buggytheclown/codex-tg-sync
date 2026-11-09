@@ -371,7 +371,9 @@ func TestBoardHistoricalContinuationCannotReleaseNewActiveLease(t *testing.T) {
 			request.TargetThreadID = "lease-chat"
 			request = prepareStartingExternalRequestRecord(t, s, request)
 			s.dispatchExternalLaunchRequest(ctx, request.ID)
+			s.syncMu.Lock()
 			s.processBoardSnapshotLocked(ctx, appserver.SnapshotFromThreadRead(boardThreadPayload("lease-chat", "completed", "00000000-0000-0000-0000-000000000001", "first result")))
+			s.syncMu.Unlock()
 			if _, ok := s.syncLeases["lease-chat"]; ok {
 				t.Fatal("first terminal lease not released")
 			}
@@ -396,7 +398,9 @@ func TestBoardHistoricalContinuationCannotReleaseNewActiveLease(t *testing.T) {
 			if !ok {
 				t.Fatal("second lease missing before snapshot")
 			}
+			s.syncMu.Lock()
 			s.processBoardSnapshotLocked(ctx, appserver.SnapshotFromThreadRead(boardThreadPayload("lease-chat", "inProgress", "00000000-0000-0000-0000-000000000002", "")))
+			s.syncMu.Unlock()
 			current, ok := s.syncLeases["lease-chat"]
 			if !ok || current.Generation != lease.Generation || s.syncWriter.Snapshot().Active != 1 {
 				t.Fatalf("historical continuation released current active turn: lease=%#v writer=%#v", current, s.syncWriter.Snapshot())
@@ -495,7 +499,9 @@ func TestBoardContinuationSyncTerminalClearsOwnershipBeforeSameGenerationTelegra
 	s.syncLeases["other-active-chat"] = other
 	state, _ := s.store.GetSyncState(ctx)
 	topic, _ := s.store.GetActiveSyncTopicByThread(ctx, state.SessionID, "thread-1")
+	s.syncMu.Lock()
 	s.processSyncSnapshotLocked(ctx, state, s.getSyncForum(), *topic, appserver.SnapshotFromThreadRead(syncCompletedPayload("thread-1", firstID, "first result")), "sync_poll")
+	s.syncMu.Unlock()
 	if _, ok := s.syncLeases["thread-1"]; ok {
 		t.Fatal("Sync terminal did not release first lease")
 	}
@@ -512,7 +518,9 @@ func TestBoardContinuationSyncTerminalClearsOwnershipBeforeSameGenerationTelegra
 		t.Fatalf("next lease=%#v first=%#v", nextLease, firstLease)
 	}
 	topic, _ = s.store.GetActiveSyncTopicByThread(ctx, state.SessionID, "thread-1")
+	s.syncMu.Lock()
 	s.processSyncSnapshotLocked(ctx, state, s.getSyncForum(), *topic, appserver.SnapshotFromThreadRead(syncRunningPayload("thread-1", secondID)), "sync_poll")
+	s.syncMu.Unlock()
 	if _, ok := s.syncLeases["thread-1"]; !ok || s.syncWriter.Snapshot().Active != 2 {
 		t.Fatalf("historical ownership released same-generation new turn: %#v", s.syncWriter.Snapshot())
 	}
@@ -755,7 +763,9 @@ func TestAutomaticBoardContinuationWaitsForIdleWithoutReplay(t *testing.T) {
 	// Board-only observation closes the exact polling run and returns its result
 	// for review. A later manually started turn must not move the task again.
 	terminal := appserver.SnapshotFromThreadRead(boardThreadPayload("board-thread", "completed", got.TurnID, "poll result"))
+	s.syncMu.Lock()
 	s.processBoardSnapshotLocked(ctx, terminal)
+	s.syncMu.Unlock()
 	task, _ = s.store.GetTask(ctx, task.ID)
 	if task.Column != model.TaskInbox || task.ThreadID != "board-thread" {
 		t.Fatalf("polling result did not return to Inbox: %+v", task)
@@ -764,7 +774,9 @@ func TestAutomaticBoardContinuationWaitsForIdleWithoutReplay(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	s.syncMu.Lock()
 	s.processBoardSnapshotLocked(ctx, appserver.SnapshotFromThreadRead(boardThreadPayload("board-thread", "completed", "zz-manual-turn", "manual result")))
+	s.syncMu.Unlock()
 	manual, _ := s.store.GetTask(ctx, task.ID)
 	if manual.Column != model.TaskTODO || manual.Version != task.Version {
 		t.Fatalf("manual result moved task: %+v", manual)

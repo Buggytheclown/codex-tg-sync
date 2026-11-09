@@ -115,7 +115,9 @@ func subscriptionWriter(t *testing.T, s *Service) (*stubSession, appserver.Write
 func TestSyncWriterUnsubscribeDoesNotCloseOtherTurn(t *testing.T) {
 	s := activeSyncService(t)
 	writer, _ := subscriptionWriter(t, s)
+	s.syncMu.Lock()
 	s.processBoardSnapshotLocked(context.Background(), appserver.SnapshotFromThreadRead(syncCompletedPayload("writer-a", "turn", "done")))
+	s.syncMu.Unlock()
 	if !reflect.DeepEqual(writer.threadUnsubscribeCalls, []string{"writer-a"}) {
 		t.Fatalf("unsubscribes: %#v", writer.threadUnsubscribeCalls)
 	}
@@ -134,7 +136,9 @@ func TestSyncWriterUnsubscribeRetryAndReusedThread(t *testing.T) {
 			writer, _ := subscriptionWriter(t, s)
 			ctx := context.Background()
 			writer.threadUnsubscribeErr = errors.New("temporary failure")
+			s.syncMu.Lock()
 			s.processBoardSnapshotLocked(ctx, appserver.SnapshotFromThreadRead(syncCompletedPayload("writer-a", "turn", "done")))
+			s.syncMu.Unlock()
 			if s.syncWriter.Snapshot().Active != 1 {
 				t.Fatal("failed resource cleanup held terminal lease")
 			}
@@ -152,7 +156,9 @@ func TestSyncWriterUnsubscribeRetryAndReusedThread(t *testing.T) {
 				}
 				s.syncLeases["writer-a"] = lease
 			}
+			s.syncMu.Lock()
 			s.retrySyncWriterUnsubscribesLocked(ctx)
+			s.syncMu.Unlock()
 			want := 2
 			if reuse {
 				want = 1
@@ -172,7 +178,9 @@ func TestSyncPendingUnsubscribeDoesNotTouchNewWriterGeneration(t *testing.T) {
 	writer, lease := subscriptionWriter(t, s)
 	ctx := context.Background()
 	writer.threadUnsubscribeErr = errors.New("temporary failure")
+	s.syncMu.Lock()
 	s.unsubscribeSyncWriterLeaseLocked(ctx, lease)
+	s.syncMu.Unlock()
 	if err := s.syncWriter.ForceClose(); err != nil {
 		t.Fatal(err)
 	}
@@ -184,7 +192,9 @@ func TestSyncPendingUnsubscribeDoesNotTouchNewWriterGeneration(t *testing.T) {
 	if _, err := s.syncWriter.Reserve(ctx, "new-thread"); err != nil {
 		t.Fatal(err)
 	}
+	s.syncMu.Lock()
 	s.retrySyncWriterUnsubscribesLocked(ctx)
+	s.syncMu.Unlock()
 	if len(writer.threadUnsubscribeCalls) != 1 || len(next.threadUnsubscribeCalls) != 0 || len(s.syncPendingUnsubscribes) != 0 {
 		t.Fatal("old cleanup crossed writer generation")
 	}
@@ -365,7 +375,9 @@ func TestSyncPersistsFinalBeforeReleasingSubscriptions(t *testing.T) {
 			poll.threadReads[id] = final
 			process := func() {
 				if board {
+					s.syncMu.Lock()
 					s.processBoardSnapshotLocked(ctx, appserver.SnapshotFromThreadRead(final))
+					s.syncMu.Unlock()
 				} else {
 					s.reconcileSync(ctx)
 				}

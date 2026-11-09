@@ -226,14 +226,18 @@ func TestExternalConnectedTerminalPersistenceFailureRetainsWriter(t *testing.T) 
 	}
 	state, _ := s.store.GetSyncState(ctx)
 	current := appserver.SnapshotFromThreadRead(syncCompletedPayload("terminal-thread", "started-turn", "done"))
+	s.syncMu.Lock()
 	s.processSyncSnapshotLocked(ctx, state, s.getSyncForum(), *topic, current, "test")
+	s.syncMu.Unlock()
 	if s.syncWriter.Snapshot().Active != 1 {
 		t.Fatal("released writer before terminal was durable")
 	}
 	if _, err = db.Exec(`DROP TRIGGER reject_external_terminal`); err != nil {
 		t.Fatal(err)
 	}
+	s.syncMu.Lock()
 	s.processSyncSnapshotLocked(ctx, state, s.getSyncForum(), *topic, current, "test")
+	s.syncMu.Unlock()
 	if s.syncWriter.Snapshot().Active != 0 {
 		t.Fatal("writer not released after terminal recovery")
 	}
@@ -262,14 +266,22 @@ func TestExternalLaterTurnReleasesOriginalRunWithoutRestart(t *testing.T) {
 			current := appserver.SnapshotFromThreadRead(boardThreadPayload("superseded", "inProgress", later, ""))
 			state, _ := s.store.GetSyncState(ctx)
 			if connected {
+				s.syncMu.Lock()
 				s.processSyncSnapshotLocked(ctx, state, s.getSyncForum(), *topic, current, "test")
+				s.syncMu.Unlock()
 			} else {
+				s.syncMu.Lock()
 				s.processBoardSnapshotLocked(ctx, current)
+				s.syncMu.Unlock()
 			}
 			if connected {
+				s.syncMu.Lock()
 				s.processSyncSnapshotLocked(ctx, state, s.getSyncForum(), *topic, current, "test")
+				s.syncMu.Unlock()
 			} else {
+				s.syncMu.Lock()
 				s.processBoardSnapshotLocked(ctx, current)
+				s.syncMu.Unlock()
 			}
 			got, _ := s.store.GetExternalLaunchRequest(ctx, r.ID)
 			if got.Status != model.ExternalLaunchSessionCompleted || s.syncWriter.Snapshot().Active != 0 {
@@ -296,7 +308,9 @@ func TestExternalDetachedLaterTurnReleasesOriginalRun(t *testing.T) {
 	if _, err := s.deactivateSync(ctx); err != nil {
 		t.Fatal(err)
 	}
+	s.syncMu.Lock()
 	s.reconcileDetachedSyncWorkLocked(ctx)
+	s.syncMu.Unlock()
 	got, _ := s.store.GetExternalLaunchRequest(ctx, r.ID)
 	if got.Status != model.ExternalLaunchSessionCompleted || s.syncWriter.Snapshot().Active != 0 {
 		t.Fatal(got, s.syncWriter.Snapshot())
@@ -308,10 +322,10 @@ type blockedExternalRenderer struct {
 	entered, release chan struct{}
 }
 
-func (b *blockedExternalRenderer) EditMessage(ctx context.Context, chat, topic, id int64, text string, buttons [][]model.ButtonSpec) error {
+func (b *blockedExternalRenderer) EditMessage(ctx context.Context, chat, topic, id int64, text string, buttons [][]model.ButtonSpec, options model.SendOptions) error {
 	close(b.entered)
 	<-b.release
-	return b.recordingSender.EditMessage(ctx, chat, topic, id, text, buttons)
+	return b.recordingSender.EditMessage(ctx, chat, topic, id, text, buttons, options)
 }
 func TestExternalSupersessionDoesNotWaitForBlockedRenderer(t *testing.T) {
 	s := activeSyncService(t)
@@ -328,7 +342,9 @@ func TestExternalSupersessionDoesNotWaitForBlockedRenderer(t *testing.T) {
 	done := make(chan struct{})
 	go func() { s.processExternalLaunchRequests(ctx); close(done) }()
 	<-renderer.entered
+	s.syncMu.Lock()
 	s.processBoardSnapshotLocked(ctx, appserver.SnapshotFromThreadRead(boardThreadPayload("render-blocked", "inProgress", later, "")))
+	s.syncMu.Unlock()
 	active := s.syncWriter.Snapshot().Active
 	got, _ := s.store.GetExternalLaunchRequest(ctx, r.ID)
 	close(renderer.release)
@@ -383,7 +399,9 @@ func TestClosingUnknownExternalRequestDoesNotPinCompletedWriter(t *testing.T) {
 	}
 	state, _ := s.store.GetSyncState(ctx)
 	topic, _ := s.store.GetActiveSyncTopicByThread(ctx, "s", "closed-known")
+	s.syncMu.Lock()
 	s.processSyncSnapshotLocked(ctx, state, s.getSyncForum(), *topic, appserver.SnapshotFromThreadRead(syncCompletedPayload("closed-known", "started-turn", "done")), "test")
+	s.syncMu.Unlock()
 	if s.syncWriter.Snapshot().Active != 0 {
 		t.Fatal("closed request pinned its completed writer")
 	}
@@ -411,7 +429,9 @@ func TestCompletedExternalTopicCreationRetainsOneAttemptPolicy(t *testing.T) {
 	s.SetSyncForum(forum)
 	r := prepareStartingExternalRequest(t, s, "quick:completion", "work")
 	s.dispatchExternalLaunchRequest(ctx, r.ID)
+	s.syncMu.Lock()
 	s.processBoardSnapshotLocked(ctx, appserver.SnapshotFromThreadRead(syncCompletedPayload("quick-completion", "started-turn", "done")))
+	s.syncMu.Unlock()
 	if err := s.ensureExternalTopic(ctx, "quick-completion"); err == nil {
 		t.Fatal("expected 429")
 	}

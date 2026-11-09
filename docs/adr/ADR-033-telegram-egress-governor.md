@@ -2,7 +2,8 @@
 
 Topic-creation recovery and off/drain semantics are amended by [ADR-036](ADR-036-best-effort-sync-recovery.md).
 
-Status: accepted
+Status: accepted. Manual-action classification, render ownership and unlocked
+background lifecycle IO are amended by [ADR-038](ADR-038-manual-action-priority.md).
 
 ## Context
 

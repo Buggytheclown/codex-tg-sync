@@ -148,51 +148,53 @@ const (
 )
 
 type ExternalLaunchRequest struct {
-	DispatchPhase          string
-	TelegramRenderedFP     string
-	TaskID                 string
-	TriggerEventID         string
-	TargetThreadID         string
-	ApprovalPolicy         *string
-	ApprovalsReviewer      *string
-	SandboxMode            *string
-	ID                     string
-	Source                 string
-	ExternalID             string
-	Sender                 string
-	Title                  string
-	SafePreview            string
-	SourceURL              string
-	Prompt                 string
-	CWD                    string
-	Model                  string
-	ReasoningEffort        string
-	Status                 string
-	TelegramTopicID        int64
-	TelegramMessageID      int64
-	TelegramRenderedStatus string
-	ThreadID               string
-	TurnID                 string
-	AutoStart              bool
-	SourceChatID           string
-	SourceMessageID        int64
-	SourceThreadID         int64
-	AckStatus              string
-	AckText                string
-	AckMessageID           int64
-	AckAttempts            int
-	AckAvailableAt         TimeString
-	AckError               string
-	ReplyStatus            string
-	ReplyText              string
-	ReplyMessageID         int64
-	ReplyAttempts          int
-	ReplyAvailableAt       TimeString
-	ReplyError             string
-	ErrorType              string
-	ErrorSummary           string
-	CreatedAt              TimeString
-	UpdatedAt              TimeString
+	TelegramPriorityVersion         int64
+	TelegramRenderedPriorityVersion int64
+	DispatchPhase                   string
+	TelegramRenderedFP              string
+	TaskID                          string
+	TriggerEventID                  string
+	TargetThreadID                  string
+	ApprovalPolicy                  *string
+	ApprovalsReviewer               *string
+	SandboxMode                     *string
+	ID                              string
+	Source                          string
+	ExternalID                      string
+	Sender                          string
+	Title                           string
+	SafePreview                     string
+	SourceURL                       string
+	Prompt                          string
+	CWD                             string
+	Model                           string
+	ReasoningEffort                 string
+	Status                          string
+	TelegramTopicID                 int64
+	TelegramMessageID               int64
+	TelegramRenderedStatus          string
+	ThreadID                        string
+	TurnID                          string
+	AutoStart                       bool
+	SourceChatID                    string
+	SourceMessageID                 int64
+	SourceThreadID                  int64
+	AckStatus                       string
+	AckText                         string
+	AckMessageID                    int64
+	AckAttempts                     int
+	AckAvailableAt                  TimeString
+	AckError                        string
+	ReplyStatus                     string
+	ReplyText                       string
+	ReplyMessageID                  int64
+	ReplyAttempts                   int
+	ReplyAvailableAt                TimeString
+	ReplyError                      string
+	ErrorType                       string
+	ErrorSummary                    string
+	CreatedAt                       TimeString
+	UpdatedAt                       TimeString
 }
 
 type SendOptions struct {
@@ -495,4 +497,9 @@ func MustJSON(value any) string {
 		return "{}"
 	}
 	return string(payload)
+}
+
+// TelegramForeground separates new results and explicit actions from repaints.
+func (r ExternalLaunchRequest) TelegramForeground() bool {
+	return r.TelegramMessageID == 0 || r.TelegramRenderedStatus != r.Status || r.TelegramPriorityVersion > r.TelegramRenderedPriorityVersion
 }

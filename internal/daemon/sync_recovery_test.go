@@ -277,7 +277,9 @@ func TestSyncUnknownLiveLeaseStillProjectsFinal(t *testing.T) {
 	topic, _ := service.store.GetActiveSyncTopic(ctx, -1001, 11)
 	state, _ := service.store.GetSyncState(ctx)
 	forum := &fakeSyncForum{}
+	service.syncMu.Lock()
 	service.processSyncSnapshotLocked(ctx, state, forum, *topic, appserver.SnapshotFromThreadRead(syncCompletedPayload("thread-1", "turn", "authoritative result")), "sync_poll")
+	service.syncMu.Unlock()
 	snapshot, _ := service.store.GetSnapshot(ctx, "thread-1")
 	if snapshot == nil || snapshot.LastFinalFP == "" {
 		t.Fatal("live uncertainty suppressed passive projection")

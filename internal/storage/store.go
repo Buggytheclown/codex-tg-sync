@@ -308,10 +308,15 @@ func (s *Store) initialize(ctx context.Context) error {
 	if err := s.ensureColumn(ctx, "sync_message_receipts", "turn_id", `ALTER TABLE sync_message_receipts ADD COLUMN turn_id TEXT`); err != nil {
 		return err
 	}
+	if err := s.ensureColumn(ctx, "sync_topics", "delivery_request_id", `ALTER TABLE sync_topics ADD COLUMN delivery_request_id TEXT NOT NULL DEFAULT ''`); err != nil {
+		return err
+	}
 	externalColumns := []struct {
 		name string
 		sql  string
 	}{
+		{"telegram_priority_version", `ALTER TABLE external_launch_requests ADD COLUMN telegram_priority_version INTEGER NOT NULL DEFAULT 0`},
+		{"telegram_rendered_priority_version", `ALTER TABLE external_launch_requests ADD COLUMN telegram_rendered_priority_version INTEGER NOT NULL DEFAULT 0`},
 		{"dispatch_phase", `ALTER TABLE external_launch_requests ADD COLUMN dispatch_phase TEXT NOT NULL DEFAULT ''`},
 		{"telegram_rendered_fp", `ALTER TABLE external_launch_requests ADD COLUMN telegram_rendered_fp TEXT NOT NULL DEFAULT ''`},
 		{"auto_start", `ALTER TABLE external_launch_requests ADD COLUMN auto_start INTEGER NOT NULL DEFAULT 0`},
