@@ -41,16 +41,47 @@ type BoardBackend interface {
 	ListTaskEvents(context.Context, string) ([]model.TaskEvent, error)
 }
 
+type MetadataPresence interface {
+	Update(string, int64, bool, bool, time.Time) error
+}
+
 type Options struct {
-	Board         BoardBackend
-	ListenAddress string
-	StaticDir     string
-	DevOrigin     string
+	PRMetadataPresence MetadataPresence
+	Board              BoardBackend
+	ListenAddress      string
+	StaticDir          string
+	DevOrigin          string
 	// EventInterval controls shared projection reconciliation, not source polling.
 	EventInterval time.Duration
 }
 
 func registerBoard(mux *http.ServeMux, b BoardBackend, opts Options) {
+	if opts.PRMetadataPresence != nil {
+		mux.HandleFunc("/v1/board-presence", func(w http.ResponseWriter, r *http.Request) {
+			if r.Method != http.MethodPost {
+				writeError(w, 405, "method not allowed")
+				return
+			}
+			var input struct {
+				ClientID string `json:"client_id"`
+				Sequence int64  `json:"sequence"`
+				Active   *bool  `json:"active"`
+				Refresh  bool   `json:"refresh"`
+			}
+			if !decodeCommand(w, r, &input) {
+				return
+			}
+			if input.Active == nil {
+				writeError(w, 400, "active is required")
+				return
+			}
+			if err := opts.PRMetadataPresence.Update(input.ClientID, input.Sequence, *input.Active, input.Refresh, time.Now().UTC()); err != nil {
+				writeError(w, 400, err.Error())
+				return
+			}
+			w.WriteHeader(http.StatusNoContent)
+		})
+	}
 	if b != nil {
 		mux.HandleFunc("/v1/task-cards", func(w http.ResponseWriter, r *http.Request) {
 			if r.Method != http.MethodGet {

@@ -108,3 +108,70 @@ it("preserves a relationship draft on conflict and requires explicit reload of i
   expect(save.mock.calls[1][0].version).toBe(2);
   expect(save.mock.calls[1][1]).toBe(parent.id);
 });
+
+it("filters all columns by card type together with search while keeping linked PR navigation and drafts", async () => {
+  const rows = [
+    task("development", { title: "Development", column: "review" }),
+    task("review-fixes", { title: "Review fixes", card_type: "pr", arcanum_pr_id: "42", source_url: "https://a.yandex-team.ru/review/42", parent_task_id: "development", column: "inbox" }),
+    task("reading", { title: "Morning reading", card_type: "schedule", column: "polling" }),
+    task("done-task", { title: "Finished development", column: "done", done_at: "2026-01-02T12:00:00Z" }),
+    task("done-pr", { title: "Finished review", card_type: "pr", arcanum_pr_id: "43", source_url: "https://a.yandex-team.ru/review/43", column: "done", done_at: "2026-01-02T12:00:00Z" }),
+    task("legacy", { title: "Legacy task", card_type: undefined }),
+    task("source", { title: "Review source", card_type: "", polling: { type: "arcanum_review", mode: "repeat", config: {}, action: { type: "create_task" } } }),
+  ];
+  window.history.replaceState(null, "", "/"); window.localStorage.clear();
+  vi.stubGlobal("EventSource", class { onopen = null; onerror = null; addEventListener() {} close() {} });
+  const fetchMock = vi.fn(async (input: string, _init?: RequestInit) => {
+    const path = String(input);
+    const result = path === "/v1/task-cards" ? rows.map(row => compactTask(row)) : path.endsWith("/events") ? [] : rows.find(row => path === `/v1/tasks/${row.id}`);
+    return { ok: true, status: path === "/v1/board-presence" ? 204 : 200, json: async () => result };
+  });
+  vi.stubGlobal("fetch", fetchMock);
+  render(<App />);
+  await screen.findByRole("button", { name: /TASK Development/ });
+  const choose = (label: string) => {
+    const trigger = screen.getByRole("combobox", { name: "Card type filter" });
+    fireEvent(trigger, new MouseEvent("pointerdown", { bubbles: true, button: 0 }));
+    fireEvent.click(trigger);
+    const option = screen.getByRole("option", { name: label });
+    fireEvent(option, new MouseEvent("pointerdown", { bubbles: true, button: 0 }));
+    fireEvent.click(option);
+  };
+  fireEvent.click(screen.getByRole("button", { name: "Show Done" }));
+  choose("Task");
+  expect(screen.getByRole("button", { name: /TASK Development/ })).toBeTruthy();
+  expect(screen.getByRole("button", { name: /TASK Legacy task/ })).toBeTruthy();
+  expect(screen.getByRole("button", { name: /TASK Finished development/ })).toBeTruthy();
+  expect(screen.queryByRole("button", { name: /PR Review fixes/ })).toBeNull();
+  expect(screen.queryByRole("button", { name: /PR Finished review/ })).toBeNull();
+  expect(screen.queryByRole("button", { name: /SCHEDULE Morning reading/ })).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "Open PR #42 · Inbox" }));
+  const title = await screen.findByLabelText("Title");
+  expect((title as HTMLInputElement).value).toBe("Review fixes");
+  fireEvent.change(title, { target: { value: "Unsaved review notes" } });
+  choose("PR");
+  expect(new URLSearchParams(window.location.search).get("task")).toBe("review-fixes");
+  expect((screen.getByLabelText("Title") as HTMLInputElement).value).toBe("Unsaved review notes");
+  expect(screen.getByRole("button", { name: /PR Finished review/ })).toBeTruthy();
+  expect(screen.queryByRole("button", { name: /TASK Development/ })).toBeNull();
+  fireEvent.change(screen.getByRole("textbox", { name: "Search tasks" }), { target: { value: "43" } });
+  expect(screen.queryByRole("button", { name: /PR Review fixes/ })).toBeNull();
+  expect(screen.getByRole("button", { name: /PR Finished review/ })).toBeTruthy();
+  choose("Task");
+  expect(screen.queryByRole("button", { name: /TASK Finished development/ })).toBeNull();
+  fireEvent.change(screen.getByRole("textbox", { name: "Search tasks" }), { target: { value: "" } });
+  choose("Schedule");
+  expect(screen.getByRole("button", { name: /SCHEDULE Morning reading/ })).toBeTruthy();
+  expect(screen.queryByRole("button", { name: /TASK Development/ })).toBeNull();
+  choose("All types");
+  expect(screen.getByRole("button", { name: /TASK Development/ })).toBeTruthy();
+  expect(screen.getByRole("button", { name: /PR Review fixes/ })).toBeTruthy();
+  expect(screen.getByRole("button", { name: /Review source/ })).toBeTruthy();
+  const card = screen.getByRole("button", { name: /TASK Development/ });
+  fireEvent.dragStart(card, { dataTransfer: { setData: vi.fn(), effectAllowed: "" } });
+  expect((screen.getByRole("combobox", { name: "Card type filter" }) as HTMLButtonElement).disabled).toBe(true);
+  fireEvent.dragEnd(card);
+  expect((screen.getByRole("combobox", { name: "Card type filter" }) as HTMLButtonElement).disabled).toBe(false);
+  const taskWrites = fetchMock.mock.calls.filter(([path, ...rest]) => String(path).startsWith("/v1/tasks") && (rest[0] as RequestInit | undefined)?.method && (rest[0] as RequestInit).method !== "GET");
+  expect(taskWrites).toHaveLength(0);
+});

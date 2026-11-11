@@ -9,11 +9,15 @@ import (
 	"github.com/mideco-tech/codex-tg/internal/model"
 )
 
-func (s *Store) ListDuePRMetadata(ctx context.Context, now time.Time, limit int) ([]string, error) {
+func (s *Store) ListDuePRMetadata(ctx context.Context, now, refreshSince time.Time, limit int) ([]string, error) {
 	if limit < 1 || limit > 100 {
 		limit = 10
 	}
-	rows, err := s.db.QueryContext(ctx, `SELECT t.arcanum_pr_id FROM tasks t LEFT JOIN arcanum_pr_metadata m ON m.pr_id=t.arcanum_pr_id WHERE t.card_type='pr' AND (m.pr_id IS NULL OR m.next_check_at<=?) ORDER BY coalesce(m.next_check_at,''),t.arcanum_pr_id LIMIT ?`, now.UTC().Format(time.RFC3339Nano), limit)
+	cutoff := ""
+	if !refreshSince.IsZero() {
+		cutoff = refreshSince.UTC().Format(time.RFC3339Nano)
+	}
+	rows, err := s.db.QueryContext(ctx, `SELECT t.arcanum_pr_id FROM tasks t LEFT JOIN arcanum_pr_metadata m ON m.pr_id=t.arcanum_pr_id WHERE t.card_type='pr' AND (m.pr_id IS NULL OR m.next_check_at<=? OR (?<>'' AND m.last_attempt_at<?)) ORDER BY coalesce(m.next_check_at,''),t.arcanum_pr_id LIMIT ?`, now.UTC().Format(time.RFC3339Nano), cutoff, cutoff, limit)
 	if err != nil {
 		return nil, err
 	}

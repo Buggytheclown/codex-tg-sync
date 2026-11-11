@@ -976,6 +976,8 @@ beforeEach(() => {
     "fetch",
     vi.fn(async (path: string, options?: RequestInit) => {
       const method = options?.method || "GET";
+      // Presence is ephemeral display-read permission, not a task command.
+      if (path === "/v1/board-presence") return { ok: true, status: 204, json: async () => ({}) };
       calls.push({
         path,
         method,
@@ -2071,4 +2073,39 @@ it.each([
   expect(column.querySelectorAll("[data-task-id]")).toHaveLength(0);
   fireEvent.change(screen.getByRole("textbox", { name: "Search tasks" }), { target: { value: "  " } });
   expect(column.querySelectorAll("[data-task-id]")).toHaveLength(3);
+});
+
+
+it("announces board visibility and refreshes metadata after SSE reconnect only while visible", async () => {
+  let stream!: { onopen: null | (() => void); onerror: null | (() => void) };
+  vi.stubGlobal("EventSource", class {
+    onopen = null; onerror = null;
+    constructor() { stream = this; }
+    addEventListener() {} close() {}
+  });
+  let visible = true;
+  const visibility = vi.spyOn(document, "visibilityState", "get").mockImplementation(() => visible ? "visible" : "hidden");
+  try {
+    render(<App />);
+    await screen.findByRole("button", { name: /TASK Review the next revision/ });
+    const presence = () => vi.mocked(fetch).mock.calls
+      .filter(([path]) => path === "/v1/board-presence")
+      .map(([, options]) => JSON.parse(options!.body as string));
+    expect(presence()).toHaveLength(1);
+    fireEvent(window, new Event("blur"));
+    fireEvent.focus(window);
+    expect(presence()).toHaveLength(1);
+    stream.onerror?.(); stream.onopen?.();
+    expect(presence().at(-1)).toMatchObject({ active: true, refresh: true });
+    visible = false;
+    fireEvent(document, new Event("visibilitychange"));
+    expect(presence().at(-1)).toMatchObject({ active: false });
+    const count = presence().length;
+    stream.onerror?.(); stream.onopen?.();
+    expect(presence()).toHaveLength(count);
+    visible = true;
+    fireEvent(document, new Event("visibilitychange"));
+    expect(presence().at(-1)).toMatchObject({ active: true });
+    expect(calls.every(c => c.method === "GET")).toBe(true);
+  } finally { visibility.mockRestore(); }
 });

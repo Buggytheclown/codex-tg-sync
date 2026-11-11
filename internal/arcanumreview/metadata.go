@@ -44,7 +44,7 @@ func (c *CLIClient) ReadPRMetadata(ctx context.Context, id int64) (PRSnapshot, e
 }
 
 type PRMetadataStore interface {
-	ListDuePRMetadata(context.Context, time.Time, int) ([]string, error)
+	ListDuePRMetadata(context.Context, time.Time, time.Time, int) ([]string, error)
 	RecordPRMetadata(context.Context, string, string, string, bool, time.Time) error
 }
 type PRMetadataReader interface {
@@ -53,8 +53,8 @@ type PRMetadataReader interface {
 
 // RunPRMetadata has no action-polling or launch interface. A display read cannot
 // cross the effectful polling boundary even when a card is outside Polling.
-func RunPRMetadata(ctx context.Context, store PRMetadataStore, reader PRMetadataReader, onError func(error)) {
-	runPRMetadata(ctx, store, reader, onError, func(ctx context.Context) bool {
+func RunPRMetadata(ctx context.Context, store PRMetadataStore, reader PRMetadataReader, presence *MetadataPresence, onError func(error)) {
+	runPRMetadata(ctx, store, reader, presence, onError, func(ctx context.Context) bool {
 		timer := time.NewTimer(2 * time.Second)
 		defer timer.Stop()
 		select {
@@ -66,15 +66,46 @@ func RunPRMetadata(ctx context.Context, store PRMetadataStore, reader PRMetadata
 	})
 }
 
-func runPRMetadata(ctx context.Context, store PRMetadataStore, reader PRMetadataReader, onError func(error), pause func(context.Context) bool) {
+func runPRMetadata(ctx context.Context, store PRMetadataStore, reader PRMetadataReader, presence *MetadataPresence, onError func(error), pause func(context.Context) bool) {
 	ticker := time.NewTicker(10 * time.Second)
 	defer ticker.Stop()
-	for {
-		ids, err := store.ListDuePRMetadata(ctx, time.Now().UTC(), 10)
+	var observedActivation, refreshSince time.Time
+	wait := func() bool {
+		select {
+		case <-ctx.Done():
+			return false
+		case <-presence.changed:
+			return true
+		case <-ticker.C:
+			return true
+		}
+	}
+	for ctx.Err() == nil {
+		active, activation := presence.State(time.Now().UTC())
+		if !active {
+			if !wait() {
+				return
+			}
+			continue
+		}
+		if !activation.Equal(observedActivation) {
+			observedActivation = activation
+			// Resume an unfinished pass without accumulating another full-board pass.
+			if refreshSince.IsZero() {
+				refreshSince = activation
+			}
+		}
+		ids, err := store.ListDuePRMetadata(ctx, time.Now().UTC(), refreshSince, 10)
+		if err == nil && len(ids) == 0 {
+			refreshSince = time.Time{}
+		}
 		if err == nil {
 			for _, id := range ids {
 				if ctx.Err() != nil {
 					return
+				}
+				if active, _ := presence.State(time.Now().UTC()); !active {
+					break
 				}
 				number, parseErr := strconv.ParseInt(id, 10, 64)
 				callCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
@@ -91,8 +122,6 @@ func runPRMetadata(ctx context.Context, store PRMetadataStore, reader PRMetadata
 				if err != nil {
 					break
 				}
-				// The first refresh may contain the entire board. Keep its
-				// reads paced so display metadata does not burst beside rules.
 				if !pause(ctx) {
 					return
 				}
@@ -101,13 +130,11 @@ func runPRMetadata(ctx context.Context, store PRMetadataStore, reader PRMetadata
 		if err != nil && onError != nil {
 			onError(err)
 		}
-		if err == nil && len(ids) == 10 {
+		if err == nil && len(ids) > 0 {
 			continue
 		}
-		select {
-		case <-ctx.Done():
+		if !wait() {
 			return
-		case <-ticker.C:
 		}
 	}
 }

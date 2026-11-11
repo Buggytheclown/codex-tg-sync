@@ -597,3 +597,31 @@ For live Telegram QA, verify:
   poller-owned TODO → Inbox suites. Browser acceptance checks five-column overflow,
   narrow footer groups, row focus/drag separation and direct parent navigation.
   If browser access is unavailable, report that visual acceptance remains unverified.
+
+### Visible-board PR footer reads
+
+- `arcanumreview/metadata_presence_test.go`: shared visibility leases, expiry,
+  sequence fencing, recovery refresh, hidden refresh rejection and bounded memory.
+- `arcanumreview/metadata_runner_test.go`: no passive IO without a visible page,
+  stop within a selected batch, one resumed queue, paced reads/cancellation,
+  failure isolation, recovery coalescing and fresh-cache refresh after a full pass.
+- `storage/store_pr_metadata_test.go`: activation includes recent Done PRs, each
+  attempt is consumed once per pass and ordinary five-minute deadlines survive.
+- `controlapi/board_presence_test.go`: trust boundary, malformed commands,
+  successful presence without task access; HTTP handler → real worker → SQLite
+  refreshes fresh cache and finishes in-flight IO after hiding without task edits.
+- `ui/src/usePRMetadataPresence.test.tsx` and the App integration test cover
+  visibility vs focus, page lifecycle, heartbeat, timeout, online/SSE recovery,
+  hidden recovery, release on unmount and independent page identities.
+- Native browser acceptance: switch tabs, minimize/restore, leave window visible
+  without focus, open two pages and close one. Passive Arc reads must follow shared
+  visibility; working polling must continue. Do not treat jsdom as this live check.
+
+
+### Card type filter
+
+`ui/src/taskTypes.test.tsx` covers Task/PR/Schedule/All types, legacy Task fallback,
+search intersection, Done, preserved linked PR navigation, open details/drafts,
+source navigation, drag-time disabling and no task writes. Pointer presses use a
+MouseEvent with button=0 in jsdom; removing the filter's outside-dismiss exemption
+must fail the selection assertion. Existing ChipSelect tests cover keyboard use.

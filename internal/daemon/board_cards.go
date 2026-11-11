@@ -22,8 +22,8 @@ func (s *Service) SetTaskParent(ctx context.Context, id string, in model.SetTask
 	return s.taskBoard.SetTaskParent(ctx, id, in)
 }
 
-func (s *Service) ListDuePRMetadata(ctx context.Context, now time.Time, limit int) ([]string, error) {
-	return s.store.ListDuePRMetadata(ctx, now, limit)
+func (s *Service) ListDuePRMetadata(ctx context.Context, now, refreshSince time.Time, limit int) ([]string, error) {
+	return s.store.ListDuePRMetadata(ctx, now, refreshSince, limit)
 }
 func (s *Service) RecordPRMetadata(ctx context.Context, id, lifecycle, common string, success bool, now time.Time) error {
 	return s.store.RecordPRMetadata(ctx, id, lifecycle, common, success, now)

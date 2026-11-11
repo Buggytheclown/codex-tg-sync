@@ -459,3 +459,33 @@ parent links are not inferred. Existing IDs, event rowids, chats, requests,
 Done evidence and source provenance survive. Earlier source/Done backfills run
 inside the same migration transaction. Source keys and frozen policies retain
 their existing meaning. A rollback uses the old binary and its offline backup.
+
+## Visible-board PR metadata amendment
+
+Passive Arc reads require at least one visible board page. Hidden tabs, minimized
+windows and a closed board do not renew this permission; keyboard focus is
+irrelevant. The browser renews an ephemeral 45-second lease every 10 seconds and
+releases it on hiding/pagehide/unmount. Monotonic per-page sequences fence delayed
+renewals after release; the in-memory client table is bounded. The existing API
+Host/Origin/JSON guards also apply to presence. No migration is required.
+
+The single worker checks permission before selecting work and before each PR read.
+An in-flight read may finish. A 0 → 1 transition, or recovery after a network/SSE
+error, starts a paced refresh without waiting for the usual five-minute deadline.
+An unfinished pass resumes without another queued pass. Several visible pages
+share the worker and do not multiply periodic reads. The last known status and
+existing stale/error projection survive pauses. Effectful polling and Sources
+never consult display presence and continue with the board closed.
+
+
+## Card type filter amendment
+
+The board toolbar uses the existing ChipSelect for All types / Task / PR /
+Schedule, initially All types. Type and text search intersect on standalone cards
+in every column, retaining ordering and Done day groups. Source navigation and
+the full snapshot used for relationships/details remain independent. Linked PR
+rows stay visible under a Task and open the same PR details even when that PR
+card is filtered out. Filter interactions do not dismiss the selected details or
+edit drafts; filtering is disabled during dragging. The filter is page-local and
+adds no persisted state or backend commands. Column counts follow filtering;
+the board header retains its existing total unfinished count.

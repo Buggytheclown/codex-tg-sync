@@ -158,3 +158,24 @@ normal Store opening. Schema rebuild, legacy source/Done upgrades, archival
 History and direct-link removal share one transaction. Report digest includes
 tasks, polling, events and referenced legacy definitions. Apply derives commands
 from the current verified data; it executes no SQL supplied in the report.
+
+## Board visibility and passive PR status reads
+
+`POST /v1/board-presence` takes `{client_id,sequence,active,refresh?}` and returns
+204. `client_id` is an ephemeral per-page string of 1–64 ASCII letters, digits or
+hyphens; `sequence` is a positive increasing integer; `active` is required.
+`refresh` defaults to false and requests a recovery refresh only for an active
+page. Invalid commands return400; existing loopback Host, Origin and JSON guards
+apply before recording presence. This is not a task mutation and takes no task
+version. Reordered/duplicate sequence numbers are ignored.
+
+Visible pages renew every 10 seconds; hidden/pagehide/unmount pages release with
+`active:false`. Permission expires 45 seconds after the last accepted signal.
+At most 1024 unexpired page records are kept in memory, including inactive records
+that fence late heartbeats. No permission is persisted or granted at daemon start.
+At least one visible page permits the existing single paced metadata worker.
+The first active page and recovery refresh start an immediate pass, including
+recently checked PRs; unfinished passes coalesce. Multiple visible pages do not
+multiply reads. On hiding the last page new reads stop; an in-flight read may
+finish. Five-minute retry/refresh deadlines and last-known/stale status behavior
+remain unchanged. Working PR polling, Sources and launches are independent.

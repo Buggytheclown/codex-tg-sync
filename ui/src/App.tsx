@@ -5,7 +5,7 @@ import { compareBoardTasks, placeTask } from "./taskOrder";
 import { doneDay, doneDayLabel } from "./doneChronology";
 import { BoardMotion } from "./boardMotion";
 import type { DropPosition } from "./boardMotion";
-import type { Column, Polling, Priority, Task, TaskCard as Card, TaskEvent, SourceKind } from "./model";
+import type { CardType, Column, Polling, Priority, Task, TaskCard as Card, TaskEvent, SourceKind } from "./model";
 import {
   compactTask,
   codexURL,
@@ -31,12 +31,19 @@ import { TicketControl } from "./TicketControl";
 import { PRControl } from "./PRControl";
 import { DetailPlaceholder } from "./DetailPlaceholder";
 import { useDetailPresence } from "./useDetailPresence";
+import { usePRMetadataPresence } from "./usePRMetadataPresence";
 import { useTabSlide } from "./useTabSlide";
 import { DescriptionField } from "./DescriptionField";
 import { ChipSelect } from "./ChipSelect";
 import { CardPollers } from "./CardPollers";
 import { PRStatusBadge } from "./PRStatusBadge";
 import { TaskRelations } from "./TaskRelations";
+const cardTypeOptions = [
+  { value: "all", label: "All types" },
+  { value: "task", label: "Task" },
+  { value: "pr", label: "PR" },
+  { value: "schedule", label: "Schedule" },
+] as const;
 const columnIcons: Record<Column, string> = { inbox: "↓", todo: "●", review: "◇", polling: "◷", done: "✓" };
 const columnOptions = columns.map(value => ({ value, label: labels[value], icon: columnIcons[value] }));
 const priorityOptions = [{ value: "low", label: "Low", icon: "↓" }, { value: "normal", label: "Normal", icon: "—" }, { value: "high", label: "High", icon: "↑" }] as const;
@@ -285,6 +292,7 @@ export function TaskCard({
   );
 }
 export function App() {
+  const reconnectPRMetadata = usePRMetadataPresence();
   const motion = useRef<BoardMotion | null>(null);
   if (!motion.current) motion.current = new BoardMotion();
   useLayoutEffect(() => { motion.current!.layout(); });
@@ -311,6 +319,7 @@ export function App() {
     [query, setQuery] = useState(""),
     [error, setError] = useState(""),
     [info, setInfo] = useState("");
+  const [cardTypeFilter, setCardTypeFilter] = useState<"all" | CardType>("all");
   const [showDone, setShowDone] = useState(() => {
     try {
       return window.localStorage.getItem("codex-tg.show-done") === "true";
@@ -363,17 +372,20 @@ export function App() {
     mounted.current = true;
     void refresh();
     const stream = new EventSource("/v1/task-events");
+    let reconnectPending = false;
     stream.addEventListener("invalidate", () => {
       setConnection("Live");
       void refresh();
       setDetailRevision((n) => n + 1);
     });
     stream.onopen = () => {
+      if (reconnectPending) reconnectPRMetadata();
+      reconnectPending = false;
       setConnection("Live");
       void refresh();
       setDetailRevision((n) => n + 1);
     };
-    stream.onerror = () => setConnection("Reconnecting");
+    stream.onerror = () => { reconnectPending = true; setConnection("Reconnecting"); };
     const focus = () => { void refresh(); setDetailRevision((n) => n + 1); };
     window.addEventListener("focus", focus);
     const reconcile = window.setInterval(() => { void refresh(); setDetailRevision((n) => n + 1); }, 30000);
@@ -383,7 +395,7 @@ export function App() {
       window.clearInterval(reconcile);
       window.removeEventListener("focus", focus);
     };
-  }, [refresh]);
+  }, [refresh, reconnectPRMetadata]);
   const clearDrag = (reconcile = true) => {
     dragRef.current = null;
     setDrag(null);
@@ -456,7 +468,7 @@ export function App() {
       if (e.button !== 0 || dragRef.current || !(e.target instanceof Node)) return;
       // Selecting another card/source replaces the view directly, without an
       // empty-panel flash between pointerdown and click (or during a drag).
-      if (e.target instanceof Element && e.target.closest(".task-card, .source-item, .linked-pr-row")) return;
+      if (e.target instanceof Element && e.target.closest(".task-card, .source-item, .linked-pr-row, .card-type-filter")) return;
       if (!detailPanel.current?.contains(e.target)) dismissDetails();
     };
     window.addEventListener("keydown", escape);
@@ -757,6 +769,7 @@ export function App() {
     cards = tasks.filter(
       (t) =>
         !isSource(t) &&
+        (cardTypeFilter === "all" || (t.card_type || "task") === cardTypeFilter) &&
         `${t.title} ${t.description} ${t.source_url} ${t.arcanum_pr_id || ""} ${t.ticket_url || ""}`
           .toLowerCase()
           .includes(searchNeedle),
@@ -862,6 +875,8 @@ export function App() {
             </h1>
           </div>
           <div className="board-tools">
+            <ChipSelect className="card-type-filter" label="Card type filter" value={cardTypeFilter} options={cardTypeOptions}
+              onChange={setCardTypeFilter} disabled={!!drag} />
             <label className="search">
               <span aria-hidden="true">⌕</span>
               <input

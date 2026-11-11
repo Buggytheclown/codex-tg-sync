@@ -141,7 +141,8 @@ func runDaemon(cfg config.Config) error {
 	if err := service.Start(ctx); err != nil {
 		return err
 	}
-	if err := startControlAPI(ctx, cfg, service, logger); err != nil {
+	metadataPresence := arcanumreview.NewMetadataPresence()
+	if err := startControlAPI(ctx, cfg, service, logger, metadataPresence); err != nil {
 		return err
 	}
 	for _, poller := range []struct {
@@ -160,7 +161,7 @@ func runDaemon(cfg config.Config) error {
 	}
 	startYMessengerPoller(ctx, cfg, service, logger)
 	prClient := arcanumreview.NewCLIClient(cfg.ArcanumYABin, nil)
-	go arcanumreview.RunPRMetadata(ctx, service, prClient, func(err error) { logger.Printf("PR metadata refresh failed: %s", telegram.SanitizeLogError(err)) })
+	go arcanumreview.RunPRMetadata(ctx, service, prClient, metadataPresence, func(err error) { logger.Printf("PR metadata refresh failed: %s", telegram.SanitizeLogError(err)) })
 	checker := polling.NewChecker(prClient)
 	checker.Login = &cfg.ArcanumReviewLogin
 	runner := polling.NewRunner(service, checker, cfg.ExternalRequestsTopicID)
@@ -255,7 +256,7 @@ func startArcanumChangesPoller(ctx context.Context, cfg config.Config, sink arca
 	return true
 }
 
-func startControlAPI(ctx context.Context, cfg config.Config, service *daemon.Service, logger *log.Logger) error {
+func startControlAPI(ctx context.Context, cfg config.Config, service *daemon.Service, logger *log.Logger, metadataPresence *arcanumreview.MetadataPresence) error {
 	listener, err := controlapi.Listen(cfg.ControlAPIListen)
 	if err != nil {
 		return err
@@ -265,7 +266,7 @@ func startControlAPI(ctx context.Context, cfg config.Config, service *daemon.Ser
 	}
 	logger.Printf("ctr-go control api listening on %s", listener.Addr().String())
 	go func() {
-		if err := controlapi.Serve(ctx, listener, controlapi.NewHandler(version.Version, service, controlapi.Options{ListenAddress: cfg.ControlAPIListen, StaticDir: cfg.UIStaticDir, DevOrigin: cfg.UIDevOrigin}), logger); err != nil && ctx.Err() == nil {
+		if err := controlapi.Serve(ctx, listener, controlapi.NewHandler(version.Version, service, controlapi.Options{PRMetadataPresence: metadataPresence, ListenAddress: cfg.ControlAPIListen, StaticDir: cfg.UIStaticDir, DevOrigin: cfg.UIDevOrigin}), logger); err != nil && ctx.Err() == nil {
 			logger.Printf("ctr-go control api stopped: %v", err)
 		}
 	}()
