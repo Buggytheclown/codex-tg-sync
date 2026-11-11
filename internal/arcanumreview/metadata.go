@@ -54,6 +54,19 @@ type PRMetadataReader interface {
 // RunPRMetadata has no action-polling or launch interface. A display read cannot
 // cross the effectful polling boundary even when a card is outside Polling.
 func RunPRMetadata(ctx context.Context, store PRMetadataStore, reader PRMetadataReader, onError func(error)) {
+	runPRMetadata(ctx, store, reader, onError, func(ctx context.Context) bool {
+		timer := time.NewTimer(2 * time.Second)
+		defer timer.Stop()
+		select {
+		case <-ctx.Done():
+			return false
+		case <-timer.C:
+			return true
+		}
+	})
+}
+
+func runPRMetadata(ctx context.Context, store PRMetadataStore, reader PRMetadataReader, onError func(error), pause func(context.Context) bool) {
 	ticker := time.NewTicker(10 * time.Second)
 	defer ticker.Stop()
 	for {
@@ -77,6 +90,11 @@ func RunPRMetadata(ctx context.Context, store PRMetadataStore, reader PRMetadata
 				err = store.RecordPRMetadata(ctx, id, snapshot.Status, snapshot.CommonStatus, readErr == nil, time.Now().UTC())
 				if err != nil {
 					break
+				}
+				// The first refresh may contain the entire board. Keep its
+				// reads paced so display metadata does not burst beside rules.
+				if !pause(ctx) {
+					return
 				}
 			}
 		}

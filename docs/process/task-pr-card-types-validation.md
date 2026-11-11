@@ -53,3 +53,16 @@ widths, focus/drag geometry and motion is therefore unverified; DOM tests and th
 HTTP fixture do not substitute for that check. No Telegram messages were sent
 as QA, and no new live Codex run was requested. Live post-update checks use
 read-only daemon/API observations and database preservation comparisons.
+
+## Live readback
+
+The installed binary and UI hashes matched the prepared build. Live API readback
+confirmed typed compact cards, seven unique archival events and no inferred
+parent links. A read from the shared App Server succeeded; Telegram default
+commands were empty and eight commands were scoped to the configured Sync group.
+The recovery backup includes the offline database/WAL and previous binary/UI.
+
+Some first-pass metadata reads were unavailable and a later read succeeded.
+The metadata worker now spaces display observations by two seconds, independently
+of rule polling; its cancellation and pacing boundary have a deterministic test.
+Unknown API status values remain explicit raw facts rather than guessed labels.

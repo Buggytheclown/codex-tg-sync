@@ -446,7 +446,8 @@ connection footers. PR discovery across sources reuses canonical identity and
 does not constitute permission to launch existing work again.
 
 Passive Arc metadata lives in a separate per-PR cache and bounded worker, with
-no action-polling/launch interface. It refreshes outside Polling without changing
+no action-polling/launch interface. Display reads are spaced by two seconds to
+avoid an initial board-wide burst beside effectful polling. It refreshes outside Polling without changing
 editable task versions or accepted cursors. Missing/failed/stale observations
 never imply merge readiness. Rule evaluation continues using its own full reads.
 Source-owned PR number changes are rejected; manual changes require matching

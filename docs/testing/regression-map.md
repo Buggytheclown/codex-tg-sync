@@ -585,6 +585,8 @@ For live Telegram QA, verify:
 - `store_pr_metadata_test.go` and `arcanumreview/metadata_test.go` cover passive
   bounded metadata reads, no comments/checks, retry deadlines, last-known/stale
   projection and unchanged card version, events, polling, requests and state.
+  `metadata_runner_test.go` proves pacing prevents the next read and cancellation
+  ends the wait without another call.
 - `board_parent_test.go` covers compact parent commands, types, stale versions and
   HTTP trust boundaries. `board_pr_identity_test.go` covers idle/active/missing
   authority, frozen pending requests, same-ID formatting and source-owned identity.
