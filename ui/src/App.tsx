@@ -15,7 +15,6 @@ import {
   formatTime,
   isSource,
   labels,
-  pollingLabel,
   pollingProblem,
   safeExternalURL,
   parseThreadID,
@@ -35,6 +34,7 @@ import { useDetailPresence } from "./useDetailPresence";
 import { useTabSlide } from "./useTabSlide";
 import { DescriptionField } from "./DescriptionField";
 import { ChipSelect } from "./ChipSelect";
+import { CardPollers } from "./CardPollers";
 const columnOptions = columns.map((value, index) => ({ value, label: labels[value], icon: ["↓", "●", "◷", "✓"][index] }));
 const priorityOptions = [{ value: "low", label: "Low", icon: "↓" }, { value: "normal", label: "Normal", icon: "—" }, { value: "high", label: "High", icon: "↑" }] as const;
 type Tab = "overview" | "polling" | "history";
@@ -209,8 +209,6 @@ export function TaskCard({
   onDragEnd?: () => void;
   onPointerDown?: (e: React.PointerEvent<HTMLButtonElement>) => void;
 }) {
-  const polling = pollingLabel(task);
-  const pollingTone = polling === "Waiting" ? "active" : polling === "No polling" ? "" : "warning";
   const [linking, setLinking] = useState(false);
   const [controlError, setControlError] = useState("");
   return (
@@ -247,13 +245,7 @@ export function TaskCard({
       {task.description && (
         <span className="card-description">{task.description}</span>
       )}
-      <span className="card-meta">
-        <span
-          className={`poll-chip ${pollingTone}`}
-        >
-          {polling}
-        </span>
-      </span>
+      <CardPollers polling={task.polling} column={task.column} />
       {task.requests?.some((r) =>
         ["pending_approval", "starting"].includes(r.status),
       ) && <span className="request-hint">Launch request · Telegram</span>}
@@ -301,7 +293,7 @@ export function App() {
     ),
     [panel, setPanel] = useState<Panel>("details"),
     [tab, setTab] = useState<Tab>("overview");
-  const [collapsed, setCollapsed] = useState(false),
+  const [collapsed, setCollapsed] = useState(true),
     [query, setQuery] = useState(""),
     [error, setError] = useState(""),
     [info, setInfo] = useState("");
@@ -602,7 +594,7 @@ export function App() {
       draft?.receive(saved);
       setDetail(old => old?.id === saved.id && old.version <= saved.version ? saved : old);
       if (detailSelection.current === saved.id) detailVersion.current = saved.version;
-      setTasks(cards => cards.map(card => card.id === saved.id && card.version <= saved.version ? compactTask(saved) : card));
+      setTasks(cards => cards.map(card => card.id === saved.id && card.version <= saved.version ? compactTask(saved, card.polling?.rules) : card));
       await refresh();
       return saved;
     } catch (err) {
@@ -645,7 +637,7 @@ export function App() {
         before_task_id: beforeID,
       });
       if (!mounted.current) return;
-      const saved = "config" in response ? compactTask(response) : response;
+      const saved = "config" in response ? compactTask(response, task.polling?.rules) : response;
       // Compact ordering replies can advance the editable version only when
       // the loaded settings are exactly the version this command reordered.
       const knownSettings = latestDetail.current?.id === saved.id &&
@@ -746,9 +738,9 @@ export function App() {
     cards = tasks.filter(
       (t) =>
         !isSource(t) &&
-        `${t.title} ${t.description}`
+        `${t.title} ${t.description} ${t.source_url} ${t.ticket_url || ""}`
           .toLowerCase()
-          .includes(query.toLowerCase()),
+          .includes(query.trim().toLowerCase()),
     );
   const beginDrag = (id: string, height: number) => {
     const task = cards.find(t => t.id === id);
@@ -1080,7 +1072,7 @@ export function App() {
               </h2>
               <div className="detail-badges">
                 <ChipSelect className="column-select" label="Move task" value={selected.column} options={columnOptions} disabled={busy}
-                  onChange={column => void move(compactTask(selected), column)} />
+                  onChange={column => void move(compactTask(selected, tasks.find(task => task.id === selected.id)?.polling?.rules), column)} />
                 {executionLabel(selected) && (
                   <span className={`pill execution ${executionLabel(selected).toLowerCase()}`}>{executionLabel(selected)}</span>
                 )}

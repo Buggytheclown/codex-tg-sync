@@ -94,9 +94,16 @@ export type Task = {
   };
   requests: RequestInfo[];
 };
-export type PollingSummary = Pick<Polling, "type" | "mode" | "next_check_at" | "last_attempt_at" | "last_success_at" | "last_error"> & { action: { type: string }; problem: string };
+export type CardPollingRule = {
+  type: string;
+  title?: string;
+  pr_id?: string;
+  condition_groups?: string[][];
+  next_scheduled_at?: string;
+};
+export type PollingSummary = Pick<Polling, "type" | "mode" | "next_check_at" | "last_attempt_at" | "last_success_at" | "last_error"> & { action: { type: string }; problem: string; rules?: CardPollingRule[] };
 export type TaskCard = Omit<Task, "config" | "polling" | "requests"> & { polling?: PollingSummary; requests: Pick<RequestInfo, "id" | "status">[] };
-export function compactTask(task: Task): TaskCard {
+export function compactTask(task: Task, rules?: CardPollingRule[]): TaskCard {
   const { id, title, description, column, position, thread_id, source_url,
     source_key, source_task_id, source_author, priority, ticket_url, version, created_at, updated_at, done_at,
     execution, polling, requests } = task;
@@ -113,7 +120,7 @@ export function compactTask(task: Task): TaskCard {
       type: polling.type, mode: polling.mode, action: { type: polling.action.type },
       next_check_at: polling.next_check_at, last_attempt_at: polling.last_attempt_at,
       last_success_at: polling.last_success_at, last_error: polling.last_error,
-      problem: pollingProblem(polling),
+      problem: pollingProblem(polling), rules,
     } } : {}),
   };
 }

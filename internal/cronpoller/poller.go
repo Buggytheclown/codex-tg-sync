@@ -224,6 +224,11 @@ func parseFile(data []byte, telegramTopicID int64) (File, *time.Location, []task
 }
 
 func scheduleDue(schedule taskSchedule, now time.Time) (time.Time, bool) {
+	first, periodEnd := firstPeriodOccurrence(schedule, now)
+	return first, !first.After(now) && first.Before(periodEnd)
+}
+
+func firstPeriodOccurrence(schedule taskSchedule, now time.Time) (time.Time, time.Time) {
 	dayStart := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
 	periodStart := dayStart
 	periodDays := 1
@@ -233,7 +238,7 @@ func scheduleDue(schedule taskSchedule, now time.Time) (time.Time, bool) {
 		periodDays = 7
 	}
 	first := schedule.schedule.Next(periodStart.Add(-time.Nanosecond))
-	return first, !first.After(now) && first.Before(periodStart.AddDate(0, 0, periodDays))
+	return first, periodStart.AddDate(0, 0, periodDays)
 }
 
 func requestForTask(task Task, telegramTopicID int64, now, slot time.Time) model.ExternalLaunchRequest {

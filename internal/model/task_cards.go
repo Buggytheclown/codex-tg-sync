@@ -44,4 +44,13 @@ type TaskCardPolling struct {
 	LastSuccessAt TimeString            `json:"last_success_at"`
 	LastError     string                `json:"last_error"`
 	Problem       string                `json:"problem"`
+	Rules         []TaskCardPollingRule `json:"rules,omitempty"`
+}
+
+type TaskCardPollingRule struct {
+	Type            string     `json:"type"`
+	Title           string     `json:"title,omitempty"`
+	PRID            string     `json:"pr_id,omitempty"`
+	ConditionGroups [][]string `json:"condition_groups,omitempty"`
+	NextScheduledAt TimeString `json:"next_scheduled_at,omitempty"`
 }

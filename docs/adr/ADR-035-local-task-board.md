@@ -420,3 +420,12 @@ provisional client date replaced by the server date; failure restores its previo
 column/date/group. Drag within Done is a no-op; dragging out retains normal placement.
 The lifted Done card retains its original hidden footprint until release, so no
 neighbor shifts merely on lift. The collapsed Done target keeps its fixed geometry.
+
+
+## Linked reference search amendment
+
+Board search matches title, description, linked PR/source URL and ticket URL from
+compact cards, case-insensitively. Pasted queries ignore surrounding whitespace,
+including non-breaking spaces. PR numbers and ticket keys match within their stored
+URLs; full URLs also match. Filtering requires no detail reads or external requests.
+Done grouping and column ordering apply after the same filter.

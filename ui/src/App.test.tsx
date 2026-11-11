@@ -308,6 +308,25 @@ it.each(["inProgress", "in_progress", "running", "completed", "failed", "interru
   expect(link.textContent).not.toContain("Open in Codex");
   expect(screen.queryByText("Completed")).toBeNull();
 });
+it("shows one status for all pollers and a countdown only in Polling", () => {
+  const task = compactTask(makeTask({ column: "polling", polling: defaultPolling("cron") }));
+  const rules = [
+    { type: "cron", next_scheduled_at: new Date(Date.now() + 42 * 60_000).toISOString() },
+    { type: "pr_wait", condition_groups: [["request_changes"], ["merge_checks_failed"]] },
+    { type: "pr_wait", condition_groups: [["pr_merged"]] },
+  ];
+  const polling = { ...task.polling!, problem: "", rules };
+  const { rerender } = render(<TaskCard task={{ ...task, polling }} selected={false} onSelect={() => {}} />);
+  const card = screen.getByRole("button", { name: /Review the next revision/ });
+  expect(within(card).getByText("Active")).toBeTruthy();
+  expect(within(card).getByText("in 42 min")).toBeTruthy();
+  expect(within(card).getByText("Request changes or Failed merge checks")).toBeTruthy();
+  expect(within(card).getByText("PR merged")).toBeTruthy();
+  rerender(<TaskCard task={{ ...task, column: "todo", polling }} selected={false} onSelect={() => {}} />);
+  expect(within(card).getByText("Paused")).toBeTruthy();
+  expect(within(card).queryByText("in 42 min")).toBeNull();
+  expect(within(card).getByText("PR merged")).toBeTruthy();
+});
 it("renders an unlinked Codex icon as an accessible attachment action", () => {
   const task = compactTask(makeTask({ thread_id: "" }));
   const open = vi.fn();
@@ -966,7 +985,7 @@ beforeEach(() => {
         ? JSON.parse(options.body as string)
         : undefined;
       let payload: unknown =
-        path === "/v1/task-cards" ? rows.map(compactTask) : path.endsWith("/events") ? [] : rows.find((t) => path === `/v1/tasks/${t.id}`) || {};
+        path === "/v1/task-cards" ? rows.map(task => compactTask(task)) : path.endsWith("/events") ? [] : rows.find((t) => path === `/v1/tasks/${t.id}`) || {};
       if (method === "PATCH") {
         const task = rows.find((t) => path === `/v1/tasks/${t.id}`)!;
         payload = { ...task, ...body, version: task.version + 1 };
@@ -1054,7 +1073,7 @@ describe("board operator flows", () => {
     await screen.findByRole("tab", { name: "Polling", selected: true });
     expect(calls.some((c) => c.method !== "GET")).toBe(false);
   });
-  it("keeps paused sources visible and supports collapsing them", async () => {
+  it("starts with Sources collapsed and keeps paused sources accessible", async () => {
     rows = [
       makeTask({
         id: "source",
@@ -1076,10 +1095,8 @@ describe("board operator flows", () => {
       }),
     ];
     render(<App />);
-    await screen.findByText("Paused · Done");
-    fireEvent.click(screen.getByRole("button", { name: "Collapse sources" }));
+    const source = await screen.findByRole("button", { name: /Paused · Done/ });
     expect(screen.queryByText("Paused · Done")).toBeNull();
-    const source = screen.getByRole("button", { name: /Paused · Done/ });
     expect(source.querySelector('.origin-icon')).not.toBeNull();
     expect(source.querySelector('.source-dot')).not.toBeNull();
     expect(source.getAttribute('title')).toContain('Paused · Done');
@@ -1087,6 +1104,8 @@ describe("board operator flows", () => {
     await screen.findByRole('button', { name: 'Source settings' });
     fireEvent.click(screen.getByRole("button", { name: "Expand sources" }));
     expect(screen.getByText("Paused · Done")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Collapse sources" }));
+    expect(screen.queryByText("Paused · Done")).toBeNull();
   });
   it("shows only a source's actual child definition on one page", async () => {
     rows = [sourceTask()];
@@ -2026,3 +2045,30 @@ function chooseSource(option: string) {
  fireEvent.click(screen.getByRole('combobox',{name:'Event source'}));
  fireEvent.click(screen.getByRole('option',{name:option}));
 }
+
+
+it.each([
+  ["12345", "Linked PR"],
+  ["https://a.yandex-team.ru/review/12345", "Linked PR"],
+  ["TASK-456", "Linked ticket"],
+  ["https://st.yandex-team.ru/TASK-456", "Linked ticket"],
+  ["  task-456\u00a0", "Linked ticket"],
+  ["Description match", "Unlinked task"],
+])("searches card text and linked references for %s", async (query, title) => {
+  rows = [
+    makeTask({ id: "pr", title: "Linked PR", description: "", source_url: "https://a.yandex-team.ru/review/12345" }),
+    makeTask({ id: "ticket", title: "Linked ticket", description: "", ticket_url: "https://st.yandex-team.ru/TASK-456" }),
+    makeTask({ id: "unlinked", title: "Unlinked task", description: "Description match" }),
+  ];
+  render(<App />);
+  await screen.findByText("Linked PR");
+  fireEvent.change(screen.getByRole("textbox", { name: "Search tasks" }), { target: { value: query } });
+  const column = screen.getByRole("region", { name: "TODO column" });
+  expect(within(column).getByText(title)).toBeTruthy();
+  expect(column.querySelectorAll("[data-task-id]")).toHaveLength(1);
+  expect(calls.some(c => /^\/v1\/tasks\/[^/]+$/.test(c.path))).toBe(false);
+  fireEvent.change(screen.getByRole("textbox", { name: "Search tasks" }), { target: { value: "not-a-matching-reference" } });
+  expect(column.querySelectorAll("[data-task-id]")).toHaveLength(0);
+  fireEvent.change(screen.getByRole("textbox", { name: "Search tasks" }), { target: { value: "  " } });
+  expect(column.querySelectorAll("[data-task-id]")).toHaveLength(3);
+});

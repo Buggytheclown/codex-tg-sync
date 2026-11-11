@@ -182,10 +182,21 @@ small { font-size: 12px; line-height: 1.6; color: var(--muted); }
 .schedule-icon { width: 24px; height: 24px; flex: none; }
 .card-title strong { display: inline; }
 .card-description { font-size: 13px; font-weight: 400; color: var(--muted); line-height: 1.5; white-space: pre-wrap; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; }
-.card-meta { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; margin-top: 2px; }
 .poll-chip, .execution { font-size: 11px; font-weight: 500; line-height: 1.4; border-radius: 999px; padding: 4px 7px; color: var(--muted); background: var(--soft); }
-.poll-chip.active { background: var(--blue-soft); color: var(--blue-hover); }
-.poll-chip.warning { background: var(--amber-soft); color: var(--amber); }
+.card-pollers { display: grid; gap: 6px; align-self: stretch; min-width: 0; font-size: 12px; color: var(--text); }
+.card-pollers-heading { display: flex; align-items: center; justify-content: space-between; gap: 4px 8px; flex-wrap: wrap; padding-top: 5px; border-top: 1px solid #ffffff19; font-weight: 500; }
+.card-pollers-state { display: inline-flex; align-items: center; gap: 4px; font-weight: 400; }
+.card-pollers-state i { width: 7px; height: 7px; border: 1px solid currentColor; border-radius: 50%; }
+.card-pollers-state.problem { color: var(--danger); }
+.card-pollers-state svg { width: 13px; height: 13px; }
+.card-poller-rules { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); grid-auto-flow: dense; gap: 5px; }
+.card-poller-rule { display: inline-flex; align-items: center; gap: 5px; min-width: 0; padding: 4px 7px; border: 1px solid #ffffff19; border-radius: 6px; background: #ffffff0c; overflow-wrap: anywhere; }
+.card-poller-rule:is(.wide, :only-child) { grid-column: 1/-1; }
+@container card (max-width: 230px) { .card-poller-rules { grid-template-columns: minmax(0, 1fr); } }
+.card-poller-rule svg { width: 15px; height: 15px; flex: none; }
+.card-poller-rule time { font-variant-numeric: tabular-nums; white-space: nowrap; }
+.card-pollers.paused :is(.card-pollers-state, .card-poller-rules) { color: var(--secondary); }
+.card-pollers.paused .card-poller-rule { background: transparent; }
 .execution { display: inline-flex; gap: 5px; align-items: center; }
 .execution i { height: 6px; width: 6px; display: inline-block; border-radius: 50%; background: var(--muted); }
 .execution.running { color: var(--blue-hover); background: var(--blue-soft); }

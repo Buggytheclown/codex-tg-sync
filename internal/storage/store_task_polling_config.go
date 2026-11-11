@@ -14,7 +14,6 @@ type pollingConfigReader interface {
 }
 
 func taskCompleteOnMerge(ctx context.Context, db pollingConfigReader, t *model.Task) (bool, error) {
-	parentType := ""
 	parentKey := ""
 	if t.SourceTaskID != "" {
 		err := db.QueryRowContext(ctx, `SELECT coalesce(source_key,'') FROM tasks WHERE id=?`, t.SourceTaskID).Scan(&parentKey)
@@ -22,13 +21,17 @@ func taskCompleteOnMerge(ctx context.Context, db pollingConfigReader, t *model.T
 			return false, err
 		}
 	}
-	if parentKey == "source:arcanum_review" {
-		parentType = "pr_review_source"
+	return model.TaskPollingCompleteOnMerge(t.Polling.Config, t.SourceKey, mergeParentType(parentKey))
+}
+
+func mergeParentType(key string) string {
+	switch key {
+	case "source:arcanum_review":
+		return "pr_review_source"
+	case "source:arcanum_changes":
+		return "pr_changes_source"
 	}
-	if parentKey == "source:arcanum_changes" {
-		parentType = "pr_changes_source"
-	}
-	return model.TaskPollingCompleteOnMerge(t.Polling.Config, t.SourceKey, parentType)
+	return ""
 }
 
 func projectMergeChoice(p *model.TaskPolling, enabled bool) error {

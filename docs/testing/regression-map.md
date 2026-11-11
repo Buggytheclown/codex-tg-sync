@@ -546,6 +546,15 @@ For live Telegram QA, verify:
   no lift jump for Done neighbors, smooth landing/rollback and unchanged collapsed
   target bounds. Native visual acceptance requires an available browser surface.
 
+
+## Board search by linked references
+
+- `ui/src/App.test.tsx`: PR number/full URL and ticket key/full URL find cards whose
+  titles/descriptions lack the identifier; lowercase and surrounding non-breaking
+  spaces work. Description search remains available, unmatched queries show no
+  cards, and a blank query restores the board. Search uses compact cards without
+  full-detail or external reads.
+
 ## Independent external execution and Telegram Retry (ADR-037)
 
 - `external_independent_test.go`: no Telegram IO on admitted dispatch, unknown
