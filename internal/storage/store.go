@@ -37,6 +37,15 @@ func Open(path string) (*Store, error) {
 	}
 	db.SetMaxOpenConns(1)
 	db.SetMaxIdleConns(1)
+	needed, err := needsCardMigration(context.Background(), db)
+	if err != nil {
+		db.Close()
+		return nil, err
+	}
+	if needed {
+		db.Close()
+		return nil, ErrCardMigrationRequired
+	}
 	store := &Store{db: db}
 	if err := store.initialize(context.Background()); err != nil {
 		_ = db.Close()

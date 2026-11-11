@@ -12,7 +12,7 @@ Service methods (context first):
 - `AddChat(ctx, threadID, title) (*model.Task, error)`; idempotent, starts TODO
 - `ListTaskEvents(ctx, id) ([]model.TaskEvent, error)`
 
-Errors `tasks.ErrConflict`, `tasks.ErrInvalid`, `tasks.ErrNotFound` support errors.Is. Mutations require expected_version. Task update replaces editable title/description/source_url/config and may include ordinary waiting settings as described below; sources save their trigger/child definition through the polling operation. Column values: inbox, todo, polling, done. Polling requires type, once/repeat mode, object config and action type return_task/resume_task/create_task (create_task also needs an owned child_definition). There is no enabled flag; column activates polling. Sources are tasks with create_task action. Execution is an existing ThreadSnapshotState projection, never separately mutated running state. Requests/history are read-only; pending prompt/settings are frozen.
+Errors `tasks.ErrConflict`, `tasks.ErrInvalid`, `tasks.ErrNotFound` support errors.Is. Mutations require expected_version. Task update replaces editable title/description/source_url/config and may include ordinary waiting settings as described below; sources save their trigger/child definition through the polling operation. Column values: inbox, todo, review, polling, done; review is only valid for ordinary Task cards. Polling requires type, once/repeat mode, object config and action type return_task/resume_task/create_task (create_task also needs an owned child_definition). There is no enabled flag; column activates polling. Sources are tasks with create_task action. Execution is an existing ThreadSnapshotState projection, never separately mutated running state. Requests/history are read-only; pending prompt/settings are frozen.
 
 Suggested routes: GET/POST /v1/tasks, GET/PATCH /v1/tasks/{id}, POST /v1/tasks/{id}/move, PUT /v1/tasks/{id}/polling, GET /v1/tasks/{id}/events, POST /v1/tasks/add-chat (thread_id,title). Successful task mutations return full Task. Lists return arrays. Errors use status 409 conflict, 400 invalid, 404 not found. Exact envelope/SSE can be selected by API owner.
 
@@ -123,3 +123,38 @@ into the rule list with its accepted cursor, and complete_on_merge becomes a
 separate pr_merged → Done rule. No bulk rewrite, version change on read or frozen
 request migration occurs. Automatic continuations retain the original-thread,
 frozen-permission, visible-Telegram-card and no-replay dispatch guarantees.
+
+## Task / PR / Schedule identity and parent links
+
+Ordinary full/compact cards include `card_type` (`task`, `pr`, `schedule`),
+`arcanum_pr_id` and `parent_task_id`; sources have an empty card type. A source's
+child definition includes its resolved family type: PR discovery creates PR,
+cron creates Schedule. Type never changes when linking a chat. Omitted type on
+legacy create defaults to Task, or PR for a recognized Arc link; explicit Task
+rejects its own Arc PR link. PR requires a positive canonical PR ID and rejects
+Tracker fields. Schedule preserves its existing optional references.
+
+`POST /v1/tasks/{pr-id}/parent` accepts `{expected_version,parent_task_id}`.
+Empty parent removes the relation. Only a PR may have a parent, and that parent
+must be an ordinary Task. A successful versioned change returns a compact card;
+a repeated current relation is a no-op. Source provenance is independent.
+
+The canonical Arc PR ID is unique across PR cards, independent of source keys.
+Repeated source discovery records the same result card without replacing its
+settings, chat, parent or state and without another initial request. A PR-source
+card cannot change its PR number. A manual PR can change number only when its
+rules agree, the linked chat is authoritatively idle, and there are no pending or
+uncertain requests. Same-ID URL formatting requires no authority IO.
+
+`pr_status` is a passive compact projection: lifecycle, common_status, label,
+last_attempt_at, last_success_at, stale, unavailable. A separate five-minute
+best-effort metadata worker populates it without task version changes, events,
+cursors, launches, Telegram health alerts or column moves. Status reads are not
+permission to run action rules outside Polling. Unknown Arc values are shown
+explicitly; failures preserve the last confirmed value.
+
+Old schemas require offline `board migrate-card-types --dry-run/--apply` before
+normal Store opening. Schema rebuild, legacy source/Done upgrades, archival
+History and direct-link removal share one transaction. Report digest includes
+tasks, polling, events and referenced legacy definitions. Apply derives commands
+from the current verified data; it executes no SQL supplied in the report.

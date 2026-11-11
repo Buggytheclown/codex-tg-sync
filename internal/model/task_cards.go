@@ -3,6 +3,10 @@ package model
 // TaskCardDTO is the board projection. Details and frozen launch payloads belong
 // to GetTask, never to board refreshes or invalidation polling.
 type TaskCardDTO struct {
+	CardType     string             `json:"card_type"`
+	ArcanumPRID  string             `json:"arcanum_pr_id"`
+	ParentTaskID string             `json:"parent_task_id"`
+	PRStatus     *PRStatus          `json:"pr_status,omitempty"`
 	TicketURL    string             `json:"ticket_url"`
 	Priority     string             `json:"priority"`
 	ID           string             `json:"id"`

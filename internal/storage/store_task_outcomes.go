@@ -123,15 +123,39 @@ func (s *Store) AcceptTaskPollingOutcome(ctx context.Context, out model.TaskPoll
 			if strings.TrimSpace(event.SourceKey) == "" {
 				return false, fmt.Errorf("%w: create event source_key required", ErrTaskInvalid)
 			}
+			def := *p.Action.ChildDefinition
+			if def.CardType == "" {
+				def.CardType = model.SourceChildCardType(p.Type)
+			}
+			child, err := taskFromDefinition(def, t.ID, event)
+			if err != nil {
+				return false, err
+			}
+			existingPR, err := findPRCardTx(ctx, tx, child.ArcanumPRID)
+			if err != nil {
+				return false, err
+			}
 			var id string
-			err := tx.QueryRowContext(ctx, `SELECT id FROM tasks WHERE source_key=?`, event.SourceKey).Scan(&id)
+			err = tx.QueryRowContext(ctx, `SELECT id FROM tasks WHERE source_key=?`, event.SourceKey).Scan(&id)
+			if err == nil && child.CardType == model.CardPR {
+				old, readErr := getTaskTx(ctx, tx, id)
+				if readErr != nil {
+					return false, readErr
+				}
+				if old.CardType != model.CardPR || old.ArcanumPRID != child.ArcanumPRID {
+					return false, ErrTaskConflict
+				}
+			}
+			if err == nil && existingPR != nil && id != existingPR.ID {
+				return false, ErrTaskConflict
+			}
+			if errors.Is(err, sql.ErrNoRows) && existingPR != nil {
+				id = existingPR.ID
+				err = nil
+			}
 			if err == nil {
 				resultID = id
 			} else if errors.Is(err, sql.ErrNoRows) {
-				child, err := taskFromDefinition(*p.Action.ChildDefinition, t.ID, event)
-				if err != nil {
-					return false, err
-				}
 				child.Title, err = sourceChildTitle(*t, child.Title, event)
 				if err != nil {
 					return false, err

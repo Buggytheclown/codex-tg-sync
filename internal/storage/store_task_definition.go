@@ -47,6 +47,9 @@ func cleanChildPolling(p *model.TaskPolling) *model.TaskPolling {
 func (s *Store) normalizeSourcePolling(p model.TaskPolling) model.TaskPolling {
 	if p.Action.ChildDefinition != nil {
 		d := *p.Action.ChildDefinition
+		if d.CardType == "" {
+			d.CardType = model.SourceChildCardType(p.Type)
+		}
 		d.Config = s.normalizeTaskConfig(d.Config)
 		d.Polling = cleanChildPolling(d.Polling)
 		p.Action.ChildDefinition = &d
@@ -105,7 +108,12 @@ func taskFromDefinition(def model.TaskDefinition, sourceID string, event model.P
 	config := def.Config
 	config.InitialPrompt = renderTaskText(config.InitialPrompt, event.Variables)
 	config.ContinuationPrompt = renderTaskText(config.ContinuationPrompt, event.Variables)
-	t := model.Task{ID: uuid.NewString(), Title: renderTaskText(def.Title, event.Variables), Description: renderTaskText(def.Description, event.Variables), Column: model.TaskInbox, SourceURL: event.SourceURL, SourceKey: event.SourceKey, SourceTaskID: sourceID, SourceAuthor: event.Variables["author"], Config: config, Version: 1, CreatedAt: now, UpdatedAt: now}
+	if def.CardType == model.CardPR && event.SourceURL == "" {
+		if id, err := model.ParseArcanumPR(event.Variables["pr_id"]); err == nil {
+			event.SourceURL = "https://a.yandex-team.ru/review/" + id
+		}
+	}
+	t := model.Task{CardType: def.CardType, ID: uuid.NewString(), Title: renderTaskText(def.Title, event.Variables), Description: renderTaskText(def.Description, event.Variables), Column: model.TaskInbox, SourceURL: event.SourceURL, SourceKey: event.SourceKey, SourceTaskID: sourceID, SourceAuthor: event.Variables["author"], Config: config, Version: 1, CreatedAt: now, UpdatedAt: now}
 	if t.Title == "" {
 		t.Title = event.Title
 	}
@@ -141,6 +149,9 @@ func taskFromDefinition(def model.TaskDefinition, sourceID string, event model.P
 			return model.Task{}, err
 		}
 		t.Polling = &p
+	}
+	if err := normalizeCard(&t); err != nil {
+		return model.Task{}, err
 	}
 	return t, nil
 }

@@ -25,6 +25,7 @@ import (
 // BoardBackend keeps HTTP mutations behind the daemon's launch gate.
 // It intentionally has no browser Start or approval operation.
 type BoardBackend interface {
+	SetTaskParent(context.Context, string, model.SetTaskParentInput) (*model.TaskCardDTO, error)
 	ListTasks(context.Context) ([]model.Task, error)
 	ListTaskCards(context.Context) ([]model.TaskCardDTO, error)
 	ReorderTask(context.Context, string, model.MoveTaskInput) (*model.TaskCardDTO, error)
@@ -132,6 +133,17 @@ func registerBoard(mux *http.ServeMux, b BoardBackend, opts Options) {
 				return
 			}
 			switch parts[1] {
+			case "parent":
+				if r.Method != http.MethodPost {
+					writeError(w, 405, "method not allowed")
+					return
+				}
+				var input model.SetTaskParentInput
+				if !decodeCommand(w, r, &input) {
+					return
+				}
+				value, err := b.SetTaskParent(r.Context(), id, input)
+				boardResult(w, 200, value, err)
 			case "ticket":
 				if r.Method != http.MethodPost {
 					writeError(w, 405, "method not allowed")

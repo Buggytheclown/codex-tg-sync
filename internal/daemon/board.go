@@ -27,6 +27,39 @@ func (s *Service) CreateTask(ctx context.Context, in model.CreateTaskInput) (*mo
 	return task, err
 }
 func (s *Service) UpdateTask(ctx context.Context, id string, in model.UpdateTaskInput) (*model.Task, error) {
+	current, err := s.taskBoard.GetTask(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	if current == nil {
+		return nil, tasks.ErrNotFound
+	}
+	nextPR, parseErr := model.ParseArcanumPR(in.SourceURL)
+	if current.CardType != model.CardPR || parseErr != nil || nextPR == current.ArcanumPRID {
+		return s.taskBoard.UpdateTask(ctx, id, in)
+	}
+	if current.Version != in.ExpectedVersion {
+		return nil, tasks.ErrConflict
+	}
+	if current.PRSourceOwned() {
+		return nil, fmt.Errorf("%w: source-owned PR identity is fixed", tasks.ErrInvalid)
+	}
+	if current.ThreadID != "" {
+		poll, err := s.controlReadSession(ctx)
+		if err != nil {
+			return nil, err
+		}
+		observed, err := readAuthoritativeSyncSnapshot(ctx, poll, current.ThreadID)
+		if err != nil {
+			return nil, err
+		}
+		if threadLooksActiveForPolling(observed.Thread) || observed.WaitingOnApproval || observed.WaitingOnReply || (observed.LatestTurnID != "" && !isTerminalStatus(observed.LatestTurnStatus)) {
+			return nil, fmt.Errorf("%w: finish the chat turn before changing its PR", tasks.ErrConflict)
+		}
+	}
+	s.taskLaunchMu.Lock()
+	defer s.taskLaunchMu.Unlock()
+	// Storage rechecks version, source ownership and pending/uncertain requests.
 	return s.taskBoard.UpdateTask(ctx, id, in)
 }
 

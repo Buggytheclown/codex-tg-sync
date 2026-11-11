@@ -145,8 +145,8 @@ small { font-size: 12px; line-height: 1.6; color: var(--muted); }
 .search input::placeholder { color: var(--muted); }
 .search > span { font-size: 21px; }
 .search kbd { font-family: inherit; font-size: 10px; color: var(--muted); }
-.board-columns { display: grid; grid-template-columns: repeat(var(--board-column-count, 4), minmax(180px, 1fr)); gap: 12px; flex: 1 0 auto; min-height: 380px; }
-.board-columns.done-hidden { --board-column-count: 3; }
+.board-columns { display: grid; grid-template-columns: repeat(var(--board-column-count, 5), minmax(180px, 1fr)); gap: 12px; flex: 1 0 auto; min-height: 380px; }
+.board-columns.done-hidden { --board-column-count: 4; }
 .column { display: flex; flex-direction: column; min-width: 0; border: 1px solid #ffffff08; border-radius: 16px; padding: 14px 9px 8px; background: #ffffff04; }
 .column-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 32px; margin: 0 3px 14px; }
 .column-heading h2 { min-width: 0; max-width: 100%; min-height: 29px; padding: 5px 9px; border-radius: 999px; background: #ffffff08; font-size: 14px; display: flex; align-items: center; gap: 7px; font-weight: 500; }
@@ -602,3 +602,26 @@ body.board-dragging .board .card-with-link { transform: none; transition: border
 .done-day::after { content: ""; flex: 1; height: 1px; background: var(--border); opacity: .6; }
 .column.done.done-drop-active { outline: 1px solid var(--blue-border); outline-offset: -1px; }
 .done .card-slot.drag-origin { position: relative; }
+
+/* Relations are projections of existing PR cards; only the full card is draggable. */
+.pr-connection { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 8px; min-width: 0; }
+.arc-status { display: inline-flex; align-items: center; gap: 4px; color: var(--muted); font-size: 11px; line-height: 1.4; overflow-wrap: anywhere; }
+.arc-status-stale { font-size: 12px; opacity: .75; }
+.linked-pr-list { border-top: 1px solid #ffffff0b; padding: 4px 8px; }
+.linked-pr-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; width: 100%; border: 0; border-radius: 7px; background: transparent; padding: 7px 8px; color: var(--text); font-size: 12px; text-align: left; white-space: nowrap; }
+.linked-pr-row > span:last-child { color: var(--muted); font-size: 11px; }
+.linked-pr-row:hover, .linked-pr-row:focus-visible { background: #ffffff08; }
+.linked-pr-row:focus-visible { outline: 2px solid var(--action); outline-offset: -2px; }
+.task-relations { border-top: 1px solid #ffffff0b; margin-top: 22px; padding-top: 14px; }
+.relation-heading { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 8px; }
+.relation-heading h3 { font-size: 12px; color: var(--muted); font-weight: 500; margin: 0; }
+.relation-edit { border: 0; background: transparent; color: var(--muted); font-size: 12px; padding: 4px; }
+.relation-edit:hover { color: var(--text); }
+.parent-task-link { display: flex; align-items: center; gap: 8px; }
+.parent-task-link > button:first-child { display: flex; flex: 1; justify-content: space-between; gap: 8px; text-align: left; min-width: 0; border: 0; background: #ffffff05; padding: 9px 10px; }
+.parent-task-link > a { display: flex; align-items: center; }
+.relation-form { display: flex; flex-direction: column; gap: 8px; padding-top: 8px; }
+.relation-form .field { margin-bottom: 0; }
+.relation-form .chip-select-trigger { max-width: 100%; }
+.relation-form .chip-select-trigger > span:not(.chip-select-icon):not(.chip-select-chevron) { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.relation-form .chip-select-menu { max-width: min(420px, 100%); }

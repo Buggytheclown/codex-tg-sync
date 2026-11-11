@@ -429,3 +429,32 @@ compact cards, case-insensitively. Pasted queries ignore surrounding whitespace,
 including non-breaking spaces. PR numbers and ticket keys match within their stored
 URLs; full URLs also match. Filtering requires no detail reads or external requests.
 Done grouping and column ordering apply after the same filter.
+
+## Task, PR and Schedule card identity amendment
+
+Ordinary cards persist an explicit type independent of chat linkage. Task owns
+Tracker and its development chat; PR owns a unique canonical Arcanum PR ID and
+its review chat. Cron children are Schedule. Sources remain source records.
+Review is a Task-only manual column. No child aggregation moves the parent.
+
+A PR may reference one parent Task, while a Task may have many PRs. This single
+parent ID is independent of source_task_id. Links are manual. The full PR card
+and its one-line row beneath the Task footer project the same compact record;
+there are no duplicate subtasks, chats or counters. Full PR footers show the Arc
+link and official status. Details provide parent navigation without duplicate
+connection footers. PR discovery across sources reuses canonical identity and
+does not constitute permission to launch existing work again.
+
+Passive Arc metadata lives in a separate per-PR cache and bounded worker, with
+no action-polling/launch interface. It refreshes outside Polling without changing
+editable task versions or accepted cursors. Missing/failed/stale observations
+never imply merge readiness. Rule evaluation continues using its own full reads.
+Source-owned PR number changes are rejected; manual changes require matching
+rules, authoritative idle chat and the launch gate's request/identity fences.
+
+The old SQLite column CHECK requires an offline, report-fenced schema rebuild.
+Legacy Task PR URLs are archived in History and removed from active fields;
+parent links are not inferred. Existing IDs, event rowids, chats, requests,
+Done evidence and source provenance survive. Earlier source/Done backfills run
+inside the same migration transaction. Source keys and frozen policies retain
+their existing meaning. A rollback uses the old binary and its offline backup.

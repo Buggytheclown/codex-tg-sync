@@ -20,11 +20,7 @@ var (
 )
 
 func (s *Store) initializeTasks(ctx context.Context) error {
-	_, err := s.db.ExecContext(ctx, `
- CREATE TABLE IF NOT EXISTS tasks (
- id TEXT PRIMARY KEY, title TEXT NOT NULL, description TEXT NOT NULL DEFAULT '', column TEXT NOT NULL CHECK(column IN ('inbox','todo','polling','done')),
- position REAL NOT NULL DEFAULT 0, thread_id TEXT, source_url TEXT, source_key TEXT, source_task_id TEXT,
- task_config_json TEXT NOT NULL, version INTEGER NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+	_, err := s.db.ExecContext(ctx, taskSchemaSQL+`
  CREATE UNIQUE INDEX IF NOT EXISTS idx_tasks_thread ON tasks(thread_id) WHERE thread_id IS NOT NULL AND thread_id<>'';
  CREATE UNIQUE INDEX IF NOT EXISTS idx_tasks_source ON tasks(source_key) WHERE source_key IS NOT NULL AND source_key<>'';
  CREATE TABLE IF NOT EXISTS task_polling (
@@ -55,11 +51,15 @@ func (s *Store) initializeTasks(ctx context.Context) error {
 	if err := s.migrateOwnedSourceDefinitions(ctx); err != nil {
 		return err
 	}
-	return s.migrateTaskDoneDates(ctx)
+	if err := s.migrateTaskDoneDates(ctx); err != nil {
+		return err
+	}
+	_, err = s.db.ExecContext(ctx, taskTypeIndexesSQL)
+	return err
 }
 
 func validTaskColumn(c string) bool {
-	return c == model.TaskInbox || c == model.TaskTODO || c == model.TaskPollingColumn || c == model.TaskDone
+	return c == model.TaskInbox || c == model.TaskTODO || c == model.TaskReview || c == model.TaskPollingColumn || c == model.TaskDone
 }
 func jsonObject(raw json.RawMessage) bool {
 	var value map[string]json.RawMessage
@@ -130,6 +130,9 @@ func validatePolling(p model.TaskPolling) error {
 			return fmt.Errorf("%w: sources require repeat and child definition", ErrTaskInvalid)
 		}
 		child := *p.Action.ChildDefinition
+		if child.CardType != "" && child.CardType != model.SourceChildCardType(p.Type) {
+			return fmt.Errorf("%w: child card type must match its source", ErrTaskInvalid)
+		}
 		if p.Action.InitialLaunch != nil && p.Action.InitialLaunch.Mode == "none" {
 			child.Config.InitialPrompt = "unused"
 		}
@@ -148,12 +151,12 @@ func validatePolling(p model.TaskPolling) error {
 	return nil
 }
 
-const taskColumns = `ticket_url,priority,id,title,description,column,position,coalesce(thread_id,''),coalesce(source_url,''),coalesce(source_key,''),coalesce(source_task_id,''),coalesce(source_author,''),task_config_json,version,created_at,updated_at,done_at`
+const taskColumns = `card_type,arcanum_pr_id,coalesce(parent_task_id,''),ticket_url,priority,id,title,description,column,position,coalesce(thread_id,''),coalesce(source_url,''),coalesce(source_key,''),coalesce(source_task_id,''),coalesce(source_author,''),task_config_json,version,created_at,updated_at,done_at`
 
 func scanTask(row rowScanner) (*model.Task, error) {
 	var t model.Task
 	var raw string
-	err := row.Scan(&t.TicketURL, &t.Priority, &t.ID, &t.Title, &t.Description, &t.Column, &t.Position, &t.ThreadID, &t.SourceURL, &t.SourceKey, &t.SourceTaskID, &t.SourceAuthor, &raw, &t.Version, &t.CreatedAt, &t.UpdatedAt, &t.DoneAt)
+	err := row.Scan(&t.CardType, &t.ArcanumPRID, &t.ParentTaskID, &t.TicketURL, &t.Priority, &t.ID, &t.Title, &t.Description, &t.Column, &t.Position, &t.ThreadID, &t.SourceURL, &t.SourceKey, &t.SourceTaskID, &t.SourceAuthor, &raw, &t.Version, &t.CreatedAt, &t.UpdatedAt, &t.DoneAt)
 	if err != nil {
 		return nil, err
 	}
@@ -228,7 +231,14 @@ func (s *Store) GetTask(ctx context.Context, id string) (*model.Task, error) {
 		}
 		t.Requests = append(t.Requests, r)
 	}
-	return t, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	rows.Close()
+	if err := s.taskPRStatus(ctx, t); err != nil {
+		return nil, err
+	}
+	return t, nil
 }
 func (s *Store) ListTasks(ctx context.Context) ([]model.Task, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT id FROM tasks ORDER BY column,position,id`)
@@ -279,6 +289,9 @@ func (s *Store) ListTrackedTaskThreadIDs(ctx context.Context) ([]string, error) 
 }
 
 func insertTaskTx(ctx context.Context, tx *sql.Tx, t model.Task) error {
+	if err := normalizeCard(&t); err != nil {
+		return err
+	}
 	if t.Column == model.TaskDone {
 		t.DoneAt = t.CreatedAt
 	}
@@ -292,7 +305,7 @@ func insertTaskTx(ctx context.Context, tx *sql.Tx, t model.Task) error {
 	if err != nil {
 		return err
 	}
-	_, err = tx.ExecContext(ctx, `INSERT INTO tasks(ticket_url,priority,id,title,description,column,position,thread_id,source_url,source_key,source_task_id,source_author,task_config_json,version,created_at,updated_at,done_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, t.TicketURL, t.Priority, t.ID, t.Title, t.Description, t.Column, t.Position, nullable(t.ThreadID), nullable(t.SourceURL), nullable(t.SourceKey), nullable(t.SourceTaskID), nullable(t.SourceAuthor), string(raw), t.Version, t.CreatedAt, t.UpdatedAt, t.DoneAt)
+	_, err = tx.ExecContext(ctx, `INSERT INTO tasks(card_type,arcanum_pr_id,parent_task_id,ticket_url,priority,id,title,description,column,position,thread_id,source_url,source_key,source_task_id,source_author,task_config_json,version,created_at,updated_at,done_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, t.CardType, t.ArcanumPRID, nullable(t.ParentTaskID), t.TicketURL, t.Priority, t.ID, t.Title, t.Description, t.Column, t.Position, nullable(t.ThreadID), nullable(t.SourceURL), nullable(t.SourceKey), nullable(t.SourceTaskID), nullable(t.SourceAuthor), string(raw), t.Version, t.CreatedAt, t.UpdatedAt, t.DoneAt)
 	return err
 }
 func setPollingTx(ctx context.Context, tx *sql.Tx, p model.TaskPolling) error {
@@ -352,6 +365,11 @@ func (s *Store) CreateTask(ctx context.Context, in model.CreateTaskInput) (*mode
 	if in.Column == model.TaskPollingColumn && in.Polling == nil {
 		return nil, fmt.Errorf("%w: configure polling first", ErrTaskInvalid)
 	}
+	now := model.NowString()
+	t := model.Task{CardType: in.CardType, Polling: in.Polling, TicketURL: in.TicketURL, Priority: in.Priority, ID: uuid.NewString(), Title: in.Title, Description: in.Description, Column: in.Column, Position: in.Position, ThreadID: in.ThreadID, SourceURL: in.SourceURL, SourceKey: in.SourceKey, Config: s.normalizeTaskConfig(in.Config), Version: 1, CreatedAt: now, UpdatedAt: now}
+	if err := normalizeCard(&t); err != nil {
+		return nil, err
+	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, err
@@ -361,6 +379,16 @@ func (s *Store) CreateTask(ctx context.Context, in model.CreateTaskInput) (*mode
 		var id string
 		err := findTaskIdentityTx(ctx, tx, in.SourceKey, in.ThreadID, &id)
 		if err == nil {
+			existing, readErr := getTaskTx(ctx, tx, id)
+			if readErr != nil {
+				return nil, readErr
+			}
+			if in.CardType != "" && in.CardType != existing.CardType {
+				return nil, ErrTaskConflict
+			}
+			if incoming, parseErr := model.ParseArcanumPR(in.SourceURL); parseErr == nil && incoming != existing.ArcanumPRID {
+				return nil, ErrTaskConflict
+			}
 			tx.Rollback()
 			return s.GetTask(ctx, id)
 		}
@@ -368,8 +396,15 @@ func (s *Store) CreateTask(ctx context.Context, in model.CreateTaskInput) (*mode
 			return nil, err
 		}
 	}
-	now := model.NowString()
-	t := model.Task{TicketURL: in.TicketURL, Priority: in.Priority, ID: uuid.NewString(), Title: in.Title, Description: in.Description, Column: in.Column, Position: in.Position, ThreadID: in.ThreadID, SourceURL: in.SourceURL, SourceKey: in.SourceKey, Config: s.normalizeTaskConfig(in.Config), Version: 1, CreatedAt: now, UpdatedAt: now}
+	if existing, err := findPRCardTx(ctx, tx, t.ArcanumPRID); err != nil {
+		return nil, err
+	} else if existing != nil {
+		if t.ThreadID != "" && t.ThreadID != existing.ThreadID {
+			return nil, ErrTaskConflict
+		}
+		tx.Rollback()
+		return s.GetTask(ctx, existing.ID)
+	}
 	if t.Column == model.TaskPollingColumn {
 		if in.Polling == nil {
 			return nil, ErrTaskInvalid
@@ -470,6 +505,28 @@ func (s *Store) UpdateTask(ctx context.Context, id string, in model.UpdateTaskIn
 		p.NextCheckAt = ""
 		t.Polling = &p
 	}
+	previousPRID := t.ArcanumPRID
+	t.SourceURL = in.SourceURL
+	if err := normalizeCard(t); err != nil {
+		return nil, err
+	}
+	if previousPRID != t.ArcanumPRID {
+		owned, err := prSourceOwnedTx(ctx, tx, *t)
+		if err != nil {
+			return nil, err
+		}
+		if owned {
+			return nil, fmt.Errorf("%w: source-owned PR identity is fixed; create or select another PR card", ErrTaskInvalid)
+		}
+		if err := rejectPendingPRChangeTx(ctx, tx, id); err != nil {
+			return nil, err
+		}
+		if duplicate, err := findPRCardTx(ctx, tx, t.ArcanumPRID); err != nil {
+			return nil, err
+		} else if duplicate != nil && duplicate.ID != id {
+			return nil, fmt.Errorf("%w: PR already has a card", ErrTaskConflict)
+		}
+	}
 	if t.Column == model.TaskPollingColumn && t.Polling != nil {
 		if err := validateTaskPollingReadiness(t, *t.Polling); err != nil {
 			return nil, err
@@ -479,7 +536,7 @@ func (s *Store) UpdateTask(ctx context.Context, id string, in model.UpdateTaskIn
 	if err != nil {
 		return nil, err
 	}
-	_, err = tx.ExecContext(ctx, `UPDATE tasks SET ticket_url=?,priority=?,title=?,description=?,source_url=?,task_config_json=?,version=version+1,updated_at=? WHERE id=?`, t.TicketURL, t.Priority, in.Title, in.Description, nullable(in.SourceURL), string(raw), model.NowString(), id)
+	_, err = tx.ExecContext(ctx, `UPDATE tasks SET ticket_url=?,priority=?,title=?,description=?,source_url=?,arcanum_pr_id=?,task_config_json=?,version=version+1,updated_at=? WHERE id=?`, t.TicketURL, t.Priority, in.Title, in.Description, nullable(t.SourceURL), t.ArcanumPRID, string(raw), model.NowString(), id)
 	if err != nil {
 		return nil, err
 	}
@@ -531,6 +588,9 @@ func (s *Store) moveTask(ctx context.Context, id string, in model.MoveTaskInput,
 	}
 	if err := checkTaskVersion(t, in.ExpectedVersion); err != nil {
 		return err
+	}
+	if in.Column == model.TaskReview && t.CardType != model.CardTask {
+		return ErrTaskInvalid
 	}
 	if reorderOnly && t.Column != in.Column {
 		return ErrTaskConflict
@@ -687,6 +747,9 @@ func (s *Store) SetTaskPolling(ctx context.Context, id string, in model.SetTaskP
 		return nil, err
 	}
 	if err := checkTaskVersion(t, in.ExpectedVersion); err != nil {
+		return nil, err
+	}
+	if err := validateCardPolling(*t, &in.Polling); err != nil {
 		return nil, err
 	}
 	p := in.Polling

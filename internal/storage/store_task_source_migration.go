@@ -2,6 +2,7 @@ package storage
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 
@@ -19,6 +20,13 @@ func (s *Store) migrateOwnedSourceDefinitions(ctx context.Context) error {
 		return err
 	}
 	defer tx.Rollback()
+	if err := migrateOwnedSourceDefinitionsTx(ctx, tx); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func migrateOwnedSourceDefinitionsTx(ctx context.Context, tx *sql.Tx) error {
 	rows, err := tx.QueryContext(ctx, `SELECT task_id,action_json FROM task_polling WHERE json_extract(action_json,'$.type')='create_task' AND json_extract(action_json,'$.template_id') IS NOT NULL ORDER BY task_id`)
 	if err != nil {
 		return err
@@ -74,5 +82,5 @@ func (s *Store) migrateOwnedSourceDefinitions(ctx context.Context) error {
 	if _, err = tx.ExecContext(ctx, `UPDATE tasks SET source_task_id=(SELECT e.task_id FROM task_events e JOIN task_polling p ON p.task_id=e.task_id WHERE e.result_task_id=tasks.id AND e.task_id<>tasks.id AND json_extract(p.action_json,'$.type')='create_task' ORDER BY e.created_at,e.id LIMIT 1) WHERE source_task_id IS NULL AND EXISTS(SELECT 1 FROM task_events e JOIN task_polling p ON p.task_id=e.task_id WHERE e.result_task_id=tasks.id AND e.task_id<>tasks.id AND json_extract(p.action_json,'$.type')='create_task')`); err != nil {
 		return err
 	}
-	return tx.Commit()
+	return nil
 }

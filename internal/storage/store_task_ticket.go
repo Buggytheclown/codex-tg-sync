@@ -25,11 +25,15 @@ func (s *Store) SetTaskTicket(ctx context.Context, id string, in model.SetTaskTi
 	}
 	defer tx.Rollback()
 	var version int64
-	if err := tx.QueryRowContext(ctx, `SELECT version FROM tasks WHERE id=?`, id).Scan(&version); err != nil {
+	var kind string
+	if err := tx.QueryRowContext(ctx, `SELECT version,card_type FROM tasks WHERE id=?`, id).Scan(&version, &kind); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return ErrTaskNotFound
 		}
 		return err
+	}
+	if kind == model.CardPR {
+		return fmt.Errorf("%w: PR cards cannot have Tracker tickets", ErrTaskInvalid)
 	}
 	if version != in.ExpectedVersion {
 		return ErrTaskConflict

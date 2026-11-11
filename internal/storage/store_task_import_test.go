@@ -2,11 +2,43 @@ package storage
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	"testing"
 
 	"github.com/mideco-tech/codex-tg/internal/model"
 )
+
+func TestLegacyPRImportCannotAdoptAnExistingTaskChat(t *testing.T) {
+	s := openTestStore(t)
+	ctx := context.Background()
+	task, err := s.CreateTask(ctx, model.CreateTaskInput{Title: "Development", CardType: model.CardTask, ThreadID: "dev-thread"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := testExternalLaunchRequest("legacy-pr")
+	request.ThreadID = task.ThreadID
+	request.SourceURL = "https://a.yandex-team.ru/review/42"
+	if _, err = s.EnqueueExternalLaunchRequests(ctx, request.Source, []model.ExternalLaunchRequest{request}); err != nil {
+		t.Fatal(err)
+	}
+	in := model.TaskSourceImport{Key: "arcanum_review", Title: "Reviews", Polling: model.TaskPolling{Type: "pr_review_source", Mode: model.PollingRepeat, Config: []byte(`{}`)}, Definition: model.TaskDefinition{Title: "PR", Config: model.TaskConfig{InitialPrompt: "Review"}}, Legacy: []model.LegacyTaskImport{{SourceKey: "arcanum_review:42", EventKey: "legacy:42", SourceURL: request.SourceURL, RequestIDs: []string{request.ID}}}}
+	if _, err = s.BootstrapTaskSource(ctx, in); !errors.Is(err, ErrTaskConflict) {
+		t.Fatalf("adopted Task chat: %v", err)
+	}
+	after, err := s.GetTask(ctx, task.ID)
+	if err != nil || after.CardType != model.CardTask || after.SourceKey != "" || after.ThreadID != task.ThreadID {
+		t.Fatalf("partial identity change: %#v %v", after, err)
+	}
+	saved, _ := s.GetExternalLaunchRequest(ctx, request.ID)
+	if saved.TaskID != "" {
+		t.Fatal("partial request reassignment")
+	}
+	cards, _ := s.ListTaskCards(ctx)
+	if len(cards) != 1 {
+		t.Fatalf("partial source import: %d", len(cards))
+	}
+}
 
 func TestTaskSchemaUpgradePreservesLegacyRequestsAndNullableSettings(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "legacy.db")

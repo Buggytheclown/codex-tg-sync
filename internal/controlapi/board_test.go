@@ -292,3 +292,8 @@ func (b *fakeBoard) SetTaskTicket(context.Context, string, model.SetTaskTicketIn
 	task, err := b.change()
 	return &model.TaskCardDTO{ID: task.ID, Version: task.Version}, err
 }
+
+func (b *fakeBoard) SetTaskParent(context.Context, string, model.SetTaskParentInput) (*model.TaskCardDTO, error) {
+	t, err := b.change()
+	return &model.TaskCardDTO{ID: t.ID, Version: t.Version, Requests: []model.TaskCardRequest{}}, err
+}

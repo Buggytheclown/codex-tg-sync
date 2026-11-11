@@ -48,6 +48,8 @@ func runWithIO(args []string, in io.Reader, out io.Writer) error {
 		return nil
 	}
 	switch args[0] {
+	case "board":
+		return runBoard(args[1:], out)
 	case "init":
 		return runInit(args[1:], in, out)
 	case "service":
@@ -157,7 +159,9 @@ func runDaemon(cfg config.Config) error {
 		}
 	}
 	startYMessengerPoller(ctx, cfg, service, logger)
-	checker := polling.NewChecker(arcanumreview.NewCLIClient(cfg.ArcanumYABin, nil))
+	prClient := arcanumreview.NewCLIClient(cfg.ArcanumYABin, nil)
+	go arcanumreview.RunPRMetadata(ctx, service, prClient, func(err error) { logger.Printf("PR metadata refresh failed: %s", telegram.SanitizeLogError(err)) })
+	checker := polling.NewChecker(prClient)
 	checker.Login = &cfg.ArcanumReviewLogin
 	runner := polling.NewRunner(service, checker, cfg.ExternalRequestsTopicID)
 	go runner.Run(ctx, func(err error) {
@@ -518,6 +522,7 @@ func writeConfigEnv(path string, values map[string]string, force bool) error {
 func printUsage(out io.Writer) {
 	_, _ = fmt.Fprintln(out, "Usage:")
 	_, _ = fmt.Fprintln(out, "  ctr-go init [--force]")
+	_, _ = fmt.Fprintln(out, "  ctr-go board migrate-card-types --dry-run [--output file] | --apply report")
 	_, _ = fmt.Fprintln(out, "  ctr-go service install [flags]")
 	_, _ = fmt.Fprintln(out, "  ctr-go service start|stop|restart|status|enable-login|disable-login|uninstall")
 	_, _ = fmt.Fprintln(out, "  ctr-go daemon run")

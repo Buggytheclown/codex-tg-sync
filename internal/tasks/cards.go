@@ -29,3 +29,10 @@ func (s *Service) SetTaskTicket(ctx context.Context, id string, in model.SetTask
 	}
 	return s.store.GetTaskCard(ctx, id)
 }
+
+func (s *Service) SetTaskParent(ctx context.Context, id string, in model.SetTaskParentInput) (*model.TaskCardDTO, error) {
+	if err := s.store.SetTaskParent(ctx, id, in); err != nil {
+		return nil, err
+	}
+	return s.store.GetTaskCard(ctx, id)
+}

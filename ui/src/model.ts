@@ -1,8 +1,9 @@
-export const columns = ["inbox", "todo", "polling", "done"] as const;
+export const columns = ["inbox", "todo", "review", "polling", "done"] as const;
 export type Column = (typeof columns)[number];
 export const labels: Record<Column, string> = {
   inbox: "Inbox",
   todo: "TODO",
+  review: "Review",
   polling: "Polling",
   done: "Done",
 };
@@ -68,7 +69,13 @@ export type RequestInfo = {
   target_thread_id?: string;
 };
 export type Priority = "low" | "normal" | "high";
+export type CardType = "task" | "pr" | "schedule";
+export type PRStatus = { lifecycle: string; common_status: string; label: string; last_attempt_at: string; last_success_at: string; stale: boolean; unavailable: boolean };
 export type Task = {
+  card_type?: CardType | "";
+  arcanum_pr_id?: string;
+  parent_task_id?: string;
+  pr_status?: PRStatus;
   priority?: Priority;
   id: string;
   title: string;
@@ -104,10 +111,11 @@ export type CardPollingRule = {
 export type PollingSummary = Pick<Polling, "type" | "mode" | "next_check_at" | "last_attempt_at" | "last_success_at" | "last_error"> & { action: { type: string }; problem: string; rules?: CardPollingRule[] };
 export type TaskCard = Omit<Task, "config" | "polling" | "requests"> & { polling?: PollingSummary; requests: Pick<RequestInfo, "id" | "status">[] };
 export function compactTask(task: Task, rules?: CardPollingRule[]): TaskCard {
-  const { id, title, description, column, position, thread_id, source_url,
+  const { card_type, arcanum_pr_id, parent_task_id, pr_status, id, title, description, column, position, thread_id, source_url,
     source_key, source_task_id, source_author, priority, ticket_url, version, created_at, updated_at, done_at,
     execution, polling, requests } = task;
   return {
+    card_type, arcanum_pr_id, parent_task_id, pr_status,
     id, title, description, column, position, thread_id, source_url, source_key,
     source_task_id, source_author, priority: priority || "normal", ticket_url: ticket_url || "", version, created_at, updated_at, done_at,
     ...(execution ? { execution: {
@@ -125,6 +133,7 @@ export function compactTask(task: Task, rules?: CardPollingRule[]): TaskCard {
   };
 }
 export type Definition = {
+ card_type?: CardType;
   title: string;
   description: string;
   config: TaskConfig;

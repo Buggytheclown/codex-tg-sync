@@ -105,6 +105,7 @@ export function SourceEditor({
             : polling.action.initial_launch || { mode: "manual" },
         child_definition: {
           ...definition,
+          card_type: polling.type === "cron" ? "schedule" : "pr",
           ...(repeat ? { polling: waiting } : { polling: undefined }),
         },
       },

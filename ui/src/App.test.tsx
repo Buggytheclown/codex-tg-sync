@@ -432,7 +432,7 @@ it.each(["blur", "Enter", "CmdEnter"])("saves the header title with %s through t
 });
 it("keeps the board quiet while retaining task and empty-column affordances", async () => {
   render(<App />);
-  await screen.findByRole("button", { name: /CHAT Review the next revision/ });
+  await screen.findByRole("button", { name: /TASK Review the next revision/ });
   for (const text of ["YOUR WORKSPACE", "Local workspace", "Local task board", "Create tasks as work arrives.", "HOW IT WORKS", "Incoming", "Next up", "Reading a card leaves its state unchanged.", "Prompt rules choose Telegram approval or automatic start.", "Select a card to see its details."]) {
     expect(screen.queryByText(text)).toBeNull();
   }
@@ -457,7 +457,7 @@ it("replaces a selected card directly without dismissing details on the next poi
   window.history.replaceState(null, "", "/?task=task-1");
   render(<App />);
   await screen.findByRole("textbox", { name: "Title" });
-  const other = screen.getByRole("button", { name: /CHAT Other task/ });
+  const other = screen.getByRole("button", { name: /TASK Other task/ });
   fireEvent(other, new MouseEvent("pointerdown", { bubbles: true, button: 0 }));
   expect((screen.getByRole("textbox", { name: "Title" }) as HTMLTextAreaElement).value).toBe("Review the next revision");
   expect(screen.queryByRole("img", { name: "No task selected" })).toBeNull();
@@ -477,8 +477,8 @@ it("dismisses details with Escape, clears only the task URL parameter and reopen
   expect(window.location.search).toBe("?view=board");
   expect(window.location.hash).toBe("#queue");
   expect(screen.queryByRole("textbox", { name: "Title" })).toBeNull();
-  expect(screen.getByRole("button", { name: /CHAT Review the next revision/ }).getAttribute("aria-pressed")).toBe("false");
-  fireEvent.click(screen.getByRole("button", { name: /CHAT Review the next revision/ }));
+  expect(screen.getByRole("button", { name: /TASK Review the next revision/ }).getAttribute("aria-pressed")).toBe("false");
+  fireEvent.click(screen.getByRole("button", { name: /TASK Review the next revision/ }));
   await screen.findByLabelText("Title");
   expect(new URLSearchParams(window.location.search).get("task")).toBe("task-1");
   expect(calls.every(call => call.method === "GET")).toBe(true);
@@ -492,9 +492,9 @@ it("dismisses on an outside click while preserving inside clicks and destination
   expect(screen.getByLabelText("Title")).toBeTruthy();
   fireEvent(document.body, new MouseEvent("pointerdown", { bubbles: true, button: 0 }));
   await screen.findByRole("img", { name: "No task selected" });
-  fireEvent.click(screen.getByRole("button", { name: /CHAT Review the next revision/ }));
+  fireEvent.click(screen.getByRole("button", { name: /TASK Review the next revision/ }));
   await screen.findByLabelText("Title");
-  fireEvent.click(screen.getByRole("button", { name: /CHAT Other task/ }));
+  fireEvent.click(screen.getByRole("button", { name: /TASK Other task/ }));
   await screen.findByDisplayValue("Other task");
   expect(new URLSearchParams(window.location.search).get("task")).toBe("task-2");
   fireEvent.click(screen.getByRole("button", { name: "＋ New task" }));
@@ -539,7 +539,7 @@ it("blurs and saves Overview on Escape without reopening details when the save c
   release();
   await waitFor(() => expect(rows[0].title).toBe("Saved while dismissed"));
   expect(screen.queryByRole("textbox", { name: "Title" })).toBeNull();
-  fireEvent.click(screen.getByRole("button", { name: /CHAT Saved while dismissed/ }));
+  fireEvent.click(screen.getByRole("button", { name: /TASK Saved while dismissed/ }));
   await screen.findByDisplayValue("Saved while dismissed");
   expect(calls.filter(call => call.method === "PATCH")).toHaveLength(1);
 });
@@ -555,7 +555,7 @@ it("retains unsaved Polling settings and its tab when reopening the dismissed ca
   expect(screen.queryByLabelText("PR ID")).toBeNull();
   fireEvent.keyDown(screen.getAllByRole("button", { name: "Rule source" })[0], { key: "Escape" });
   await screen.findByRole("img", { name: "No task selected" });
-  fireEvent.click(screen.getByRole("button", { name: /CHAT Review the next revision/ }));
+  fireEvent.click(screen.getByRole("button", { name: /TASK Review the next revision/ }));
   await screen.findByRole("tab", { name: "Polling", selected: true });
   expect((ruleSource() as HTMLInputElement).value).toBe("456");
   expect(calls.every(call => call.method === "GET")).toBe(true);
@@ -663,7 +663,7 @@ it.each(["tab", "card"])("serializes Overview edits blurred while saving across 
   fireEvent.change(description, { target: { value: "Queued description\nStill multiline" } });
   fireEvent.blur(description);
   if (destination === "tab") fireEvent.click(screen.getByRole("tab", { name: "Polling" }));
-  else fireEvent.click(screen.getByRole("button", { name: /CHAT Other task/ }));
+  else fireEvent.click(screen.getByRole("button", { name: /TASK Other task/ }));
   await waitFor(() => expect(screen.queryByDisplayValue("Latest queued draft")).toBeNull());
   release();
   await waitFor(() => expect(rows[0].title).toBe("Latest queued draft"));
@@ -860,7 +860,7 @@ it("identifies an old task's failed autosave after selecting another card and re
   render(<App />);
   fireEvent.change(await screen.findByLabelText("Title"), { target: { value: "Keep original draft" } });
   fireEvent.blur(screen.getByLabelText("Title"));
-  fireEvent.click(screen.getByRole("button", { name: /CHAT Other task/ }));
+  fireEvent.click(screen.getByRole("button", { name: /TASK Other task/ }));
   await screen.findByDisplayValue("Other task");
   release();
   await screen.findByText("Review the next revision: Original task save failed");
@@ -906,7 +906,7 @@ it("offers one card priority control and separate keyboard targets for ticket an
   render(<App />);
   const select = await screen.findByLabelText("Priority for Review the next revision");
   const wrapper = select.closest<HTMLElement>(".card-with-link")!;
-  const card = within(wrapper).getByRole("button", { name: /CHAT Review the next revision/ });
+  const card = within(wrapper).getByRole("button", { name: /TASK Review the next revision/ });
   expect(within(wrapper).getAllByRole("combobox")).toHaveLength(1);
   expect(card.querySelector("a, select, input, textarea, button")).toBeNull();
   expect(within(wrapper).queryByRole("img", { name: "High priority" })).toBeNull();
@@ -1044,7 +1044,7 @@ describe("board operator flows", () => {
   it("opens the polling form instead of moving an unconfigured task", async () => {
     render(<App />);
     const card = await screen.findByRole("button", {
-      name: /CHAT Review the next revision/,
+      name: /TASK Review the next revision/,
     });
     fireEvent.click(card);
     await screen.findByRole("combobox", { name: "Move task" });
@@ -1065,7 +1065,7 @@ describe("board operator flows", () => {
   it("routes an invalid Polling drop into configuration without a write", async () => {
     render(<App />);
     await screen.findByRole("button", {
-      name: /CHAT Review the next revision/,
+      name: /TASK Review the next revision/,
     });
     const dataTransfer = { setData() {}, getData: () => rows[0].id };
     fireEvent.dragStart(document.querySelector('[data-task-id]')!, { dataTransfer });
@@ -1130,7 +1130,7 @@ describe("board operator flows", () => {
   it("creates a source directly with its child definition", async () => {
     render(<App />);
     await screen.findByRole("button", {
-      name: /CHAT Review the next revision/,
+      name: /TASK Review the next revision/,
     });
     fireEvent.click(screen.getByRole("button", { name: /Add source/ }));
     fireEvent.change(screen.getByLabelText("Source name"), {
@@ -1420,7 +1420,7 @@ it("loads full details only on selection and retries failed details without blan
     return original(path, options);
   });
   render(<App />);
-  const card = await screen.findByRole("button", { name: /CHAT Review the next revision/ });
+  const card = await screen.findByRole("button", { name: /TASK Review the next revision/ });
   expect(calls.map((c) => c.path)).toEqual(["/v1/task-cards"]);
   fireEvent.click(card);
   await screen.findByText("Details unavailable");
@@ -1436,9 +1436,9 @@ it("ignores a delayed response after selecting another compact card", async () =
   const held = new Promise<Response>((done) => { resolve = done; });
   vi.mocked(fetch).mockImplementation((path, options) => path === "/v1/tasks/task-1" ? held : original(path, options));
   render(<App />);
-  fireEvent.click(await screen.findByRole("button", { name: /CHAT Review the next revision/ }));
+  fireEvent.click(await screen.findByRole("button", { name: /TASK Review the next revision/ }));
   await screen.findByText("Loading details…");
-  fireEvent.click(screen.getByRole("button", { name: /CHAT Other task/ }));
+  fireEvent.click(screen.getByRole("button", { name: /TASK Other task/ }));
   await screen.findByDisplayValue("Other task");
   resolve({ ok: true, status: 200, json: async () => rows[0] } as Response);
   await waitFor(() => expect((screen.getByLabelText("Title") as HTMLTextAreaElement).value).toBe("Other task"));

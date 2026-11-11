@@ -5,7 +5,7 @@ import { arcanumReviewLink } from "./model";
 import { Field } from "./forms";
 import { EditIcon, ServiceIcon } from "./ServiceIcons";
 
-type PRTask = Pick<TaskCard, "id" | "version" | "source_url">;
+type PRTask = Pick<TaskCard, "id" | "version" | "source_url" | "card_type">;
 type SavePR = (url: string, version: number) => Promise<Task>;
 
 function normalizePR(value: string): string | undefined {
@@ -14,7 +14,7 @@ function normalizePR(value: string): string | undefined {
   const id = text.match(/^#?([1-9]\d*)$/)?.[1];
   if (id) return `https://a.yandex-team.ru/review/${id}`;
   const pr = arcanumReviewLink(text);
-  return pr && /^[1-9]\d*$/.test(pr.id) ? pr.href : undefined;
+  return pr && /^[1-9]\d*$/.test(pr.id) ? `https://a.yandex-team.ru/review/${pr.id}` : undefined;
 }
 
 export function PRControl({ task, busy, onSave }: { task: PRTask; busy: boolean; onSave?: SavePR }) {
@@ -64,7 +64,7 @@ function PRForm({ task, busy, onSave, onClose }: { task: PRTask; busy: boolean; 
     } catch (err) { setError((err as Error).message); }
   };
   return <form className="ticket-form pr-form" onSubmit={e => void submit(e)}>
-    <Field label="PR ID or URL" hint="PR ID or Arcanum review link. Clear to remove the link.">
+    <Field label="PR ID or URL" hint={task.card_type === "pr" ? "PR ID or Arcanum review link." : "PR ID or Arcanum review link. Clear to remove the link."}>
       <input type="text" autoFocus value={value} onChange={e => { draft.current = e.target.value; setValue(e.target.value); }} />
     </Field>
     {stale && <button type="button" disabled={busy} onClick={() => { setBaseline(task); setValue(task.source_url); draft.current = task.source_url; setError(""); }}>Reload latest PR</button>}

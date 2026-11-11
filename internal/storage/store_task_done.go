@@ -2,6 +2,7 @@ package storage
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"time"
 )
@@ -24,6 +25,13 @@ func (s *Store) migrateTaskDoneDates(ctx context.Context) error {
 	if _, err = tx.ExecContext(ctx, `ALTER TABLE tasks ADD COLUMN done_at TEXT NOT NULL DEFAULT ''`); err != nil {
 		return err
 	}
+	if err := backfillTaskDoneDatesTx(ctx, tx); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func backfillTaskDoneDatesTx(ctx context.Context, tx *sql.Tx) error {
 	// Only the most recent column-affecting event can describe the current stint.
 	// A legacy polling_event lacks its destination: it invalidates earlier evidence.
 	rows, err := tx.QueryContext(ctx, `SELECT e.task_id,e.kind,e.payload_json,e.created_at,t.created_at
@@ -91,5 +99,5 @@ func (s *Store) migrateTaskDoneDates(ctx context.Context) error {
 			return err
 		}
 	}
-	return tx.Commit()
+	return nil
 }

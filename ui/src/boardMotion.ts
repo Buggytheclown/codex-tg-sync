@@ -3,7 +3,7 @@ import type { Column } from "./model";
 export type DropPosition = { column: Column; beforeID: string };
 type Callbacks = {
   start: (id: string, height: number) => boolean;
-  over: (element: HTMLElement, y: number, column: Column) => DropPosition;
+  over: (element: HTMLElement, y: number, column: Column) => DropPosition | null;
   target: (position: DropPosition | null) => void;
   drop: (position: DropPosition | null) => void;
 };

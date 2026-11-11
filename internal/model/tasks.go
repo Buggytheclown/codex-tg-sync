@@ -54,6 +54,10 @@ type TaskPolling struct {
 	LastError     string            `json:"last_error"`
 }
 type Task struct {
+	ArcanumPRID  string               `json:"arcanum_pr_id"`
+	ParentTaskID string               `json:"parent_task_id"`
+	PRStatus     *PRStatus            `json:"pr_status,omitempty"`
+	CardType     string               `json:"card_type"`
 	TicketURL    string               `json:"ticket_url"`
 	Priority     string               `json:"priority"`
 	ID           string               `json:"id"`
@@ -88,6 +92,7 @@ type TaskRequestInfo struct {
 	CreatedAt      TimeString `json:"created_at"`
 }
 type TaskDefinition struct {
+	CardType    string       `json:"card_type,omitempty"`
 	Title       string       `json:"title"`
 	Description string       `json:"description"`
 	Config      TaskConfig   `json:"config"`
@@ -103,6 +108,7 @@ type TaskEvent struct {
 	CreatedAt    TimeString      `json:"created_at"`
 }
 type CreateTaskInput struct {
+	CardType    string       `json:"card_type"`
 	TicketURL   string       `json:"ticket_url"`
 	Priority    string       `json:"priority"`
 	Title       string       `json:"title"`

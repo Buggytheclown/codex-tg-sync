@@ -53,6 +53,9 @@ func (s *Store) BootstrapTaskSource(ctx context.Context, in model.TaskSourceImpo
 	now := model.NowString()
 	if errors.Is(err, sql.ErrNoRows) {
 		d := in.Definition
+		if d.CardType == "" {
+			d.CardType = model.SourceChildCardType(in.Polling.Type)
+		}
 		d.Config = s.normalizeTaskConfig(d.Config)
 		d.Polling = cleanChildPolling(d.Polling)
 		if err := validateChildDefinition(d); err != nil {
@@ -140,6 +143,13 @@ func (s *Store) BootstrapTaskSource(ctx context.Context, in model.TaskSourceImpo
 			if first.SandboxMode != nil {
 				child.Config.Execution.SandboxMode = *first.SandboxMode
 			}
+			existing, lookupErr := findPRCardTx(ctx, tx, child.ArcanumPRID)
+			if lookupErr != nil {
+				return nil, lookupErr
+			}
+			if existing != nil {
+				return nil, fmt.Errorf("%w: legacy PR already has a card; historical chats cannot be merged", ErrTaskConflict)
+			}
 			if err := insertTaskTx(ctx, tx, child); err != nil {
 				return nil, err
 			}
@@ -170,6 +180,12 @@ func (s *Store) BootstrapTaskSource(ctx context.Context, in model.TaskSourceImpo
 		linked, err := getTaskTx(ctx, tx, taskID)
 		if err != nil {
 			return nil, err
+		}
+		if model.PRSourceType(in.Polling.Type) {
+			legacyPR, parseErr := model.ParseArcanumPR(legacy.SourceURL)
+			if parseErr != nil || linked.CardType != model.CardPR || linked.ArcanumPRID != legacyPR {
+				return nil, fmt.Errorf("%w: legacy PR identity conflicts with the linked card", ErrTaskConflict)
+			}
 		}
 		if linked.SourceKey != "" && linked.SourceKey != legacy.SourceKey {
 			return nil, fmt.Errorf("%w: legacy chat belongs to another source cycle", ErrTaskConflict)

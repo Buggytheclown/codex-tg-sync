@@ -572,3 +572,26 @@ For live Telegram QA, verify:
   App Server turn, intentionally lost successful Telegram create response, actual
   recovery card and authenticated Telegram history readback. It never consumes
   getUpdates or restarts the working daemon; it deletes only its probe artifacts.
+
+## Task / PR / Schedule cards and Review
+
+- `store_task_types_test.go` covers canonical PR reuse across sources without a
+  launch, typed parent cardinality, optimistic versions, unlink and Review guards.
+- `store_task_type_migration_test.go` covers stale report rejection, failed-history
+  rollback, event rowid/FK preservation, legacy direct-link archival, old Done and
+  source upgrades, empty schema/repeat apply, and referenced template fencing.
+- `store_task_import_test.go` rejects adoption of a development Task chat by a
+  legacy PR import without assigning provenance or requests partially.
+- `store_pr_metadata_test.go` and `arcanumreview/metadata_test.go` cover passive
+  bounded metadata reads, no comments/checks, retry deadlines, last-known/stale
+  projection and unchanged card version, events, polling, requests and state.
+- `board_parent_test.go` covers compact parent commands, types, stale versions and
+  HTTP trust boundaries. `board_pr_identity_test.go` covers idle/active/missing
+  authority, frozen pending requests, same-ID formatting and source-owned identity.
+- `ui/src/taskTypes.test.tsx` covers typed footers, shared PR rows, search by both
+  Arc URL formats, filtered parent navigation, separate development/review chats,
+  PR state propagation, Review exclusion and draft preservation after conflicts.
+- Retain existing drag/motion, Done chronology, source/settings, approval and
+  poller-owned TODO → Inbox suites. Browser acceptance checks five-column overflow,
+  narrow footer groups, row focus/drag separation and direct parent navigation.
+  If browser access is unavailable, report that visual acceptance remains unverified.

@@ -22,7 +22,7 @@ func TestSourceLaunchPolicyTrimsSourceNameUsesActualAuthorAndContinuationStaysMa
 			if err != nil {
 				t.Fatal(err)
 			}
-			out := model.TaskPollingOutcome{TaskID: source.ID, Generation: source.Polling.Generation, Events: []model.PollingEvent{{Key: "pr:42", SourceKey: "pr:42", Variables: map[string]string{"author": tc.author, "pr_title": "Fix", "pr_url": "url"}, Payload: []byte(`{"author":"` + tc.author + `"}`)}}}
+			out := model.TaskPollingOutcome{TaskID: source.ID, Generation: source.Polling.Generation, Events: []model.PollingEvent{{Key: "pr:42", SourceKey: "pr:42", SourceURL: "https://a.yandex-team.ru/review/42", Variables: map[string]string{"author": tc.author, "pr_title": "Fix", "pr_url": "url"}, Payload: []byte(`{"author":"` + tc.author + `"}`)}}}
 			if _, err := s.AcceptTaskPollingOutcome(ctx, out, 123); err != nil {
 				t.Fatal(err)
 			}
@@ -59,7 +59,7 @@ func TestSourceLaunchPolicyTrimsSourceNameUsesActualAuthorAndContinuationStaysMa
 			if _p != nil {
 				t.Fatal(_p)
 			}
-			childPtr, err = s.SetTaskPolling(ctx, child.ID, model.SetTaskPollingInput{ExpectedVersion: childPtr.Version, Polling: model.TaskPolling{Type: "pr_wait", Mode: model.PollingOnce, Config: []byte(`{}`), Action: model.TaskPollingAction{Type: model.PollingResumeTask}}})
+			childPtr, err = s.SetTaskPolling(ctx, child.ID, model.SetTaskPollingInput{ExpectedVersion: childPtr.Version, Polling: model.TaskPolling{Type: "pr_wait", Mode: model.PollingOnce, Config: []byte(`{"pr_id":"42"}`), Action: model.TaskPollingAction{Type: model.PollingResumeTask}}})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -129,7 +129,7 @@ func TestImportedReviewDefaultsUpgradeOncePreservesCustomPolicyAndFrozenRequests
 					t.Fatal(err)
 				}
 			}
-			out := model.TaskPollingOutcome{TaskID: source.ID, Generation: source.Polling.Generation, Events: []model.PollingEvent{{Key: "old", SourceKey: "old", Payload: []byte(`{}`)}}}
+			out := model.TaskPollingOutcome{TaskID: source.ID, Generation: source.Polling.Generation, Events: []model.PollingEvent{{Key: "old", SourceKey: "old", SourceURL: "https://a.yandex-team.ru/review/42", Payload: []byte(`{}`)}}}
 			if _, err := s.AcceptTaskPollingOutcome(ctx, out, 123); err != nil {
 				t.Fatal(err)
 			}

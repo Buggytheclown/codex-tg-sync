@@ -35,7 +35,10 @@ import { useTabSlide } from "./useTabSlide";
 import { DescriptionField } from "./DescriptionField";
 import { ChipSelect } from "./ChipSelect";
 import { CardPollers } from "./CardPollers";
-const columnOptions = columns.map((value, index) => ({ value, label: labels[value], icon: ["↓", "●", "◷", "✓"][index] }));
+import { PRStatusBadge } from "./PRStatusBadge";
+import { TaskRelations } from "./TaskRelations";
+const columnIcons: Record<Column, string> = { inbox: "↓", todo: "●", review: "◇", polling: "◷", done: "✓" };
+const columnOptions = columns.map(value => ({ value, label: labels[value], icon: columnIcons[value] }));
 const priorityOptions = [{ value: "low", label: "Low", icon: "↓" }, { value: "normal", label: "Normal", icon: "—" }, { value: "high", label: "High", icon: "↑" }] as const;
 type Tab = "overview" | "polling" | "history";
 type OverviewValues = { title: string; description: string; priority: Priority };
@@ -178,6 +181,8 @@ class OverviewDraft {
 }
 export function TaskCard({
   task,
+  linkedPRs = [],
+  onSelectPR,
   sourceKind,
   selected,
   onSelect,
@@ -200,6 +205,8 @@ export function TaskCard({
   onPriority?: (priority: Priority) => Promise<void>;
   onTicket?: (url: string, version: number) => Promise<Card>;
   onPR?: (url: string, version: number) => Promise<Task>;
+  linkedPRs?: Card[];
+  onSelectPR?: (task: Card) => void;
   onLink?: (threadID: string, version: number) => Promise<Task>;
   controlsDisabled?: boolean;
   grabbed?: boolean;
@@ -236,7 +243,7 @@ export function TaskCard({
       <span className="card-top">
         <span className="card-grip" aria-hidden="true">⠿</span>
         <span className="eyebrow">
-          {task.thread_id ? "CHAT" : task.source_key ? "AUTOMATION" : "TASK"}
+          {(task.card_type || "task").toUpperCase()}
         </span>
       </span>
       <span className="card-title">
@@ -259,10 +266,17 @@ export function TaskCard({
         <option value="low">↓ Low</option><option value="normal">— Normal</option><option value="high">↑ High</option>
       </select>
     <div className="card-controls">
-    <PRControl task={task} busy={controlsDisabled} onSave={onPR} />
-    {onTicket && <TicketControl task={task} busy={controlsDisabled} onSave={onTicket} />}
+    {task.card_type !== "task" && <div className="pr-connection"><PRControl task={task} busy={controlsDisabled} onSave={onPR} /><PRStatusBadge task={task} /></div>}
+    {onTicket && task.card_type !== "pr" && <TicketControl task={task} busy={controlsDisabled} onSave={onTicket} />}
       <CodexConnection task={task} linking={linking} disabled={controlsDisabled || !onLink} onToggle={() => setLinking(!linking)} />
     </div>
+    {linkedPRs.length > 0 && <div className="linked-pr-list" aria-label="Linked pull requests">
+      {linkedPRs.map(pr => <button key={pr.id} type="button" className="linked-pr-row" draggable={false}
+        aria-label={`Open PR #${pr.arcanum_pr_id} · ${labels[pr.column]}`}
+        onPointerDown={event => event.stopPropagation()} onClick={event => { event.stopPropagation(); onSelectPR?.(pr); }}>
+        <span>#{pr.arcanum_pr_id}</span><span>{labels[pr.column]}</span>
+      </button>)}
+    </div>}
     {linking && onLink && <div className="card-chat-form">
       <TaskChatForm task={task} busy={controlsDisabled} onLink={onLink} inline submitLabel={task.thread_id ? "Save chat" : "Link chat"} onSaved={() => setLinking(false)} onCancel={() => setLinking(false)} />
     </div>}
@@ -442,7 +456,7 @@ export function App() {
       if (e.button !== 0 || dragRef.current || !(e.target instanceof Node)) return;
       // Selecting another card/source replaces the view directly, without an
       // empty-panel flash between pointerdown and click (or during a drag).
-      if (e.target instanceof Element && e.target.closest(".task-card, .source-item")) return;
+      if (e.target instanceof Element && e.target.closest(".task-card, .source-item, .linked-pr-row")) return;
       if (!detailPanel.current?.contains(e.target)) dismissDetails();
     };
     window.addEventListener("keydown", escape);
@@ -603,7 +617,7 @@ export function App() {
     } finally { if (mounted.current) setBusy(false); }
   };
   const move = async (task: Card, column: Column, beforeID = "") => {
-    if (pendingMove.current || busy || (column === "done" && task.column === "done")) return;
+    if (pendingMove.current || busy || (column === "done" && task.column === "done") || (column === "review" && task.card_type !== "task" && task.card_type !== undefined)) return;
     if (column === "done") beforeID = "";
     if (column === "polling" && task.column !== column) {
       const problem = task.polling ? task.polling.problem : pollingProblem();
@@ -694,7 +708,9 @@ export function App() {
       }
     }
   };
-  const insertionAt = (element: HTMLElement, y: number, column: Column) => {
+  const insertionAt = (element: HTMLElement, y: number, column: Column): DropPosition | null => {
+    const moving = tasks.find(task => task.id === dragRef.current);
+    if (column === "review" && moving?.card_type && moving.card_type !== "task") return null;
     if (column === "done") return { column, beforeID: "" };
     const candidates = Array.from(element.querySelectorAll<HTMLElement>("[data-task-id]"))
       .filter((card) => card.dataset.taskId !== dragRef.current);
@@ -734,13 +750,16 @@ export function App() {
     );
   };
   const visibleColumns = columns.filter((column) => showDone || column !== "done");
+  const searchText = query.trim().toLowerCase();
+  const searchPR = arcanumReviewLink(query.trim());
+  const searchNeedle = searchPR?.id || (/^#[1-9]\d*$/.test(searchText) ? searchText.slice(1) : searchText);
   const sources = tasks.filter(isSource),
     cards = tasks.filter(
       (t) =>
         !isSource(t) &&
-        `${t.title} ${t.description} ${t.source_url} ${t.ticket_url || ""}`
+        `${t.title} ${t.description} ${t.source_url} ${t.arcanum_pr_id || ""} ${t.ticket_url || ""}`
           .toLowerCase()
-          .includes(query.trim().toLowerCase()),
+          .includes(searchNeedle),
     );
   const beginDrag = (id: string, height: number) => {
     const task = cards.find(t => t.id === id);
@@ -761,6 +780,12 @@ export function App() {
     target: target => setInsertion(old => old?.column === target?.column && old?.beforeID === target?.beforeID ? old : target),
     drop: finishDrag,
   };
+  const childrenByParent = new Map<string, Card[]>();
+  for (const child of tasks) if (child.card_type === "pr" && child.parent_task_id) {
+    const siblings = childrenByParent.get(child.parent_task_id) || [];
+    siblings.push(child); childrenByParent.set(child.parent_task_id, siblings);
+  }
+  const saveParent = (pr: Card, parentID: string) => mutate<Card>(`/v1/tasks/${pr.id}/parent`, "POST", { expected_version: pr.version, parent_task_id: parentID });
   const selectedSourceKind = selected ? taskSourceKind(selected, sources.find(source => source.id === selected.source_task_id)) : undefined;
   return (
     <div className={`app ${collapsed ? "sources-collapsed" : ""}`}>
@@ -941,6 +966,8 @@ export function App() {
                         {insertion?.beforeID === task.id && placeholder}
                         <TaskCard
                           task={task}
+                          linkedPRs={childrenByParent.get(task.id)}
+                          onSelectPR={select}
                           sourceKind={taskSourceKind(task, sources.find(s => s.id === task.source_task_id))}
                           selected={visibleSelection === task.id}
                           grabbed={drag?.id === task.id}
@@ -1071,7 +1098,7 @@ export function App() {
                 {tab === "overview" ? title : <span className="detail-title-text">{titleText}</span>}
               </h2>
               <div className="detail-badges">
-                <ChipSelect className="column-select" label="Move task" value={selected.column} options={columnOptions} disabled={busy}
+                <ChipSelect className="column-select" label="Move task" value={selected.column} options={columnOptions.filter(option => option.value !== "review" || !selected.card_type || selected.card_type === "task")} disabled={busy}
                   onChange={column => void move(compactTask(selected, tasks.find(task => task.id === selected.id)?.polling?.rules), column)} />
                 {executionLabel(selected) && (
                   <span className={`pill execution ${executionLabel(selected).toLowerCase()}`}>{executionLabel(selected)}</span>
@@ -1107,7 +1134,7 @@ export function App() {
             <div className="panel-body">
               {feedback}
               <div hidden={tab !== "overview"}>
-                <div className="overview">{form}<TaskReferences task={selected} /></div>
+                <div className="overview">{form}<TaskRelations key={selected.id} task={selected} cards={tasks} busy={busy} onSelect={select} onSave={saveParent} /><TaskReferences task={selected} /></div>
               </div>
               {tab === "polling" ? (
                 <WorkflowForm key={`workflow-${selected.id}`} task={selected} busy={busy} configure={activationRequested}
@@ -1334,6 +1361,8 @@ function NewTask({
   busy: boolean;
   onSave: (input: unknown) => Promise<void>;
 }) {
+  const [cardType, setCardType] = useState<"task" | "pr">("task");
+  const [sourceURL, setSourceURL] = useState("");
   const [title, setTitle] = useState(""),
     [description, setDescription] = useState(""),
     [priority, setPriority] = useState<Priority>("normal"),
@@ -1342,7 +1371,7 @@ function NewTask({
   const submit = async (e: FormEvent) => {
     e.preventDefault();
     try {
-      await onSave({ title, description, priority, column: "todo", config });
+      await onSave({ title, description, priority, card_type: cardType, source_url: cardType === "pr" ? sourceURL : "", column: "todo", config });
     } catch (err) {
       setError((err as Error).message);
     }
@@ -1352,6 +1381,8 @@ function NewTask({
       <h2>Something to work on</h2>
       <p className="note">New manual tasks start in TODO.</p>
       <form onSubmit={(e) => void submit(e)}>
+        <Field label="Card type"><ChipSelect label="Card type" value={cardType} options={[{value: "task", label: "Task"}, {value: "pr", label: "PR"}]} disabled={busy} onChange={setCardType} /></Field>
+        {cardType === "pr" && <Field label="Arcanum PR"><input required value={sourceURL} onChange={event => setSourceURL(event.target.value)} placeholder="PR number or URL" /></Field>}
         <Field label="Title">
           <input
             required

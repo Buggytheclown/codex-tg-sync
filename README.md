@@ -165,7 +165,27 @@ Arcanum polling uses the authenticated `ya tool gena-arcanum-cli`. Assigned PRs 
 
 ## Local task board
 
-The board has a collapsible source list on the left, Inbox / TODO / Polling / Done in the center, and card details on the right. Running/completed describes the chat pass, independently of the column. Sources configure initial launch policy; Telegram shows requests and approves manual initial starts and continuations. Discussion and result review stay in Codex. New child titles start with the source name; cron adds the scheduled local date/time and timezone. The default review source is `PR review`; custom source names and historical task/request titles are preserved.
+The board has a collapsible source list on the left, Inbox / TODO / Review / Polling / Done in the center, and card details on the right. Running/completed describes the chat pass, independently of the column. Sources configure initial launch policy; Telegram shows requests and approves manual initial starts and continuations. Discussion and result review stay in Codex. New child titles start with the source name; cron adds the scheduled local date/time and timezone. The default review source is `PR review`; custom source names and historical task/request titles are preserved.
+
+Cards have stable Task, PR, or Schedule types. A Task keeps its Tracker ticket and development chat; a PR keeps its Arcanum link, Arc status, and review chat. Manually link existing PR cards to a Task from Overview. Linked PRs also appear as one-line selections beneath the Task footer; they remain independent cards in their own columns. Review belongs to Tasks, and completing their PRs never completes the parent automatically. Cron-created cards remain on the board as Schedule.
+
+Arc footer statuses refresh passively, including outside Polling. They do not run rules or start chats. Failed observations retain the last known status with a stale marker. A PR discovered by multiple sources reuses the existing card without another initial launch.
+
+Existing board databases need an offline migration before starting this version:
+
+```sh
+ctr-go service stop
+# Preserve a consistent offline SQLite backup, including any WAL, before applying.
+ctr-go board migrate-card-types --dry-run --output migration-report.json
+ctr-go board migrate-card-types --apply migration-report.json
+ctr-go service start
+```
+
+The report contains private card identities; keep it outside the public checkout.
+Apply rejects a changed database/report and preserves card/chat IDs, histories,
+requests and polling ownership. Legacy Task PR links are archived in History
+and cleared from the active field; parent links remain manual. A previous binary
+requires restoration of its pre-migration database backup.
 
 Build and install the frontend from `ui/`:
 

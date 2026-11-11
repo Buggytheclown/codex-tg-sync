@@ -32,11 +32,11 @@ func (s *Store) listTaskCards(ctx context.Context, id string, now time.Time) ([]
 		where = " WHERE t.id=?"
 		args = append(args, id)
 	}
-	rows, err := s.db.QueryContext(ctx, `SELECT t.ticket_url,t.priority,t.id,t.title,t.description,t.column,t.position,coalesce(t.thread_id,''),coalesce(t.source_url,''),coalesce(t.source_key,''),coalesce(t.source_task_id,''),coalesce(t.source_author,''),t.version,t.created_at,t.updated_at,t.done_at,
+	rows, err := s.db.QueryContext(ctx, `SELECT t.card_type,t.arcanum_pr_id,coalesce(t.parent_task_id,''),t.ticket_url,t.priority,t.id,t.title,t.description,t.column,t.position,coalesce(t.thread_id,''),coalesce(t.source_url,''),coalesce(t.source_key,''),coalesce(t.source_task_id,''),coalesce(t.source_author,''),t.version,t.created_at,t.updated_at,t.done_at,
  coalesce(x.thread_id,''),coalesce(x.last_seen_turn_status,''),coalesce(x.last_seen_thread_status,''),coalesce(x.last_poll_at,''),
  coalesce(p.task_id,''),coalesce(p.type,''),coalesce(p.mode,''),coalesce(p.config_json,'{}'),coalesce(p.action_json,'{}'),coalesce(p.cursor_json,'{}'),coalesce(p.next_check_at,''),coalesce(p.last_attempt_at,''),coalesce(p.last_success_at,''),coalesce(p.last_error,''),coalesce(json_extract(t.task_config_json,'$.continuation_prompt'),'')
- ,coalesce(parent.source_key,'')
- FROM tasks t LEFT JOIN thread_snapshots x ON x.thread_id=t.thread_id LEFT JOIN task_polling p ON p.task_id=t.id LEFT JOIN tasks parent ON parent.id=t.source_task_id `+where+` ORDER BY t.column,t.position,t.id`, args...)
+ ,coalesce(parent.source_key,''),coalesce(m.lifecycle,''),coalesce(m.common_status,''),coalesce(m.last_attempt_at,''),coalesce(m.last_success_at,''),coalesce(m.last_error,'')
+ FROM tasks t LEFT JOIN thread_snapshots x ON x.thread_id=t.thread_id LEFT JOIN task_polling p ON p.task_id=t.id LEFT JOIN tasks parent ON parent.id=t.source_task_id LEFT JOIN arcanum_pr_metadata m ON t.card_type='pr' AND m.pr_id=t.arcanum_pr_id `+where+` ORDER BY t.column,t.position,t.id`, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -47,10 +47,12 @@ func (s *Store) listTaskCards(ctx context.Context, id string, now time.Time) ([]
 		var e model.TaskCardExecution
 		var p model.TaskPolling
 		var snapshotID, pollingID, cfg, action, cursor, prompt, parentKey string
-		if err := rows.Scan(&c.TicketURL, &c.Priority, &c.ID, &c.Title, &c.Description, &c.Column, &c.Position, &c.ThreadID, &c.SourceURL, &c.SourceKey, &c.SourceTaskID, &c.SourceAuthor, &c.Version, &c.CreatedAt, &c.UpdatedAt, &c.DoneAt, &snapshotID, &e.LastSeenTurnStatus, &e.LastSeenThreadStatus, &e.LastPollAt, &pollingID, &p.Type, &p.Mode, &cfg, &action, &cursor, &p.NextCheckAt, &p.LastAttemptAt, &p.LastSuccessAt, &p.LastError, &prompt, &parentKey); err != nil {
+		var lifecycle, common, attempt, success, problem string
+		if err := rows.Scan(&c.CardType, &c.ArcanumPRID, &c.ParentTaskID, &c.TicketURL, &c.Priority, &c.ID, &c.Title, &c.Description, &c.Column, &c.Position, &c.ThreadID, &c.SourceURL, &c.SourceKey, &c.SourceTaskID, &c.SourceAuthor, &c.Version, &c.CreatedAt, &c.UpdatedAt, &c.DoneAt, &snapshotID, &e.LastSeenTurnStatus, &e.LastSeenThreadStatus, &e.LastPollAt, &pollingID, &p.Type, &p.Mode, &cfg, &action, &cursor, &p.NextCheckAt, &p.LastAttemptAt, &p.LastSuccessAt, &p.LastError, &prompt, &parentKey, &lifecycle, &common, &attempt, &success, &problem); err != nil {
 			rows.Close()
 			return nil, err
 		}
+		c.PRStatus = projectPRStatus(c.CardType, lifecycle, common, attempt, success, problem, now)
 		if snapshotID != "" {
 			c.Execution = &e
 		}
