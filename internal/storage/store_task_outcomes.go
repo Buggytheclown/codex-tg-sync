@@ -253,6 +253,11 @@ func (s *Store) AcceptTaskPollingOutcome(ctx context.Context, out model.TaskPoll
 			}
 			autoStart := (p.Action.Type == model.PollingCreateTask && initialLaunchAllowed(p.Action.InitialLaunch, author)) || (p.Action.Type == model.PollingResumeTask && p.Action.AutoStart)
 			cfg := normalizeConfig(target.Config).Execution
+			if reserved, err := boardChatReservedTx(ctx, tx, target.ID); err != nil {
+				return false, err
+			} else if reserved {
+				return false, ErrTaskConflict
+			}
 			request := model.ExternalLaunchRequest{ID: uuid.NewString(), Source: sourceLabel, ExternalID: eventID, Sender: sender, AutoStart: autoStart, Title: target.Title, SafePreview: prompt, SourceURL: target.SourceURL, Prompt: prompt, CWD: cfg.CWD, Model: cfg.Model, ReasoningEffort: cfg.ReasoningEffort, ApprovalPolicy: &cfg.ApprovalPolicy, ApprovalsReviewer: &cfg.ApprovalsReviewer, SandboxMode: &cfg.SandboxMode, Status: model.ExternalLaunchPendingApproval, TelegramTopicID: approvalTopicID, TaskID: target.ID, TriggerEventID: eventID, TargetThreadID: threadID, CreatedAt: now, UpdatedAt: now}
 			if err := validateExternalLaunchRequest(request, request.Source); err != nil {
 				return false, err

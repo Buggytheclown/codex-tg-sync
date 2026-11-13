@@ -96,6 +96,11 @@ func (s *Service) dispatchExternalLaunchRequest(ctx context.Context, requestID s
 		s.failExternalDispatch(ctx, *request, "thread_persistence", err, false)
 		return
 	}
+	// Give a new unnamed feedback chat its final name before Desktop generates one.
+	// A naming failure leaves a pending action and does not fail launch dispatch.
+	namingCtx, cancelNaming := context.WithTimeout(rpcCtx, 2*time.Second)
+	s.reconcileFixNameLocked(namingCtx, appserver.ThreadReadSnapshot{Thread: thread})
+	cancelNaming()
 	s.startExternalTurnLocked(rpcCtx, *request, thread, lease)
 }
 

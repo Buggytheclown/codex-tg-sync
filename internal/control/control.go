@@ -19,6 +19,8 @@ type TurnStartOptions struct {
 }
 
 type ThreadStartOptions struct {
+	Model string
+
 	ApprovalPolicy    string
 	ApprovalsReviewer string
 	SandboxMode       string

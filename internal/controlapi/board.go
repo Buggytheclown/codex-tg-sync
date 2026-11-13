@@ -52,6 +52,7 @@ type Options struct {
 
 func registerBoard(mux *http.ServeMux, b BoardBackend, opts Options) {
 	if b != nil {
+		registerBoardChat(mux, b)
 		mux.HandleFunc("/v1/task-links", func(w http.ResponseWriter, r *http.Request) {
 			if r.Method != http.MethodGet {
 				writeError(w, 405, "method not allowed")
@@ -209,6 +210,10 @@ func registerBoard(mux *http.ServeMux, b BoardBackend, opts Options) {
 				}
 				value, err := b.SetTaskPriority(r.Context(), id, input)
 				boardResult(w, 200, value, err)
+			case "chat-name":
+				boardNameCommand(w, r, b, id)
+			case "create-chat":
+				boardChatCommand(w, r, b, id)
 			case "chat":
 				if r.Method != http.MethodPost {
 					writeError(w, 405, "method not allowed")

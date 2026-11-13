@@ -51,6 +51,7 @@ func (s *Service) reconcileBoardThreadsLocked(ctx context.Context) {
 }
 
 func (s *Service) processBoardSnapshotLocked(ctx context.Context, current appserver.ThreadReadSnapshot) {
+	s.reconcileFixNameLocked(ctx, current)
 	if s.applyTelegramOriginTerminalGate(ctx, "external_execution", &current, nil) {
 		return
 	}

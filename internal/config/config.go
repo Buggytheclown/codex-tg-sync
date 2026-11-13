@@ -45,6 +45,11 @@ func (p Paths) Ensure() error {
 }
 
 type Config struct {
+	BoardChatCWD   string
+	BoardChatModel string
+	BoardChatName  string
+	BoardFixName   string
+
 	Paths                     Paths
 	CodexBin                  string
 	AppServerMode             string
@@ -188,6 +193,10 @@ func fromSource(source envSource) Config {
 		SyncGroupID:               parseInt64(source.get("CTR_GO_SYNC_GROUP_ID")),
 		SyncInitialTopicLimit:     source.positiveInt("CTR_GO_SYNC_INITIAL_TOPIC_LIMIT", DefaultSyncInitialTopicLimit),
 		DefaultCWD:                defaultCWD,
+		BoardChatCWD:              source.path("CTR_GO_BOARD_CHAT_CWD", defaultCWD),
+		BoardChatModel:            source.get("CTR_GO_BOARD_CHAT_MODEL"),
+		BoardChatName:             source.get("CTR_GO_BOARD_CHAT_NAME"),
+		BoardFixName:              source.get("CTR_GO_BOARD_FIX_NAME"),
 		CodexChatsRoot:            source.path("CTR_GO_CODEX_CHATS_ROOT", DefaultCodexChatsRoot()),
 		LogEnabled:                source.bool("CTR_GO_LOG_ENABLED", true),
 		DiagnosticLogs:            source.bool("CTR_GO_DIAGNOSTIC_LOGS", true),

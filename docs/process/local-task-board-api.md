@@ -203,3 +203,12 @@ alone does not imply Merged. Neither Done footers nor confirmed Merged create
 network demand. Independent active consumers of the same PR can still read it.
 The old `interval_seconds` field remains accepted and preserved; both PR editors
 show the actual read-only resource schedule.
+
+### Tracker and chat commands
+
+POST /v1/tracker/lookup accepts ticket and returns key, summary, url.
+POST /v1/tasks/{id}/create-chat accepts expected_version and attempt_id and returns
+thread_id, state, fresh and an optional error. It creates zero turns. A ready
+retry returns the same thread with fresh=false.
+GET /v1/tasks/{id}/chat-name returns a pending name for a feedback chat.
+POST to that route with an empty JSON object explicitly applies the template.

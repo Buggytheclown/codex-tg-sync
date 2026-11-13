@@ -32,6 +32,11 @@ func (s *Store) LinkTaskChat(ctx context.Context, id string, in model.LinkTaskCh
 	if task.Polling != nil && task.Polling.Action.Type == model.PollingCreateTask {
 		return nil, fmt.Errorf("%w: sources cannot link a chat", ErrTaskInvalid)
 	}
+	if reserved, err := boardChatReservedTx(ctx, tx, id); err != nil {
+		return nil, err
+	} else if reserved {
+		return nil, ErrTaskConflict
+	}
 	if task.ThreadID == in.ThreadID {
 		tx.Rollback()
 		return s.GetTask(ctx, id)
@@ -67,6 +72,9 @@ func (s *Store) LinkTaskChat(ctx context.Context, id string, in model.LinkTaskCh
 		return nil, err
 	}
 	if err := addTaskEventTx(ctx, tx, id, "chat_linked", map[string]string{"thread_id": in.ThreadID, "previous_thread_id": task.ThreadID}); err != nil {
+		return nil, err
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM daemon_state WHERE key=?`, "board.chat."+id); err != nil {
 		return nil, err
 	}
 	if err := tx.Commit(); err != nil {

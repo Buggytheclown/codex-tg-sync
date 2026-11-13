@@ -78,3 +78,9 @@ Use the same SQLite database and configured group. Group/endpoint changes are se
 In spawned mode, the bridge owns the App Server process. Avoid restarting while a bridge-owned turn is active.
 
 A Telegram `409 Conflict` means another process is polling the bot token.
+
+Development chat creation uses CTR_GO_BOARD_CHAT_CWD (inherits CTR_GO_DEFAULT_CWD)
+and CTR_GO_BOARD_CHAT_MODEL (empty selects the Codex default). Naming templates
+CTR_GO_BOARD_CHAT_NAME and CTR_GO_BOARD_FIX_NAME support {ticket} and {title}.
+Restart the daemon to apply changed settings. Tracker lookup uses
+CTR_GO_ARCANUM_YA_BIN and the service account's existing Tracker MCP access.

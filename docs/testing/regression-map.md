@@ -632,3 +632,11 @@ search intersection, Done, preserved linked PR navigation, open details/drafts,
 source navigation, drag-time disabling and no task writes. Pointer presses use a
 MouseEvent with button=0 in jsdom; removing the filter's outside-dismiss exemption
 must fail the selection assertion. Existing ChipSelect tests cover keyboard use.
+
+## Tracker task and empty chat
+
+Tracker tests cover strict keys/URLs, matching response identity and tool errors.
+Board chat tests cover zero turns, one start on retry, unknown creation results,
+name rendering and rejection of a returned unexpected workspace on every retry.
+Browser acceptance additionally checks the new Task title, preserved manual edits,
+Desktop prefill and model choice. These last checks require an interactive host.

@@ -680,11 +680,24 @@ func (c *Client) ModelList(ctx context.Context, includeHidden bool) ([]ModelOpti
 	if includeHidden {
 		params["includeHidden"] = true
 	}
-	result, err := c.Request(ctx, "model/list", params)
-	if err != nil {
-		return nil, err
+	var options []ModelOption
+	seen := map[string]bool{}
+	for {
+		result, err := c.Request(ctx, "model/list", params)
+		if err != nil {
+			return nil, err
+		}
+		options = append(options, modelOptionsFromResult(result)...)
+		cursor, _ := asMap(result)["nextCursor"].(string)
+		if cursor == "" {
+			return options, nil
+		}
+		if seen[cursor] {
+			return nil, errors.New("repeated model catalog cursor")
+		}
+		seen[cursor] = true
+		params["cursor"] = cursor
 	}
-	return modelOptionsFromResult(result), nil
 }
 
 func (c *Client) CollaborationModeList(ctx context.Context) ([]CollaborationModeOption, error) {
@@ -911,6 +924,9 @@ func threadStartParams(cwd string, options ThreadStartOptions) (map[string]any, 
 	}
 	if strings.TrimSpace(cwd) != "" {
 		params["cwd"] = cwd
+	}
+	if options.Model != "" {
+		params["model"] = options.Model
 	}
 	if err := addPermissionParams(params, options.ApprovalPolicy, options.ApprovalsReviewer, options.SandboxMode, false); err != nil {
 		return nil, err

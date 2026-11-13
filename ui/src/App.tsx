@@ -1,3 +1,4 @@
+import { CreateChat, FixChatName } from "./CreateChat";
 import { Fragment, useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import type { FormEvent, ReactNode } from "react";
 import { api, APIError } from "./api";
@@ -1202,7 +1203,7 @@ export function App() {
             <div className="panel-body">
               {feedback}
               <div hidden={tab !== "overview"}>
-                <div className="overview">{form}<TaskRelations key={selected.id} task={selected} cards={[...relationCards.values()]} busy={busy} onSelect={select} onSave={saveParent} /><TaskReferences task={selected} /></div>
+                <div className="overview">{form}{selected.card_type === "task" && <CreateChat key={`create-chat:${selected.id}`} task={selected} />}{selected.card_type === "pr" && selected.thread_id && <FixChatName key={`fix-name:${selected.id}`} task={selected} parentVersion={relationCards.get(selected.parent_task_id || "")?.version} />}<TaskRelations key={selected.id} task={selected} cards={[...relationCards.values()]} busy={busy} onSelect={select} onSave={saveParent} /><TaskReferences task={selected} /></div>
               </div>
               {tab === "polling" ? (
                 <WorkflowForm key={`workflow-${selected.id}`} task={selected} busy={busy} configure={activationRequested}
@@ -1422,7 +1423,7 @@ function History({ task }: { task: Task }) {
     </>
   );
 }
-function NewTask({
+export function NewTask({
   busy,
   onSave,
 }: {
@@ -1431,6 +1432,40 @@ function NewTask({
 }) {
   const [cardType, setCardType] = useState<"task" | "pr">("task");
   const [sourceURL, setSourceURL] = useState("");
+  const [ticket, setTicket] = useState("");
+  const ticketRef = useRef("");
+  const titleEdited = useRef(false);
+  const lookupGeneration = useRef(0);
+  const lastLookup = useRef("");
+  const submitting = useRef(false);
+  useEffect(
+    () => () => {
+      lookupGeneration.current++;
+    },
+    [],
+  );
+  const lookupTicket = async () => {
+    const value = ticketRef.current.trim();
+    if (!value || titleEdited.current || lastLookup.current === value) return;
+    lastLookup.current = value;
+    const generation = ++lookupGeneration.current;
+    try {
+      const issue = await api<{ summary: string; url: string }>(
+        "/v1/tracker/lookup",
+        "POST",
+        { ticket: value },
+      );
+      if (generation === lookupGeneration.current && !titleEdited.current) {
+        setTitle(issue.summary);
+        setError("");
+      }
+    } catch (e) {
+      if (generation === lookupGeneration.current) {
+        lastLookup.current = "";
+        setError((e as Error).message);
+      }
+    }
+  };
   const [title, setTitle] = useState(""),
     [description, setDescription] = useState(""),
     [priority, setPriority] = useState<Priority>("normal"),
@@ -1438,10 +1473,23 @@ function NewTask({
     [error, setError] = useState("");
   const submit = async (e: FormEvent) => {
     e.preventDefault();
+    if (submitting.current) return;
+    submitting.current = true;
     try {
-      await onSave({ title, description, priority, card_type: cardType, source_url: cardType === "pr" ? sourceURL : "", column: "todo", config });
+      await onSave({
+        title,
+        description,
+        priority,
+        card_type: cardType,
+        ticket_url: cardType === "task" ? ticket : "",
+        source_url: cardType === "pr" ? sourceURL : "",
+        column: "todo",
+        config,
+      });
     } catch (err) {
       setError((err as Error).message);
+    } finally {
+      submitting.current = false;
     }
   };
   return (
@@ -1449,13 +1497,82 @@ function NewTask({
       <h2>Something to work on</h2>
       <p className="note">New manual tasks start in TODO.</p>
       <form onSubmit={(e) => void submit(e)}>
-        <Field label="Card type"><ChipSelect label="Card type" value={cardType} options={[{value: "task", label: "Task"}, {value: "pr", label: "PR"}]} disabled={busy} onChange={setCardType} /></Field>
-        {cardType === "pr" && <Field label="Arcanum PR"><input required value={sourceURL} onChange={event => setSourceURL(event.target.value)} placeholder="PR number or URL" /></Field>}
+        <Field label="Card type">
+          <ChipSelect
+            label="Card type"
+            value={cardType}
+            options={[
+              { value: "task", label: "Task" },
+              { value: "pr", label: "PR" },
+            ]}
+            disabled={busy}
+            onChange={(value) => {
+              lookupGeneration.current++;
+              setCardType(value);
+            }}
+          />
+        </Field>
+        {cardType === "pr" && (
+          <Field label="Arcanum PR">
+            <input
+              required
+              value={sourceURL}
+              onChange={(event) => setSourceURL(event.target.value)}
+              placeholder="PR number or URL"
+            />
+          </Field>
+        )}
+        {cardType === "task" && (
+          <Field label="Tracker ticket">
+            <input
+              value={ticket}
+              placeholder="TASK-42 or Tracker URL"
+              onBlur={() => void lookupTicket()}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  e.preventDefault();
+                  void lookupTicket();
+                }
+              }}
+              onPaste={(e) => {
+                const value = e.clipboardData.getData("text");
+                e.preventDefault();
+                setTicket(value);
+                ticketRef.current = value;
+                lookupGeneration.current++;
+                lastLookup.current = "";
+                if (!titleEdited.current) setTitle("");
+                void lookupTicket();
+              }}
+              onChange={(e) => {
+                ticketRef.current = e.target.value;
+                setTicket(e.target.value);
+                lookupGeneration.current++;
+                lastLookup.current = "";
+                if (!titleEdited.current) setTitle("");
+              }}
+            />
+          </Field>
+        )}
+        {cardType === "task" && (
+          <button
+            type="button"
+            onClick={() => {
+              lastLookup.current = "";
+              void lookupTicket();
+            }}
+          >
+            Load title
+          </button>
+        )}
         <Field label="Title">
           <input
             required
             value={title}
-            onChange={(e) => setTitle(e.target.value)}
+            onChange={(e) => {
+              titleEdited.current = !!e.target.value;
+              setTitle(e.target.value);
+            }}
             placeholder="Give your task a name"
           />
         </Field>

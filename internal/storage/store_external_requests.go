@@ -836,6 +836,19 @@ func insertExternalLaunchRequestTx(ctx context.Context, tx *sql.Tx, request mode
 }
 
 func bindExternalTaskThreadTx(ctx context.Context, tx *sql.Tx, requestID, threadID string) error {
+	// Only newly created feedback chats become candidates for automatic naming.
+	_, errNaming := tx.ExecContext(ctx, `INSERT INTO daemon_state(key,value,updated_at)
+ SELECT 'board.fix.name.'||?,t.id,? FROM external_launch_requests r JOIN tasks t ON t.id=r.task_id
+ WHERE r.id=? AND coalesce(r.target_thread_id,'')='' AND t.source_key LIKE 'arcanum_changes:%'
+ AND NOT EXISTS(SELECT 1 FROM daemon_state WHERE key='board.fix.seen.'||?) ON CONFLICT(key) DO NOTHING`, threadID, model.NowString(), requestID, threadID)
+	if errNaming != nil {
+		return errNaming
+	}
+	_, errNaming = tx.ExecContext(ctx, `INSERT INTO daemon_state(key,value,updated_at) SELECT 'board.fix.seen.'||?, '1',? WHERE EXISTS(SELECT 1 FROM daemon_state WHERE key='board.fix.name.'||?) ON CONFLICT(key) DO NOTHING`, threadID, model.NowString(), threadID)
+	if errNaming != nil {
+		return errNaming
+	}
+
 	var taskID, targetThreadID string
 	err := tx.QueryRowContext(ctx, `SELECT coalesce(task_id,''),coalesce(target_thread_id,'') FROM external_launch_requests WHERE id=?`, requestID).Scan(&taskID, &targetThreadID)
 	if err != nil {

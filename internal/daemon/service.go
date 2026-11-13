@@ -58,6 +58,8 @@ func notifySendOptions() model.SendOptions {
 }
 
 type Service struct {
+	boardChatMu sync.Mutex
+
 	externalRenderMu            sync.Mutex
 	externalRenderInFlight      map[string]*externalRenderAttempt
 	externalBackgroundRendering bool

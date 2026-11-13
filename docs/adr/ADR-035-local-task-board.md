@@ -499,3 +499,23 @@ card is filtered out. Filter interactions do not dismiss the selected details or
 edit drafts; filtering is disabled during dragging. The filter is page-local and
 adds no persisted state or backend commands. Column counts follow filtering;
 the board header retains its existing total unfinished count.
+
+## Tracker task and empty development chat
+
+New Task forms can read a Tracker title on explicit ticket input. Manual title
+edits take precedence over late responses. This read is independent of board
+refreshes. The lookup uses the configured ya executable and returns only the key,
+title and canonical URL.
+
+Task details can create one persistent Codex thread without starting a turn.
+A durable per-task operation in daemon_state records prepared, sending, known-ID
+and ready states. Unknown sends require explicit chat recovery. Manual linkage
+and launch requests observe the reservation. Writer ownership uses the shared
+App Server manager. The first successful browser result can prefill the ticket
+URL in Desktop. Later opening uses the plain thread link to preserve drafts.
+
+New feedback chats become naming candidates when their first external thread ID
+is persisted. Reconciliation waits for a linked parent Task and ticket. An
+existing name is preserved and the inspector offers Apply template. Continuations
+and legacy chats do not create another naming operation. Local configuration
+controls development/fix templates, development directory and default model.
