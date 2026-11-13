@@ -297,3 +297,31 @@ func (b *fakeBoard) SetTaskParent(context.Context, string, model.SetTaskParentIn
 	t, err := b.change()
 	return &model.TaskCardDTO{ID: t.ID, Version: t.Version, Requests: []model.TaskCardRequest{}}, err
 }
+
+type archiveBoard struct {
+	fakeBoard
+	archiveReads int
+}
+
+func (b *archiveBoard) ListDoneTaskCards(context.Context) ([]model.TaskCardDTO, error) {
+	b.archiveReads++
+	return []model.TaskCardDTO{{ID: "archived", Column: model.TaskDone, Requests: []model.TaskCardRequest{}}}, nil
+}
+func TestArchiveRouteIsExplicitAndPresenceWasRemoved(t *testing.T) {
+	b := &archiveBoard{}
+	h := NewHandler("test", &fakeBackend{}, Options{Board: b, ListenAddress: "127.0.0.1:8099"})
+	active := boardRequest(h, "GET", "/v1/task-cards", "", "127.0.0.1:8099", "", "")
+	if active.Code != 200 || strings.Contains(active.Body.String(), "archived") || b.archiveReads != 0 {
+		t.Fatalf("active %d %s", active.Code, active.Body.String())
+	}
+	archive := boardRequest(h, "GET", "/v1/task-cards?column=done", "", "127.0.0.1:8099", "", "")
+	if archive.Code != 200 || !strings.Contains(archive.Body.String(), "archived") || b.archiveReads != 1 {
+		t.Fatalf("archive %d %s", archive.Code, archive.Body.String())
+	}
+	if bad := boardRequest(h, "GET", "/v1/task-cards?column=todo", "", "127.0.0.1:8099", "", ""); bad.Code != 400 {
+		t.Fatalf("invalid filter: %d", bad.Code)
+	}
+	if old := boardRequest(h, "POST", "/v1/board-presence", `{"active":true}`, "127.0.0.1:8099", "", "application/json"); old.Code != 404 {
+		t.Fatalf("retired presence: %d", old.Code)
+	}
+}

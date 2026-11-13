@@ -118,3 +118,50 @@ func TestRunnerSlowChecksDoNotRepeatedlyResetCronGrace(t *testing.T) {
 		t.Fatal("actual idle/suspend gap did not reapply cron grace")
 	}
 }
+
+type compactStatusStore struct {
+	runnerStore
+	active  []model.Task
+	enabled map[string]bool
+	started int
+}
+
+func (s *compactStatusStore) ListTasks(context.Context) ([]model.Task, error) {
+	panic("health must not load task details/archive")
+}
+func (s *compactStatusStore) ListPollingTasks(context.Context) ([]model.Task, error) {
+	return s.active, nil
+}
+func (s *compactStatusStore) ListRegisteredTaskPollers(context.Context) ([]string, error) {
+	return []string{"archived"}, nil
+}
+func (s *compactStatusStore) RegisterTaskPoller(_ context.Context, id, _ string, _ time.Duration, enabled bool) error {
+	s.enabled[id] = enabled
+	return nil
+}
+func (s *compactStatusStore) NoteExternalPollStarted(context.Context, string)       { s.started++ }
+func (s *compactStatusStore) NoteExternalPollResult(context.Context, string, error) {}
+
+type waitingChecker struct{}
+
+func (waitingChecker) Check(_ context.Context, p model.TaskPolling, now time.Time) (model.TaskPollingOutcome, error) {
+	return model.TaskPollingOutcome{Waiting: true, Cursor: p.Cursor, NextCheckAt: timestamp(now.Add(5 * time.Minute))}, nil
+}
+func TestRunnerUsesCompactRegistrationAndDisablesArchivedIDsAfterRestart(t *testing.T) {
+	p := model.TaskPolling{TaskID: "active", Type: TypePRWait, Config: jsonBytes(Config{PRID: "42", Conditions: []string{ConditionCommit}}), NextCheckAt: timestamp(time.Now().Add(24 * time.Hour))}
+	s := &compactStatusStore{active: []model.Task{{ID: "active", Title: "active", Column: model.TaskPollingColumn, Polling: &p}}, enabled: map[string]bool{}}
+	r := NewRunner(s, waitingChecker{}, 77)
+	if err := r.PollOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if s.enabled["archived"] || !s.enabled["active"] || len(s.outcomes) != 1 || s.started != 0 {
+		t.Fatalf("registration/wait: %+v", s)
+	}
+	s.active = nil
+	if err := r.PollOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if s.enabled["active"] {
+		t.Fatal("Done/deleted poller remained registered")
+	}
+}

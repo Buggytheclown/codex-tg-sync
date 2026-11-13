@@ -41,54 +41,59 @@ type BoardBackend interface {
 	ListTaskEvents(context.Context, string) ([]model.TaskEvent, error)
 }
 
-type MetadataPresence interface {
-	Update(string, int64, bool, bool, time.Time) error
-}
-
 type Options struct {
-	PRMetadataPresence MetadataPresence
-	Board              BoardBackend
-	ListenAddress      string
-	StaticDir          string
-	DevOrigin          string
+	Board         BoardBackend
+	ListenAddress string
+	StaticDir     string
+	DevOrigin     string
 	// EventInterval controls shared projection reconciliation, not source polling.
 	EventInterval time.Duration
 }
 
 func registerBoard(mux *http.ServeMux, b BoardBackend, opts Options) {
-	if opts.PRMetadataPresence != nil {
-		mux.HandleFunc("/v1/board-presence", func(w http.ResponseWriter, r *http.Request) {
-			if r.Method != http.MethodPost {
+	if b != nil {
+		mux.HandleFunc("/v1/task-links", func(w http.ResponseWriter, r *http.Request) {
+			if r.Method != http.MethodGet {
 				writeError(w, 405, "method not allowed")
 				return
 			}
-			var input struct {
-				ClientID string `json:"client_id"`
-				Sequence int64  `json:"sequence"`
-				Active   *bool  `json:"active"`
-				Refresh  bool   `json:"refresh"`
-			}
-			if !decodeCommand(w, r, &input) {
+			links, ok := b.(interface {
+				TaskLinks(context.Context, string, string) ([]model.TaskReference, error)
+			})
+			if !ok {
+				writeError(w, 404, "not found")
 				return
 			}
-			if input.Active == nil {
-				writeError(w, 400, "active is required")
+			id, kind := r.URL.Query().Get("task_id"), r.URL.Query().Get("kind")
+			if (id == "") == (kind == "") {
+				writeError(w, 400, "provide task_id or kind")
 				return
 			}
-			if err := opts.PRMetadataPresence.Update(input.ClientID, input.Sequence, *input.Active, input.Refresh, time.Now().UTC()); err != nil {
-				writeError(w, 400, err.Error())
-				return
-			}
-			w.WriteHeader(http.StatusNoContent)
+			result, err := links.TaskLinks(r.Context(), id, kind)
+			boardResult(w, 200, result, err)
 		})
-	}
-	if b != nil {
 		mux.HandleFunc("/v1/task-cards", func(w http.ResponseWriter, r *http.Request) {
 			if r.Method != http.MethodGet {
 				writeError(w, 405, "method not allowed")
 				return
 			}
-			value, err := b.ListTaskCards(r.Context())
+			var value []model.TaskCardDTO
+			var err error
+			switch r.URL.Query().Get("column") {
+			case "":
+				value, err = b.ListTaskCards(r.Context())
+			case "done":
+				if archive, ok := b.(interface {
+					ListDoneTaskCards(context.Context) ([]model.TaskCardDTO, error)
+				}); ok {
+					value, err = archive.ListDoneTaskCards(r.Context())
+				} else {
+					err = tasks.ErrInvalid
+				}
+			default:
+				writeError(w, 400, "column must be done or omitted")
+				return
+			}
 			if err != nil {
 				boardError(w, err)
 				return

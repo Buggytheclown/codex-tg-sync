@@ -11,11 +11,11 @@ import (
 // ListTaskCards uses two bounded queries, independent of the number of cards.
 // Snapshot JSON, task execution settings and launch payloads are never loaded.
 func (s *Store) ListTaskCards(ctx context.Context) ([]model.TaskCardDTO, error) {
-	return s.listTaskCards(ctx, "", time.Now())
+	return s.listTaskCards(ctx, "", "active", time.Now())
 }
 
 func (s *Store) GetTaskCard(ctx context.Context, id string) (*model.TaskCardDTO, error) {
-	cards, err := s.listTaskCards(ctx, id, time.Now())
+	cards, err := s.listTaskCards(ctx, id, "", time.Now())
 	if err != nil {
 		return nil, err
 	}
@@ -25,12 +25,18 @@ func (s *Store) GetTaskCard(ctx context.Context, id string) (*model.TaskCardDTO,
 	return &cards[0], nil
 }
 
-func (s *Store) listTaskCards(ctx context.Context, id string, now time.Time) ([]model.TaskCardDTO, error) {
+func (s *Store) listTaskCards(ctx context.Context, id, scope string, now time.Time) ([]model.TaskCardDTO, error) {
 	where := ""
 	args := []any{}
 	if id != "" {
 		where = " WHERE t.id=?"
 		args = append(args, id)
+	}
+	if id == "" && scope == "active" {
+		where = " WHERE t.column<>'done'"
+	}
+	if id == "" && scope == "done" {
+		where = " WHERE t.column='done'"
 	}
 	rows, err := s.db.QueryContext(ctx, `SELECT t.card_type,t.arcanum_pr_id,coalesce(t.parent_task_id,''),t.ticket_url,t.priority,t.id,t.title,t.description,t.column,t.position,coalesce(t.thread_id,''),coalesce(t.source_url,''),coalesce(t.source_key,''),coalesce(t.source_task_id,''),coalesce(t.source_author,''),t.version,t.created_at,t.updated_at,t.done_at,
  coalesce(x.thread_id,''),coalesce(x.last_seen_turn_status,''),coalesce(x.last_seen_thread_status,''),coalesce(x.last_poll_at,''),
@@ -101,5 +107,38 @@ func (s *Store) listTaskCards(ctx context.Context, id string, now time.Time) ([]
 			out[i].Requests = append(out[i].Requests, r)
 		}
 	}
+	err = rows.Err()
+	rows.Close()
+	if err != nil {
+		return nil, err
+	}
+	// Only archived records actually related to this active scope are read.
+	relatedWhere := "owner.column<>'done'"
+	relatedArgs := []any{}
+	if id != "" {
+		relatedWhere = "owner.id=?"
+		relatedArgs = append(relatedArgs, id)
+	} else if scope == "done" {
+		return out, nil
+	}
+	rows, err = s.db.QueryContext(ctx, `SELECT owner.id,r.id,r.title,r.card_type,r.arcanum_pr_id,coalesce(r.parent_task_id,''),r.column,r.version,coalesce(r.thread_id,''),r.ticket_url FROM tasks owner JOIN tasks r ON (r.parent_task_id=owner.id OR r.id=owner.parent_task_id) WHERE `+relatedWhere+` AND r.column='done'`, relatedArgs...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var owner string
+		var r model.TaskReference
+		if err := rows.Scan(&owner, &r.ID, &r.Title, &r.CardType, &r.ArcanumPRID, &r.ParentTaskID, &r.Column, &r.Version, &r.ThreadID, &r.TicketURL); err != nil {
+			return nil, err
+		}
+		if i, ok := indices[owner]; ok {
+			out[i].RelatedCards = append(out[i].RelatedCards, r)
+		}
+	}
 	return out, rows.Err()
+}
+
+func (s *Store) ListDoneTaskCards(ctx context.Context) ([]model.TaskCardDTO, error) {
+	return s.listTaskCards(ctx, "", "done", time.Now())
 }

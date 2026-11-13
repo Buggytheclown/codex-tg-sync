@@ -36,3 +36,11 @@ func (s *Service) SetTaskParent(ctx context.Context, id string, in model.SetTask
 	}
 	return s.store.GetTaskCard(ctx, id)
 }
+
+func (s *Service) ListDoneTaskCards(ctx context.Context) ([]model.TaskCardDTO, error) {
+	return s.store.ListDoneTaskCards(ctx)
+}
+
+func (s *Service) TaskLinks(ctx context.Context, id, kind string) ([]model.TaskReference, error) {
+	return s.store.TaskLinks(ctx, id, kind)
+}

@@ -445,13 +445,10 @@ link and official status. Details provide parent navigation without duplicate
 connection footers. PR discovery across sources reuses canonical identity and
 does not constitute permission to launch existing work again.
 
-Passive Arc metadata lives in a separate per-PR cache and bounded worker, with
-no action-polling/launch interface. Display reads are spaced by two seconds to
-avoid an initial board-wide burst beside effectful polling. It refreshes outside Polling without changing
-editable task versions or accepted cursors. Missing/failed/stale observations
-never imply merge readiness. Rule evaluation continues using its own full reads.
-Source-owned PR number changes are rejected; manual changes require matching
-rules, authoritative idle chat and the launch gate's request/identity fences.
+Arc display metadata remains separate from action cursors and editable versions.
+Its network observations are shared with Sources and PR rules through the
+collector described below. Missing, failed or stale observations never imply
+merge readiness.
 
 The old SQLite column CHECK requires an offline, report-fenced schema rebuild.
 Legacy Task PR URLs are archived in History and removed from active fields;
@@ -460,23 +457,36 @@ Done evidence and source provenance survive. Earlier source/Done backfills run
 inside the same migration transaction. Source keys and frozen policies retain
 their existing meaning. A rollback uses the old binary and its offline backup.
 
-## Visible-board PR metadata amendment
+## Shared Arcanum reads and Done archive amendment
 
-Passive Arc reads require at least one visible board page. Hidden tabs, minimized
-windows and a closed board do not renew this permission; keyboard focus is
-irrelevant. The browser renews an ephemeral 45-second lease every 10 seconds and
-releases it on hiding/pagehide/unmount. Monotonic per-page sequences fence delayed
-renewals after release; the in-memory client table is bounded. The existing API
-Host/Origin/JSON guards also apply to presence. No migration is required.
+This replaces the former visible-board metadata policy. Browser visibility and
+window count do not control Arcanum reads. A single daemon-owned collector owns
+all PR network scheduling. Search runs every 30 seconds per exact shared query.
+Comments and checks are needed-only reads, at most every five minutes per PR;
+get is exceptional and at most every ten minutes per PR. Limits are persisted
+before the actual command start in existing daemon_state. Search pagination uses
+explicit offset/limit; CLI hidden retries are disabled. Separate bounded workers
+keep slow reads and projection writes from blocking search.
 
-The single worker checks permission before selecting work and before each PR read.
-An in-flight read may finish. A 0 → 1 transition, or recovery after a network/SSE
-error, starts a paced refresh without waiting for the usual five-minute deadline.
-An unfinished pass resumes without another queued pass. Several visible pages
-share the worker and do not multiply periodic reads. The last known status and
-existing stale/error projection survive pauses. Effectful polling and Sources
-never consult display presence and continue with the board closed.
+Consumers evaluate shared facts, never network reads. Status-only conditions do
+not require comments or checks. AND groups require coherent slow observations,
+while independent OR groups retain their cursor and observation watermarks.
+Waiting for a resource does not count as an attempt or success. A latest-only
+publisher keeps the last good status and latest attempt and retries SQLite writes
+locally. Durable confirmed Merged wins over timestamps and late non-terminal data,
+including when referenced only by an ordinary task rule.
 
+The regular compact board and SSE exclude Done at SQL selection. The archive is
+an explicit local read and a separate UI cache. Background refreshes skip archive
+lists and selected Done details. Deep links, related references, explicit link
+candidate searches and owned mutation responses preserve navigation and edits.
+Done creates no dedicated Arcanum demand, including unknown-author bootstrap.
+An independent active consumer of the same canonical PR remains eligible.
+Compact health registration also excludes archived detail and request payloads.
+`/pollers` uses actual resource schedules, deadlines and terminal observations.
+Legacy interval_seconds stays compatible, but PR editors display the shared
+schedule as read-only. See the API contract and shared-arcanum-reads plan for
+pagination, rate-limit and regression scenarios.
 
 ## Card type filter amendment
 

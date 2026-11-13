@@ -33,6 +33,9 @@ type externalPollHealthState struct {
 }
 
 type externalPollerState struct {
+	ResourceSchedule    bool   `json:"resource_schedule,omitempty"`
+	NextObservationAt   string `json:"next_observation_at,omitempty"`
+	Terminal            bool   `json:"terminal,omitempty"`
 	Label               string `json:"label,omitempty"`
 	Source              string `json:"source"`
 	Enabled             bool   `json:"enabled"`
@@ -226,7 +229,12 @@ func (s *Service) NoteExternalPollResult(ctx context.Context, source string, err
 	trackerKey := "health_tracker." + key
 	tracker := s.loadExternalPollHealthState(ctx, trackerKey)
 	lastObserved := parseHealthTime(tracker.LastObservedAt)
-	if lastObserved.IsZero() || now.Before(lastObserved) || now.Sub(lastObserved) > externalPollObservationGap {
+	state := s.loadExternalPollerState(ctx, source)
+	gap := externalPollObservationGap
+	if state.ResourceSchedule {
+		gap = max(gap, time.Duration(state.IntervalMillis)*time.Millisecond+90*time.Second)
+	}
+	if lastObserved.IsZero() || now.Before(lastObserved) || now.Sub(lastObserved) > gap {
 		tracker.WarmupUntil = now.Add(externalPollResumeGrace).Format(time.RFC3339Nano)
 		tracker.FailureSince = ""
 		tracker.RecoverySince = ""
@@ -312,9 +320,7 @@ func (s *Service) loadExternalPollHealthSummary(ctx context.Context) (externalPo
 		if tracker.Failed {
 			summary.Failures = append(summary.Failures, poller.Source)
 		}
-		staleAfter := max(2*time.Duration(poller.IntervalMillis)*time.Millisecond, 30*time.Second)
-		finished := parseHealthTime(poller.LastFinishedAt)
-		if tracker.NeedsRecovery || tracker.Failed || poller.LastError != "" || poller.LastSuccessAt == "" || finished.IsZero() || now.Before(finished) || now.Sub(finished) > staleAfter {
+		if tracker.NeedsRecovery || tracker.Failed || poller.LastError != "" || poller.LastSuccessAt == "" || pollerObservationStale(poller, now) {
 			summary.Blocked = true
 		}
 	}
@@ -464,7 +470,9 @@ func (s *Service) RegisterTaskPoller(ctx context.Context, taskID, title string, 
 	s.healthMu.Lock()
 	defer s.healthMu.Unlock()
 	state := s.loadExternalPollerState(ctx, source)
-	state.Label = strings.Join(strings.Fields(sanitizeDiagnosticString(title)), " ")
+	if title != "" {
+		state.Label = strings.Join(strings.Fields(sanitizeDiagnosticString(title)), " ")
+	}
 	return s.saveExternalPollerState(ctx, state)
 }
 
@@ -550,7 +558,14 @@ func (s *Service) PollersSnapshot(ctx context.Context) (string, error) {
 			label = state.Source
 		}
 		line := fmt.Sprintf("%s %s · %s", marker, label, status)
-		if interval > 0 {
+		if state.ResourceSchedule {
+			line += " · search 30s / comments & checks 5m / fallback 10m"
+			if state.Terminal {
+				line += " · terminal"
+			} else if state.NextObservationAt != "" {
+				line += " · next " + state.NextObservationAt
+			}
+		} else if interval > 0 {
 			line += " · every " + interval.String()
 		}
 		lines = append(lines, "", line)
@@ -592,8 +607,11 @@ func externalPollerDisplayState(state externalPollerState, now time.Time) (strin
 	if age < 0 {
 		age = 0
 	}
-	if age > staleAfter {
+	if (state.ResourceSchedule && pollerObservationStale(state, now)) || (!state.ResourceSchedule && age > staleAfter) {
 		return "🟠", "stale"
+	}
+	if state.ResourceSchedule && state.Terminal && state.LastError == "" {
+		return "🟢", "terminal"
 	}
 	if started.After(finished) {
 		return "🔵", "polling"
@@ -641,4 +659,43 @@ func externalPollFailureAction(source string, err error) string {
 		}
 	}
 	return "Check credentials and API or CLI access for " + strings.TrimSpace(source) + "."
+}
+
+// SetTaskPollSchedule records the collector's expected next observation. Waiting
+// for a rate limit is distinct from a successful or failed network attempt.
+func (s *Service) SetTaskPollSchedule(ctx context.Context, taskID string, next model.TimeString, terminal bool) error {
+	s.healthMu.Lock()
+	defer s.healthMu.Unlock()
+	source := "board.task." + taskID
+	state := s.loadExternalPollerState(ctx, source)
+	state.NextObservationAt = string(next)
+	state.Terminal = terminal
+	state.ResourceSchedule = true
+	if terminal && state.LastSuccessAt != "" && state.LastError == "" {
+		key := "health_tracker." + healthKey(source) + ".poll"
+		tracker := s.loadExternalPollHealthState(ctx, key)
+		since := parseHealthTime(tracker.RecoverySince)
+		if tracker.NeedsRecovery && !since.IsZero() && s.now().Sub(since) >= externalPollRecoveryDelay {
+			tracker.NeedsRecovery = false
+			tracker.Failed = false
+			tracker.RecoverySince = ""
+			s.saveExternalPollHealthState(ctx, key, tracker)
+		}
+	}
+	data, err := json.Marshal(state)
+	if err != nil {
+		return err
+	}
+	return s.store.SetState(ctx, "poller."+healthKey(source), string(data))
+}
+func pollerObservationStale(state externalPollerState, now time.Time) bool {
+	if state.ResourceSchedule {
+		if state.Terminal {
+			return false
+		}
+		next := parseHealthTime(state.NextObservationAt)
+		return !next.IsZero() && now.After(next.Add(90*time.Second))
+	}
+	finished := parseHealthTime(state.LastFinishedAt)
+	return finished.IsZero() || now.Before(finished) || now.Sub(finished) > max(2*time.Duration(state.IntervalMillis)*time.Millisecond, 30*time.Second)
 }

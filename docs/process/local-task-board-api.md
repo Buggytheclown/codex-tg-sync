@@ -159,23 +159,47 @@ History and direct-link removal share one transaction. Report digest includes
 tasks, polling, events and referenced legacy definitions. Apply derives commands
 from the current verified data; it executes no SQL supplied in the report.
 
-## Board visibility and passive PR status reads
+## Shared Arcanum observations and archive reads
 
-`POST /v1/board-presence` takes `{client_id,sequence,active,refresh?}` and returns
-204. `client_id` is an ephemeral per-page string of 1–64 ASCII letters, digits or
-hyphens; `sequence` is a positive increasing integer; `active` is required.
-`refresh` defaults to false and requests a recovery refresh only for an active
-page. Invalid commands return400; existing loopback Host, Origin and JSON guards
-apply before recording presence. This is not a task mutation and takes no task
-version. Reordered/duplicate sequence numbers are ignored.
+`GET /v1/task-cards` and SSE reconciliation include only non-Done cards.
+`GET /v1/task-cards?column=done` explicitly loads the local archive. Other column
+filters are rejected. Both compact SQL queries filter before building DTOs.
+The legacy `GET /v1/tasks` keeps its full-list contract. Point detail reads can
+open a Done deep link without loading the archive.
 
-Visible pages renew every 10 seconds; hidden/pagehide/unmount pages release with
-`active:false`. Permission expires 45 seconds after the last accepted signal.
-At most 1024 unexpired page records are kept in memory, including inactive records
-that fence late heartbeats. No permission is persisted or granted at daemon start.
-At least one visible page permits the existing single paced metadata worker.
-The first active page and recovery refresh start an immediate pass, including
-recently checked PRs; unfinished passes coalesce. Multiple visible pages do not
-multiply reads. On hiding the last page new reads stop; an in-flight read may
-finish. Five-minute retry/refresh deadlines and last-known/stale status behavior
-remain unchanged. Working PR polling, Sources and launches are independent.
+Active cards may include `related_cards`, compact references to their linked
+archived PRs or parent Task. `GET /v1/task-links?task_id=ID` reads only related
+references. `GET /v1/task-links?kind=pr|task` supplies candidates when the user
+opens the link editor. These local reads omit polling, snapshots and request
+history and never create Arcanum demand.
+
+The UI stores active and archive lists separately. Show Done loads the archive,
+including a restored preference. Timer, focus, SSE and reconnect only refresh
+active cards and active details. Selecting a Done card or explicitly retrying its
+detail permits a point read. Owned mutations update the cache using returned
+versions. An older archive response cannot undo a move or recreate a reopened
+card. Saving a conflict requires explicit reload while retaining the draft.
+
+There is no `/v1/board-presence` endpoint or browser lease. One daemon-owned
+collector serves active PR footers, Sources and rules, independent of windows.
+Identical search queries share a 30-second cadence. Comments and checks are
+read only when needed, in a shared round no more often than every five minutes
+per PR. Checks results belong to a published diff, while the limit belongs to
+the PR. Exceptional metadata/author get is limited to ten minutes per PR.
+Pagination pages count separately and CLI retries are disabled. Persistent
+`daemon_state` limits survive rearm, reopen and restart. Missing payload after
+restart waits for the existing limit.
+
+Search facts update footer metadata and wake rules without repeating IO.
+Deferred groups keep accepted cursor state; a ready OR branch can act while
+another waits or has an error. AND groups require a coherent slow round.
+Observation watermarks are per group. Waiting alone changes only the next
+schedule, without creating attempt/success timestamps. `/pollers` and aggregate
+health use expected observation deadlines and terminal state.
+
+Confirmed Merged is durable by canonical PR ID, including rules with no PR card.
+It survives late non-terminal observations and does not age into stale. Done
+alone does not imply Merged. Neither Done footers nor confirmed Merged create
+network demand. Independent active consumers of the same PR can still read it.
+The old `interval_seconds` field remains accepted and preserved; both PR editors
+show the actual read-only resource schedule.

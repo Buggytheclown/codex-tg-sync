@@ -13,28 +13,65 @@ import (
 // replies. Arming refreshes tracked open issues, but never overwrites the head
 // before comparing: changes while the user reviewed results must stay visible.
 type PRCursor struct {
-	Matches         map[string]string        `json:"matches,omitempty"`
-	HeadCommit      string                   `json:"head_commit"`
-	CommonStatus    string                   `json:"common_status"`
-	Generation      int64                    `json:"generation"`
-	Tracked         []int64                  `json:"tracked"`
-	ConsumedReplies []int64                  `json:"consumed_replies"`
-	Since           string                   `json:"since,omitempty"`
-	ChecksDiffID    int64                    `json:"checks_diff_id,omitempty"`
-	FailedChecks    []arcanumreview.CheckKey `json:"failed_checks,omitempty"`
+	Terminal          bool                     `json:"terminal,omitempty"`
+	ObservedErrors    map[string]string        `json:"observed_errors,omitempty"`
+	Observations      map[string]string        `json:"observations,omitempty"`
+	CommentGeneration *int64                   `json:"comment_generation,omitempty"`
+	Matches           map[string]string        `json:"matches,omitempty"`
+	HeadCommit        string                   `json:"head_commit"`
+	CommonStatus      string                   `json:"common_status"`
+	Generation        int64                    `json:"generation"`
+	Tracked           []int64                  `json:"tracked"`
+	ConsumedReplies   []int64                  `json:"consumed_replies"`
+	Since             string                   `json:"since,omitempty"`
+	ChecksDiffID      int64                    `json:"checks_diff_id,omitempty"`
+	FailedChecks      []arcanumreview.CheckKey `json:"failed_checks,omitempty"`
 }
 
 func ComparePR(cfg Config, old PRCursor, current arcanumreview.PRSnapshot, generation int64) (PRCursor, []string) {
 	grouped := len(cfg.ConditionGroups) > 0
+	commentsReady := current.Coverage == nil || current.Coverage.Comments
+	checksReady := current.Coverage == nil || current.Coverage.Checks
+	if grouped && current.Coverage != nil {
+		commentsUsed, checksUsed := false, false
+		for _, g := range cfg.ConditionGroups {
+			if !groupCovered(g, current) {
+				continue
+			}
+			commentsUsed = commentsUsed || slices.Contains(g, ConditionAnswered) || slices.Contains(g, ConditionResolved)
+			checksUsed = checksUsed || slices.Contains(g, ConditionMergeChecks)
+		}
+		commentsReady = commentsReady && commentsUsed
+		checksReady = checksReady && checksUsed
+	}
+	needsComments := slices.Contains(conditions(cfg), ConditionAnswered) || slices.Contains(conditions(cfg), ConditionResolved)
+	commentGeneration := old.Generation
+	if old.CommentGeneration != nil {
+		commentGeneration = *old.CommentGeneration
+	}
 	cfg.Conditions = conditions(cfg)
 	next := old
+	next.Terminal = old.Terminal || current.Status == "merged"
+	next.Observations = map[string]string{}
+	for k, v := range old.Observations {
+		next.Observations[k] = v
+	}
+	if current.Coverage != nil {
+		for key, ready := range current.Coverage.Groups {
+			if ready {
+				var group []string
+				_ = json.Unmarshal([]byte(key), &group)
+				next.Observations[key] = observationTime(group, current).UTC().Format(time.RFC3339Nano)
+			}
+		}
+	}
 	comments := map[int64]arcanumreview.PRComment{}
 	for _, c := range current.Comments {
 		comments[c.ID] = c
 	}
 	// At each explicit arm capture current issues, including ones created during
 	// the preceding LLM pass. Keep an already tracked issue until the wait ends.
-	if old.Generation != generation {
+	if needsComments && commentsReady && commentGeneration != generation {
 		next.Tracked = nil
 		for _, c := range current.Comments {
 			if !c.Published() || (c.IssueStatus != "open" && !(c.IssueStatus == "resolved" && createdSince(c.CreatedAt, old.Since))) {
@@ -50,9 +87,17 @@ func ComparePR(cfg Config, old PRCursor, current arcanumreview.PRSnapshot, gener
 		next.Tracked = appendUnique(next.Tracked, old.Tracked...)
 	}
 	next.Generation = generation
+	if needsComments && commentsReady {
+		value := generation
+		next.CommentGeneration = &value
+	}
+	if !needsComments && old.CommentGeneration == nil {
+		value := old.Generation
+		next.CommentGeneration = &value
+	}
 	reasons := []string{}
 	checksChanged := false
-	if slices.Contains(cfg.Conditions, ConditionMergeChecks) {
+	if checksReady && (grouped || groupCovered([]string{ConditionMergeChecks}, current)) && current.Status != "merged" && slices.Contains(cfg.Conditions, ConditionMergeChecks) {
 		var failed bool
 		next, failed = compareMergeChecks(next, current)
 		checksChanged = failed
@@ -61,10 +106,10 @@ func ComparePR(cfg Config, old PRCursor, current arcanumreview.PRSnapshot, gener
 		}
 	}
 
-	if slices.Contains(cfg.Conditions, ConditionCommit) && old.HeadCommit != "" && current.HeadCommit != "" && current.HeadCommit != old.HeadCommit {
+	if (grouped || groupCovered([]string{ConditionCommit}, current)) && slices.Contains(cfg.Conditions, ConditionCommit) && old.HeadCommit != "" && current.HeadCommit != "" && current.HeadCommit != old.HeadCommit {
 		reasons = append(reasons, ConditionCommit)
 	}
-	if slices.Contains(cfg.Conditions, ConditionChanges) && (grouped || (old.CommonStatus != "" && old.CommonStatus != "waiting_for_changes")) && current.CommonStatus == "waiting_for_changes" {
+	if (grouped || groupCovered([]string{ConditionChanges}, current)) && slices.Contains(cfg.Conditions, ConditionChanges) && (grouped || (old.CommonStatus != "" && old.CommonStatus != "waiting_for_changes")) && current.CommonStatus == "waiting_for_changes" {
 		reasons = append(reasons, ConditionChanges)
 	}
 	answered, resolved := len(next.Tracked) > 0, len(next.Tracked) > 0
@@ -93,10 +138,10 @@ func ComparePR(cfg Config, old PRCursor, current arcanumreview.PRSnapshot, gener
 			answered = false
 		}
 	}
-	if slices.Contains(cfg.Conditions, ConditionAnswered) && answered {
+	if commentsReady && (grouped || groupCovered([]string{ConditionAnswered}, current)) && current.Status != "merged" && slices.Contains(cfg.Conditions, ConditionAnswered) && answered {
 		reasons = append(reasons, ConditionAnswered)
 	}
-	if slices.Contains(cfg.Conditions, ConditionResolved) && resolved {
+	if commentsReady && (grouped || groupCovered([]string{ConditionResolved}, current)) && current.Status != "merged" && slices.Contains(cfg.Conditions, ConditionResolved) && resolved {
 		reasons = append(reasons, ConditionResolved)
 	}
 	if grouped {
@@ -104,13 +149,20 @@ func ComparePR(cfg Config, old PRCursor, current arcanumreview.PRSnapshot, gener
 			reasons = append(reasons, ConditionMerged)
 		}
 		next.Matches = map[string]string{}
+		for k, v := range old.Matches {
+			next.Matches[k] = v
+		}
 		matched := []string{}
 		changed := false
 		for _, group := range cfg.ConditionGroups {
-			if !groupsMatch([][]string{group}, reasons) {
+			if !groupCovered(group, current) {
 				continue
 			}
 			groupID, _ := json.Marshal(group)
+			delete(next.Matches, string(groupID))
+			if !groupsMatch([][]string{group}, reasons) {
+				continue
+			}
 			evidence := []any{current.HeadCommit, current.PublishedDiffID}
 			fresh := current.HeadCommit != "" && current.HeadCommit != old.HeadCommit
 			if slices.Contains(group, ConditionChanges) {
@@ -152,8 +204,12 @@ func ComparePR(cfg Config, old PRCursor, current arcanumreview.PRSnapshot, gener
 			next.HeadCommit = current.HeadCommit
 		}
 		next.CommonStatus = current.CommonStatus
-		next.ConsumedReplies = appendUnique(next.ConsumedReplies, qualifying...)
-		next.Tracked = nil // next explicit arm starts a fresh set, no vacuous repeats
+		if commentsReady && needsComments {
+			next.ConsumedReplies = appendUnique(slices.Clone(next.ConsumedReplies), qualifying...)
+		}
+		if commentsReady && needsComments && (slices.Contains(reasons, ConditionAnswered) || slices.Contains(reasons, ConditionResolved)) {
+			next.Tracked = nil
+		} // next explicit arm starts a fresh set, no vacuous repeats
 	} else {
 		// Seed unknown metadata; thereafter keep the accepted head until an event.
 		if next.HeadCommit == "" {
@@ -219,4 +275,42 @@ func compareMergeChecks(old PRCursor, current arcanumreview.PRSnapshot) (PRCurso
 	}
 	// shortcut: retries entirely between polls are invisible; add run identity if the API provides it.
 	return next, changed
+}
+
+func groupCovered(group []string, current arcanumreview.PRSnapshot) bool {
+	if current.Coverage != nil && current.Coverage.Groups != nil && !current.Coverage.Groups[groupKey(group)] {
+		return false
+	}
+	for _, term := range group {
+		if current.Status == "merged" && (term == ConditionAnswered || term == ConditionResolved || term == ConditionMergeChecks) {
+			return false
+		}
+		if current.Coverage == nil {
+			continue
+		}
+		if (term == ConditionAnswered || term == ConditionResolved) && !current.Coverage.Comments {
+			return false
+		}
+		if term == ConditionMergeChecks && !current.Coverage.Checks {
+			return false
+		}
+	}
+	return true
+}
+
+func groupKey(group []string) string { key, _ := json.Marshal(group); return string(key) }
+func observationTime(group []string, s arcanumreview.PRSnapshot) time.Time {
+	if s.Coverage == nil {
+		return time.Time{}
+	}
+	at := s.Coverage.SearchAt
+	if slices.Contains(group, ConditionAnswered) || slices.Contains(group, ConditionResolved) {
+		at = s.Coverage.CommentsAt
+	}
+	if slices.Contains(group, ConditionMergeChecks) {
+		if !slices.Contains(group, ConditionAnswered) && !slices.Contains(group, ConditionResolved) || s.Coverage.ChecksAt.Before(at) {
+			at = s.Coverage.ChecksAt
+		}
+	}
+	return at
 }

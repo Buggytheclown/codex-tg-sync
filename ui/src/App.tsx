@@ -8,6 +8,7 @@ import type { DropPosition } from "./boardMotion";
 import type { CardType, Column, Polling, Priority, Task, TaskCard as Card, TaskEvent, SourceKind } from "./model";
 import {
   compactTask,
+ referenceCard,
   codexURL,
   columns,
   emptyConfig,
@@ -31,7 +32,6 @@ import { TicketControl } from "./TicketControl";
 import { PRControl } from "./PRControl";
 import { DetailPlaceholder } from "./DetailPlaceholder";
 import { useDetailPresence } from "./useDetailPresence";
-import { usePRMetadataPresence } from "./usePRMetadataPresence";
 import { useTabSlide } from "./useTabSlide";
 import { DescriptionField } from "./DescriptionField";
 import { ChipSelect } from "./ChipSelect";
@@ -292,7 +292,6 @@ export function TaskCard({
   );
 }
 export function App() {
-  const reconnectPRMetadata = usePRMetadataPresence();
   const motion = useRef<BoardMotion | null>(null);
   if (!motion.current) motion.current = new BoardMotion();
   useLayoutEffect(() => { motion.current!.layout(); });
@@ -309,7 +308,24 @@ export function App() {
   const [detailDismissed, setDetailDismissed] = useState(false);
   const overviewDrafts = useRef(new Map<string, OverviewDraft>());
   const [overviewFailureID, setOverviewFailureID] = useState("");
-  const [tasks, setTasks] = useState<Card[]>([]);
+  const [activeTasks,setActiveTasks]=useState<Card[]>([]);
+  const [doneTasks,setDoneTasks]=useState<Card[]>([]);
+  const tasks=[...activeTasks,...doneTasks];
+  const tasksRef=useRef(tasks);tasksRef.current=tasks;
+  const acceptedCards=useRef(new Map<string,Card>());
+  const [detail, setDetail] = useState<Task>();
+  const setTasks=(value:Card[]|((current:Card[])=>Card[]))=>{
+    const next=typeof value==="function"?value(tasksRef.current):value;
+    tasksRef.current=next;
+    setActiveTasks(next.filter(card=>card.column!=="done"));
+    setDoneTasks(next.filter(card=>card.column==="done"));
+  };
+  const acceptCard=(card:Card)=>{
+    const previous=acceptedCards.current.get(card.id);
+    if(previous&&previous.version>card.version)return;
+    acceptedCards.current.set(card.id,card);
+    setTasks(current=>[...current.filter(value=>value.id!==card.id),card]);
+  };
   const [selectedID, setSelectedID] = useState(
       () => new URLSearchParams(window.location.search).get("task") || "",
     ),
@@ -355,7 +371,16 @@ export function App() {
           queuedRefresh.current = true;
           return;
         }
-        setTasks(next);
+        // Active refreshes never fetch or replace the archive cache.
+        const fresh=next.filter(card=>card.column!=="done").map(card=>{
+          const owned=acceptedCards.current.get(card.id);
+          if(owned&&owned.version>card.version)return owned;
+          if(owned&&card.version>=owned.version)acceptedCards.current.delete(card.id);
+          return card;
+        });
+        setActiveTasks(fresh.filter(card=>card.column!=="done"));
+        const activeIDs=new Set(fresh.filter(card=>card.column!=="done").map(card=>card.id));
+        setDoneTasks(current=>current.filter(card=>!activeIDs.has(card.id)));
         setLoaded(true);
         if (refreshError.current) setError("");
         refreshError.current = false;
@@ -372,20 +397,17 @@ export function App() {
     mounted.current = true;
     void refresh();
     const stream = new EventSource("/v1/task-events");
-    let reconnectPending = false;
     stream.addEventListener("invalidate", () => {
       setConnection("Live");
       void refresh();
       setDetailRevision((n) => n + 1);
     });
     stream.onopen = () => {
-      if (reconnectPending) reconnectPRMetadata();
-      reconnectPending = false;
       setConnection("Live");
       void refresh();
       setDetailRevision((n) => n + 1);
     };
-    stream.onerror = () => { reconnectPending = true; setConnection("Reconnecting"); };
+    stream.onerror = () => { setConnection("Reconnecting"); };
     const focus = () => { void refresh(); setDetailRevision((n) => n + 1); };
     window.addEventListener("focus", focus);
     const reconcile = window.setInterval(() => { void refresh(); setDetailRevision((n) => n + 1); }, 30000);
@@ -395,21 +417,41 @@ export function App() {
       window.clearInterval(reconcile);
       window.removeEventListener("focus", focus);
     };
-  }, [refresh, reconnectPRMetadata]);
+  }, [refresh]);
   const clearDrag = (reconcile = true) => {
     dragRef.current = null;
     setDrag(null);
     setInsertion(null);
     if (reconcile && queuedRefresh.current) void refresh();
   };
-  const selectedCard = tasks.find((t) => t.id === selectedID);
-  const detailVisible = panel !== "details" || (!detailDismissed && !!selectedCard);
+  const archiveRequest=useRef(0);
+  useEffect(()=>{
+    const request=++archiveRequest.current;
+    if(!showDone)return;
+    api<Card[]>("/v1/task-cards?column=done").then(cards=>{
+      if(!mounted.current||request!==archiveRequest.current)return;
+      const currentActive=new Map(tasksRef.current.filter(card=>card.column!=="done").map(card=>[card.id,card]));
+      const merged=new Map<string,Card>();
+      for(const card of cards){
+        const owned=acceptedCards.current.get(card.id);
+        const latest=owned&&owned.version>=card.version?owned:card;
+        if(latest.column==="done"&&(!currentActive.has(latest.id)||currentActive.get(latest.id)!.version<latest.version))merged.set(latest.id,latest);
+      }
+      for(const card of acceptedCards.current.values())if(card.column==="done"&&(!currentActive.has(card.id)||currentActive.get(card.id)!.version<card.version)&&(!merged.has(card.id)||merged.get(card.id)!.version<card.version))merged.set(card.id,card);
+      setActiveTasks(current=>current.filter(card=>!merged.has(card.id)||merged.get(card.id)!.version<card.version));
+      setDoneTasks([...merged.values()]);
+    }).catch(e=>{if(request===archiveRequest.current)setError(e.message)});
+    return()=>{++archiveRequest.current};
+  },[showDone]);
+  const selectedCard = tasks.find((t) => t.id === selectedID) || (detail?.id===selectedID?compactTask(detail):undefined);
+  const detailVisible = panel !== "details" || (!detailDismissed && !!selectedID);
   const detailPresent = useDetailPresence(detailContent, detailVisible, `${panel}:${selectedID}:${detailActivation}`);
   const captureTab = useTabSlide(tabStage, ["overview", "polling", "history"].indexOf(tab), selectedID, detailVisible && panel === "details");
   const visibleSelection = panel === "details" && !detailDismissed ? selectedID : "";
-  const [detail, setDetail] = useState<Task>();
   const [detailError, setDetailError] = useState("");
   const [detailRevision, setDetailRevision] = useState(0);
+  const [manualDetailRevision,setManualDetailRevision]=useState(0);
+  const effectiveDetailRevision=selectedCard?.column==="done"?manualDetailRevision+detailActivation:detailRevision+manualDetailRevision+detailActivation;
   const detailID = useRef(0);
   const latestSelectedCard = useRef(selectedCard);
   latestSelectedCard.current = selectedCard;
@@ -424,23 +466,26 @@ export function App() {
   }, [busy, detail]);
   const detailVersion = useRef(0);
   const consumedDetailRevision = useRef(-1);
+  const consumedExplicitDetailRevision=useRef(-1);
+  const explicitDetailRevision=manualDetailRevision+detailActivation;
   const detailSelection = useRef(selectedID);
   if (detailSelection.current !== selectedID) {
     detailSelection.current = selectedID;
     detailVersion.current = 0;
   }
-  const selected = detail?.id === selectedID && selectedCard ? detail : undefined;
+  const selected = detail?.id === selectedID ? detail : undefined;
   useEffect(() => {
     const request = ++detailID.current;
-    if (panel !== "details" || detailDismissed || !selectedCard) return;
-    if (detail?.id === selectedCard.id && detailVersion.current === selectedCard.version && consumedDetailRevision.current === detailRevision) return;
-    consumedDetailRevision.current = detailRevision;
+    if (panel !== "details" || detailDismissed || !selectedID) return;
+    if (detail?.id === selectedID && (!selectedCard || detailVersion.current === selectedCard.version) && (selectedCard?.column==="done"?consumedExplicitDetailRevision.current===explicitDetailRevision:consumedDetailRevision.current===effectiveDetailRevision)) return;
+    consumedDetailRevision.current = effectiveDetailRevision;
+    consumedExplicitDetailRevision.current=explicitDetailRevision;
     setDetailError("");
-    api<Task>(`/v1/tasks/${selectedCard.id}`).then((task) => {
+    api<Task>(`/v1/tasks/${selectedID}`).then((task) => {
       if (mounted.current && request === detailID.current && task.version >= Math.max(detailVersion.current, latestSelectedCard.current?.version || 0)) { detailVersion.current = task.version; setDetail(task); }
     }).catch((e) => { if (mounted.current && request === detailID.current) setDetailError(e.message); });
     return () => { ++detailID.current; };
-  }, [selectedCard?.id, selectedCard?.version, panel, detailDismissed, detailRevision]);
+  }, [selectedID, selectedCard?.version, panel, detailDismissed, effectiveDetailRevision,explicitDetailRevision]);
   const dismissDetails = useCallback(() => {
     if (panel !== "details" || detailDismissed || !selectedID) return;
     const focused = document.activeElement;
@@ -515,8 +560,10 @@ export function App() {
         body = draft.rebase(body as Record<string, unknown>, method === "PATCH");
       }
       const result = await api<T>(path, method, body);
+      if(result&&typeof result==="object"&&"id" in result&&"column" in result&&!("config" in result))acceptCard(result as unknown as Card);
       if (result && typeof result === "object" && "config" in result) {
         const saved = result as unknown as Task;
+        acceptCard(compactTask(saved));
         overviewDrafts.current.get(saved.id)?.receive(saved);
         setDetail((old) => old?.id === saved.id && old.version <= saved.version ? saved : old);
         if (detailSelection.current === saved.id) detailVersion.current = saved.version;
@@ -561,7 +608,7 @@ export function App() {
           saved.version !== expectedVersion + 1 || saved.priority !== priority) return old;
         return { ...old, priority: saved.priority, version: saved.version, updated_at: saved.updated_at, done_at: saved.done_at };
       });
-      setTasks(current => current.map(card => card.id === saved.id && card.version <= saved.version ? saved : card));
+      acceptCard(saved);
       await refresh();
     } catch (err) {
       if (err instanceof APIError && err.status === 409) void refresh();
@@ -592,7 +639,7 @@ export function App() {
           saved.version !== expectedVersion + 1 || (saved.ticket_url || "") !== ticketURL) return old;
         return { ...old, ticket_url: saved.ticket_url, version: saved.version, updated_at: saved.updated_at, done_at: saved.done_at };
       });
-      setTasks(current => current.map(card => card.id === saved.id && card.version <= saved.version ? saved : card));
+      acceptCard(saved);
       await refresh();
       return saved;
     } catch (err) {
@@ -620,7 +667,7 @@ export function App() {
       draft?.receive(saved);
       setDetail(old => old?.id === saved.id && old.version <= saved.version ? saved : old);
       if (detailSelection.current === saved.id) detailVersion.current = saved.version;
-      setTasks(cards => cards.map(card => card.id === saved.id && card.version <= saved.version ? compactTask(saved, card.polling?.rules) : card));
+      acceptCard(compactTask(saved, "rules" in (task.polling || {}) ? (task.polling as Card["polling"])?.rules : undefined));
       await refresh();
       return saved;
     } catch (err) {
@@ -664,6 +711,7 @@ export function App() {
       });
       if (!mounted.current) return;
       const saved = "config" in response ? compactTask(response, task.polling?.rules) : response;
+      acceptedCards.current.set(saved.id,saved);
       // Compact ordering replies can advance the editable version only when
       // the loaded settings are exactly the version this command reordered.
       const knownSettings = latestDetail.current?.id === saved.id &&
@@ -794,7 +842,9 @@ export function App() {
     drop: finishDrag,
   };
   const childrenByParent = new Map<string, Card[]>();
-  for (const child of tasks) if (child.card_type === "pr" && child.parent_task_id) {
+  const relationCards=new Map(tasks.map(card=>[card.id,card]));
+  for(const card of tasks)for(const ref of card.related_cards||[])if(!relationCards.has(ref.id))relationCards.set(ref.id,referenceCard(ref));
+  for (const child of relationCards.values()) if (child.card_type === "pr" && child.parent_task_id) {
     const siblings = childrenByParent.get(child.parent_task_id) || [];
     siblings.push(child); childrenByParent.set(child.parent_task_id, siblings);
   }
@@ -1052,15 +1102,18 @@ export function App() {
             </button>
           )}
         </div>}
+        {panel==="details"&&selected?.column==="done"&&<div className="panel-header">
+          <button type="button" disabled={busy} onClick={()=>setManualDetailRevision(n=>n+1)}>Reload details</button>
+        </div>}
         {panel === "details" && selected && detailError && (
           <div className="panel-body">
             <p role="alert" className="error-note">{detailError}</p>
-            <button onClick={() => setDetailRevision((n) => n + 1)}>Retry details</button>
+            <button onClick={() => setManualDetailRevision((n) => n + 1)}>Retry details</button>
           </div>
         )}
-        {panel === "details" && selectedCard && !selected ? (
-          <div className="panel-body"><h2>{selectedCard.title}</h2>
-            {detailError ? <><p role="alert" className="error-note">{detailError}</p><button onClick={() => setDetailRevision((n) => n + 1)}>Retry details</button></> : <p role="status">Loading details…</p>}
+        {panel === "details" && selectedID && !selected ? (
+          <div className="panel-body"><h2>{selectedCard?.title || "Task details"}</h2>
+            {detailError ? <><p role="alert" className="error-note">{detailError}</p><button onClick={() => setManualDetailRevision((n) => n + 1)}>Retry details</button></> : <p role="status">Loading details…</p>}
           </div>
         ) : panel === "details" && selected && isSource(selected) ? (
           <>
@@ -1149,7 +1202,7 @@ export function App() {
             <div className="panel-body">
               {feedback}
               <div hidden={tab !== "overview"}>
-                <div className="overview">{form}<TaskRelations key={selected.id} task={selected} cards={tasks} busy={busy} onSelect={select} onSave={saveParent} /><TaskReferences task={selected} /></div>
+                <div className="overview">{form}<TaskRelations key={selected.id} task={selected} cards={[...relationCards.values()]} busy={busy} onSelect={select} onSave={saveParent} /><TaskReferences task={selected} /></div>
               </div>
               {tab === "polling" ? (
                 <WorkflowForm key={`workflow-${selected.id}`} task={selected} busy={busy} configure={activationRequested}

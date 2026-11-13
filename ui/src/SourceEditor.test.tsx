@@ -28,7 +28,8 @@ it('separates Arcanum PR, explicit events, template, status and prompt controls'
   expect(screen.getAllByRole('button', { name: 'Source events' }).map(b => b.textContent)).toEqual(['Request changes', 'Merge checks failed']);
   expect(screen.queryByLabelText('Initial prompt')).toBeNull();
   panel('Source settings');
-  fireEvent.change(screen.getByLabelText('Check every · seconds'), { target: { value: '30' } });
+  expect(screen.getByText(/PR status: 30 seconds/)).toBeTruthy();
+  expect(screen.queryByLabelText('Check every · seconds')).toBeNull();
   panel('Source events');
   fireEvent.click(screen.getAllByRole('button', { name: '+ AND' })[0]);
   fireEvent.change(screen.getByLabelText('Event 1.2'), { target: { value: 'merge_checks_failed' } });
@@ -43,7 +44,7 @@ it('separates Arcanum PR, explicit events, template, status and prompt controls'
   fireEvent.change(screen.getByLabelText('Model'), { target: { value: 'chosen-model' } });
   fireEvent.click(screen.getByRole('button', { name: 'Save source' }));
   await waitFor(() => expect(save).toHaveBeenCalledOnce());
-  expect(save.mock.calls[0][0]).toMatchObject({ type: 'pr_changes_source', config: { interval_seconds: 30, condition_groups: [['request_changes', 'merge_checks_failed']] }, action: { column: 'todo', initial_launch: { mode: 'manual' }, child_definition: { title: 'Updated {{pr_title}}', description: 'Keep description', config: { initial_prompt: 'Updated instruction', execution: { model: 'chosen-model', approval_policy: 'on-request' } } } } });
+  expect(save.mock.calls[0][0]).toMatchObject({ type: 'pr_changes_source', config: { interval_seconds: 60, condition_groups: [['request_changes', 'merge_checks_failed']] }, action: { column: 'todo', initial_launch: { mode: 'manual' }, child_definition: { title: 'Updated {{pr_title}}', description: 'Keep description', config: { initial_prompt: 'Updated instruction', execution: { model: 'chosen-model', approval_policy: 'on-request' } } } } });
   expect(save.mock.calls[0][0].config.check_merge_failures).toBeUndefined();
 });
 it('keeps destinations and launch modes valid while retaining drafts', async () => {
@@ -94,9 +95,9 @@ it('closes the source menu and settings locally, restoring trigger focus', () =>
   const trigger = screen.getByRole('button', { name: 'Source settings' }); panel('Source settings');
   const select = screen.getByRole('combobox', { name: 'Event source' });
   fireEvent.click(select); fireEvent.keyDown(select, { key: 'Escape' });
-  expect(screen.queryByLabelText('Check every · seconds')).toBeTruthy();
+  expect(screen.queryByText(/PR status: 30 seconds/)).toBeTruthy();
   fireEvent.keyDown(select, { key: 'Escape' });
-  expect(screen.queryByLabelText('Check every · seconds')).toBeNull();
+  expect(screen.queryByText(/PR status: 30 seconds/)).toBeNull();
   expect(document.activeElement).toBe(trigger); expect(bubbled).not.toHaveBeenCalled();
   window.removeEventListener('keydown', bubbled);
 });

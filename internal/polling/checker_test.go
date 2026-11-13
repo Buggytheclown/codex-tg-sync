@@ -133,7 +133,9 @@ func TestMergedWaitEmitsNoContinuationAndSourceSkipsMerged(t *testing.T) {
 	checker := NewChecker(client)
 	wait := model.TaskPolling{TaskID: "wait", Type: TypePRWait, Mode: model.PollingOnce, Config: jsonBytes(Config{PRID: "42", Conditions: []string{ConditionCommit}}), Action: model.TaskPollingAction{Type: model.PollingResumeTask}, Cursor: jsonBytes(PRCursor{HeadCommit: "old"})}
 	out, err := checker.Check(context.Background(), wait, time.Now())
-	if err != nil || out.PRStatus != "merged" || len(out.Events) != 0 || string(out.Cursor) != string(wait.Cursor) {
+	var terminal PRCursor
+	_ = json.Unmarshal(out.Cursor, &terminal)
+	if err != nil || out.PRStatus != "merged" || len(out.Events) != 0 || terminal.HeadCommit != "old" || !terminal.Terminal {
 		t.Fatalf("wait: %#v %v", out, err)
 	}
 	source := model.TaskPolling{TaskID: "source", Type: TypeReview, Mode: model.PollingRepeat, Config: jsonBytes(Config{Login: "reviewer"}), Action: model.TaskPollingAction{Type: model.PollingCreateTask, ChildDefinition: &model.TaskDefinition{Title: "child", Config: model.TaskConfig{InitialPrompt: "work"}}}}
@@ -235,5 +237,24 @@ func TestConfiguredLoginRequiredOnlyForAccountConditions(t *testing.T) {
 	wait.Config = jsonBytes(Config{PRID: "42", Conditions: []string{ConditionAnswered}})
 	if _, err := WithLogin(wait, ""); err == nil {
 		t.Fatal("missing configured account accepted")
+	}
+}
+
+func TestFirstMergedObservationAfterSuccessfulOpenIsNotWaiting(t *testing.T) {
+	p := model.TaskPolling{TaskID: "task", Generation: 2, Type: TypePRWait, Mode: model.PollingOnce, Config: jsonBytes(Config{PRID: "42", Conditions: []string{ConditionCommit}}), Action: model.TaskPollingAction{Type: model.PollingReturnTask, Column: model.TaskInbox}, Cursor: jsonBytes(PRCursor{Generation: 2, HeadCommit: "head"}), LastSuccessAt: timestamp(time.Now().Add(-time.Minute))}
+	c := NewChecker(&fakePR{status: "merged"})
+	out, err := c.Check(context.Background(), p, time.Now())
+	if err != nil || out.Waiting || out.PRStatus != "merged" {
+		t.Fatalf("first merge suppressed: %+v %v", out, err)
+	}
+	p.Cursor = out.Cursor
+	out, err = c.Check(context.Background(), p, time.Now())
+	if err != nil || !out.Waiting || out.PRStatus != "" {
+		t.Fatalf("terminal cache fabricated new attempt: %+v %v", out, err)
+	}
+	p.Generation++
+	out, err = c.Check(context.Background(), p, time.Now())
+	if err != nil || out.Waiting || out.PRStatus != "merged" {
+		t.Fatalf("rearm ignored persisted terminal: %+v %v", out, err)
 	}
 }

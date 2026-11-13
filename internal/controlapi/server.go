@@ -93,7 +93,7 @@ func NewHandler(version string, backend Backend, options ...Options) http.Handle
 		writeJSON(w, http.StatusOK, payload)
 	})
 	registerBoard(mux, board, opts)
-	if board != nil || opts.PRMetadataPresence != nil || opts.ListenAddress != "" || opts.StaticDir != "" {
+	if board != nil || opts.ListenAddress != "" || opts.StaticDir != "" {
 		return boardGuard(mux, opts)
 	}
 	return mux

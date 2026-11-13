@@ -123,7 +123,7 @@ it("filters all columns by card type together with search while keeping linked P
   vi.stubGlobal("EventSource", class { onopen = null; onerror = null; addEventListener() {} close() {} });
   const fetchMock = vi.fn(async (input: string, _init?: RequestInit) => {
     const path = String(input);
-    const result = path === "/v1/task-cards" ? rows.map(row => compactTask(row)) : path.endsWith("/events") ? [] : rows.find(row => path === `/v1/tasks/${row.id}`);
+    const result = path === "/v1/task-cards?column=done" ? rows.filter(row=>row.column==="done").map(row=>compactTask(row)) : path === "/v1/task-cards" ? rows.filter(row=>row.column!=="done").map(row => compactTask(row)) : path.endsWith("/events") ? [] : rows.find(row => path === `/v1/tasks/${row.id}`);
     return { ok: true, status: path === "/v1/board-presence" ? 204 : 200, json: async () => result };
   });
   vi.stubGlobal("fetch", fetchMock);
@@ -138,6 +138,7 @@ it("filters all columns by card type together with search while keeping linked P
     fireEvent.click(option);
   };
   fireEvent.click(screen.getByRole("button", { name: "Show Done" }));
+  await screen.findByRole("button",{name:/TASK Finished development/});
   choose("Task");
   expect(screen.getByRole("button", { name: /TASK Development/ })).toBeTruthy();
   expect(screen.getByRole("button", { name: /TASK Legacy task/ })).toBeTruthy();

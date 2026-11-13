@@ -16,7 +16,7 @@ function setup(value=configured()) {
 }
 function choose(label:string, option:string){fireEvent.click(screen.getByRole('combobox',{name:label}));fireEvent.click(screen.getByRole('option',{name:option}));}
 it('shows compact When/Then blocks and opens source and prompt settings separately',()=>{
- const changed=setup();
+ setup();
  expect(screen.getByText('When')).toBeTruthy();expect(screen.getByText('Then')).toBeTruthy();
  expect(screen.queryByLabelText('PR ID')).toBeNull();expect(screen.queryByLabelText('Continuation prompt')).toBeNull();
  const card=document.querySelector('.polling-rule')!;
@@ -25,8 +25,8 @@ it('shows compact When/Then blocks and opens source and prompt settings separate
  expect(then.getByRole('button',{name:'Prompt action'}).textContent).toContain('ТГ аппрув + промпт');
  fireEvent.click(screen.getByRole('button',{name:'Rule source'}));
  expect((screen.getByLabelText('PR ID') as HTMLInputElement).value).toBe('42');
- fireEvent.change(screen.getByLabelText('Check every · seconds'),{target:{value:'30'}});
- expect(changed.mock.calls.at(-1)![0].config.rules[0].config.interval_seconds).toBe(30);
+ expect(screen.getByText(/PR status: 30 seconds/)).toBeTruthy();
+ expect(screen.queryByLabelText('Check every · seconds')).toBeNull();
  fireEvent.click(screen.getByRole('button',{name:'Done'}));
  fireEvent.click(screen.getByRole('button',{name:'Prompt action'}));
  expect(screen.queryByLabelText('PR ID')).toBeNull();
@@ -78,4 +78,12 @@ it('keeps copied source PR placeholders editable in the source block',()=>{
  expect(screen.getByRole('button',{name:'Rule source'}).textContent).toContain('Source PR');
  fireEvent.click(screen.getByRole('button',{name:'Rule source'}));
  const id=screen.getByLabelText('PR ID') as HTMLInputElement;expect(id.value).toBe('{{pr_id}}');expect(id.readOnly).toBe(false);
+});
+it('preserves an old interval while showing the shared schedule and editing another PR field',()=>{
+ const value=configured();value.config.rules![0].config.interval_seconds=1200;
+ const changed=setup(value);fireEvent.click(screen.getByRole('button',{name:'Rule source'}));
+ expect(screen.queryByLabelText('Check every · seconds')).toBeNull();
+ expect(screen.getByText(/PR status: 30 seconds/)).toBeTruthy();
+ fireEvent.change(screen.getByLabelText('PR ID'),{target:{value:'43'}});
+ expect(changed.mock.calls.at(-1)![0].config.rules[0].config).toMatchObject({pr_id:'43',interval_seconds:1200});
 });

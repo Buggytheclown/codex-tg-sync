@@ -39,6 +39,8 @@ func (c *CLIClient) ReadPRChecks(ctx context.Context, diffID int64) ([]PRCheck, 
 	if diffID <= 0 {
 		return nil, fmt.Errorf("positive published diff id required")
 	}
+	ctx, cancel := context.WithTimeout(ctx, cliTimeout)
+	defer cancel()
 	checks := []PRCheck{}
 	cursor := ""
 	seen := map[string]bool{}

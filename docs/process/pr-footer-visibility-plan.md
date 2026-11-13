@@ -1,5 +1,9 @@
 # Видимость доски: план обновления футеров
 
+> Superseded 2026-11-13 by [shared Arcanum reads](shared-arcanum-reads-spec.md).
+> The former browser-presence requirements below are historical.
+
+
 Дата: 2026-11-11. Основание: `pr-footer-visibility-spec.md`.
 
 ## Решение

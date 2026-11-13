@@ -60,7 +60,8 @@ beforeEach(() => {
     close() {} onopen = null; onerror = null;
   });
   vi.stubGlobal("fetch", vi.fn(async (path: string, options?: RequestInit) => {
-    if (path === "/v1/task-cards") return heldRead || reply(rows.map(task => compactTask(task)));
+    if(path==="/v1/task-cards?column=done")return reply(rows.filter(task=>task.column==="done").map(task=>compactTask(task)));
+    if (path === "/v1/task-cards") return heldRead || reply(rows.filter(task=>task.column!=="done").map(task => compactTask(task)));
     if (!options?.method || options.method === "GET") return reply(rows.find((t) => path === `/v1/tasks/${t.id}`) || []);
     if (options?.method === "POST" && (path.endsWith("/move") || path.endsWith("/reorder"))) {
       const body = JSON.parse(options.body as string);

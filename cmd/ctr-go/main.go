@@ -15,6 +15,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -141,8 +142,7 @@ func runDaemon(cfg config.Config) error {
 	if err := service.Start(ctx); err != nil {
 		return err
 	}
-	metadataPresence := arcanumreview.NewMetadataPresence()
-	if err := startControlAPI(ctx, cfg, service, logger, metadataPresence); err != nil {
+	if err := startControlAPI(ctx, cfg, service, logger); err != nil {
 		return err
 	}
 	for _, poller := range []struct {
@@ -161,9 +161,30 @@ func runDaemon(cfg config.Config) error {
 	}
 	startYMessengerPoller(ctx, cfg, service, logger)
 	prClient := arcanumreview.NewCLIClient(cfg.ArcanumYABin, nil)
-	go arcanumreview.RunPRMetadata(ctx, service, prClient, metadataPresence, func(err error) { logger.Printf("PR metadata refresh failed: %s", telegram.SanitizeLogError(err)) })
-	checker := polling.NewChecker(prClient)
+	if diagnostics := diagnosticLogger(cfg, logger); diagnostics != nil {
+		prClient.SetReadObserver(func(event arcanumreview.ReadEvent) {
+			diagnostics.Printf("arcanum_read phase=%s method=%s key=%s started_at=%s duration_ms=%d success=%t", event.Phase, event.Method, event.Key, event.StartedAt.Format(time.RFC3339Nano), event.Duration.Milliseconds(), event.Success)
+		})
+	}
+
+	shared := arcanumreview.NewSharedReader(prClient, service)
+	checker := polling.NewChecker(shared)
 	checker.Login = &cfg.ArcanumReviewLogin
+	var demandMu sync.Mutex
+	shared.RefreshDemand = func(ctx context.Context) error {
+		demandMu.Lock()
+		defer demandMu.Unlock()
+		tasks, err := service.ListPollingTasks(ctx)
+		if err != nil {
+			return err
+		}
+		footers, err := service.ListPRFooterDemand(ctx)
+		if err != nil {
+			return err
+		}
+		return checker.Prepare(ctx, tasks, footers)
+	}
+	go shared.Run(ctx, func(err error) { logger.Printf("Arcanum collection failed: %s", telegram.SanitizeLogError(err)) })
 	runner := polling.NewRunner(service, checker, cfg.ExternalRequestsTopicID)
 	go runner.Run(ctx, func(err error) {
 		if err != nil {
@@ -256,7 +277,7 @@ func startArcanumChangesPoller(ctx context.Context, cfg config.Config, sink arca
 	return true
 }
 
-func startControlAPI(ctx context.Context, cfg config.Config, service *daemon.Service, logger *log.Logger, metadataPresence *arcanumreview.MetadataPresence) error {
+func startControlAPI(ctx context.Context, cfg config.Config, service *daemon.Service, logger *log.Logger) error {
 	listener, err := controlapi.Listen(cfg.ControlAPIListen)
 	if err != nil {
 		return err
@@ -266,7 +287,7 @@ func startControlAPI(ctx context.Context, cfg config.Config, service *daemon.Ser
 	}
 	logger.Printf("ctr-go control api listening on %s", listener.Addr().String())
 	go func() {
-		if err := controlapi.Serve(ctx, listener, controlapi.NewHandler(version.Version, service, controlapi.Options{PRMetadataPresence: metadataPresence, ListenAddress: cfg.ControlAPIListen, StaticDir: cfg.UIStaticDir, DevOrigin: cfg.UIDevOrigin}), logger); err != nil && ctx.Err() == nil {
+		if err := controlapi.Serve(ctx, listener, controlapi.NewHandler(version.Version, service, controlapi.Options{ListenAddress: cfg.ControlAPIListen, StaticDir: cfg.UIStaticDir, DevOrigin: cfg.UIDevOrigin}), logger); err != nil && ctx.Err() == nil {
 			logger.Printf("ctr-go control api stopped: %v", err)
 		}
 	}()

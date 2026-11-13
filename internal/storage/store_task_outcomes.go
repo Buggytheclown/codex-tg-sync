@@ -43,6 +43,21 @@ func (s *Store) AcceptTaskPollingOutcome(ctx context.Context, out model.TaskPoll
 		now = model.NowString()
 	}
 	p := t.Polling
+	if out.Waiting && out.DiagnosticNew {
+		_, err = tx.ExecContext(ctx, `UPDATE task_polling SET next_check_at=?,last_attempt_at=?,last_error=?,cursor_json=? WHERE task_id=?`, out.NextCheckAt, out.ObservationAt, out.DiagnosticError, string(out.Cursor), t.ID)
+		if err != nil {
+			return false, err
+		}
+		return true, tx.Commit()
+	}
+	if out.Waiting && len(out.Events) == 0 && out.PRStatus == "" {
+		// Waiting is a scheduling update, not a fabricated attempt or successful IO.
+		_, err = tx.ExecContext(ctx, `UPDATE task_polling SET next_check_at=? WHERE task_id=?`, out.NextCheckAt, t.ID)
+		if err != nil {
+			return false, err
+		}
+		return true, tx.Commit()
+	}
 	if out.Error != "" {
 		_, err = tx.ExecContext(ctx, `UPDATE task_polling SET last_attempt_at=?,last_error=?,next_check_at=? WHERE task_id=?`, now, out.Error, out.NextCheckAt, t.ID)
 		if err != nil {
@@ -252,11 +267,14 @@ func (s *Store) AcceptTaskPollingOutcome(ctx context.Context, out model.TaskPoll
 		}
 		acceptedEvent = true
 	}
+	if out.ObservationAt != "" {
+		now = out.ObservationAt
+	}
 	cursor := p.Cursor
 	if len(out.Cursor) > 0 {
 		cursor = out.Cursor
 	}
-	_, err = tx.ExecContext(ctx, `UPDATE task_polling SET cursor_json=?,next_check_at=?,last_attempt_at=?,last_success_at=?,last_error='' WHERE task_id=?`, string(cursor), out.NextCheckAt, now, now, t.ID)
+	_, err = tx.ExecContext(ctx, `UPDATE task_polling SET cursor_json=?,next_check_at=?,last_attempt_at=?,last_success_at=?,last_error=? WHERE task_id=?`, string(cursor), out.NextCheckAt, now, now, out.DiagnosticError, t.ID)
 	if err != nil {
 		return false, err
 	}

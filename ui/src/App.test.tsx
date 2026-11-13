@@ -976,8 +976,6 @@ beforeEach(() => {
     "fetch",
     vi.fn(async (path: string, options?: RequestInit) => {
       const method = options?.method || "GET";
-      // Presence is ephemeral display-read permission, not a task command.
-      if (path === "/v1/board-presence") return { ok: true, status: 204, json: async () => ({}) };
       calls.push({
         path,
         method,
@@ -987,7 +985,7 @@ beforeEach(() => {
         ? JSON.parse(options.body as string)
         : undefined;
       let payload: unknown =
-        path === "/v1/task-cards" ? rows.map(task => compactTask(task)) : path.endsWith("/events") ? [] : rows.find((t) => path === `/v1/tasks/${t.id}`) || {};
+        path === "/v1/task-cards?column=done" ? rows.filter(task=>task.column==="done").map(task=>compactTask(task)) : path === "/v1/task-cards" ? rows.filter(task=>task.column!=="done").map(task => compactTask(task)) : path.endsWith("/events") ? [] : rows.find((t) => path === `/v1/tasks/${t.id}`) || {};
       if (method === "PATCH") {
         const task = rows.find((t) => path === `/v1/tasks/${t.id}`)!;
         payload = { ...task, ...body, version: task.version + 1 };
@@ -1097,6 +1095,8 @@ describe("board operator flows", () => {
       }),
     ];
     render(<App />);
+    await screen.findByRole("button", { name: "Show Done" });
+    fireEvent.click(screen.getByRole("button",{name:"Show Done"}));
     const source = await screen.findByRole("button", { name: /Paused · Done/ });
     expect(screen.queryByText("Paused · Done")).toBeNull();
     expect(source.querySelector('.origin-icon')).not.toBeNull();
@@ -1182,9 +1182,8 @@ describe("board operator flows", () => {
       target: { value: "Future instruction" },
     });
     sourcePanel("Source settings");
-    fireEvent.change(screen.getByLabelText("Check every · seconds"), {
-      target: { value: "120" },
-    });
+    expect(screen.getByText(/PR status: 30 seconds/)).toBeTruthy();
+    expect(screen.queryByLabelText("Check every · seconds")).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Save source" }));
     await waitFor(() =>
       expect(calls.some((c) => c.method === "PUT")).toBe(true),
@@ -1196,7 +1195,7 @@ describe("board operator flows", () => {
       body: {
         expected_version: 3,
         polling: {
-          config: { interval_seconds: 120 },
+          config: { interval_seconds: 60 },
           action: {
             child_definition: {
               config: { initial_prompt: "Future instruction" },
@@ -1423,7 +1422,7 @@ it("loads full details only on selection and retries failed details without blan
   });
   render(<App />);
   const card = await screen.findByRole("button", { name: /TASK Review the next revision/ });
-  expect(calls.map((c) => c.path)).toEqual(["/v1/task-cards"]);
+  expect(calls.every(c=>c.path==="/v1/task-cards"||c.path==="/v1/task-cards?column=done")).toBe(true);
   fireEvent.click(card);
   await screen.findByText("Details unavailable");
   expect(screen.queryByRole("button", { name: "Save this task" })).toBeNull();
@@ -2076,36 +2075,12 @@ it.each([
 });
 
 
-it("announces board visibility and refreshes metadata after SSE reconnect only while visible", async () => {
-  let stream!: { onopen: null | (() => void); onerror: null | (() => void) };
-  vi.stubGlobal("EventSource", class {
-    onopen = null; onerror = null;
-    constructor() { stream = this; }
-    addEventListener() {} close() {}
-  });
-  let visible = true;
-  const visibility = vi.spyOn(document, "visibilityState", "get").mockImplementation(() => visible ? "visible" : "hidden");
-  try {
-    render(<App />);
-    await screen.findByRole("button", { name: /TASK Review the next revision/ });
-    const presence = () => vi.mocked(fetch).mock.calls
-      .filter(([path]) => path === "/v1/board-presence")
-      .map(([, options]) => JSON.parse(options!.body as string));
-    expect(presence()).toHaveLength(1);
-    fireEvent(window, new Event("blur"));
-    fireEvent.focus(window);
-    expect(presence()).toHaveLength(1);
-    stream.onerror?.(); stream.onopen?.();
-    expect(presence().at(-1)).toMatchObject({ active: true, refresh: true });
-    visible = false;
-    fireEvent(document, new Event("visibilitychange"));
-    expect(presence().at(-1)).toMatchObject({ active: false });
-    const count = presence().length;
-    stream.onerror?.(); stream.onopen?.();
-    expect(presence()).toHaveLength(count);
-    visible = true;
-    fireEvent(document, new Event("visibilitychange"));
-    expect(presence().at(-1)).toMatchObject({ active: true });
-    expect(calls.every(c => c.method === "GET")).toBe(true);
-  } finally { visibility.mockRestore(); }
+it("keeps reconnect and focus local without board presence requests",async()=>{
+ let stream!:{onopen:null|(()=>void);onerror:null|(()=>void)};
+ vi.stubGlobal("EventSource",class{onopen=null;onerror=null;constructor(){stream=this}addEventListener(){}close(){}});
+ render(<App/>);await screen.findByRole("button",{name:/TASK Review the next revision/});
+ fireEvent.focus(window);stream.onerror?.();stream.onopen?.();
+ await waitFor(()=>expect(calls.filter(c=>c.path==="/v1/task-cards").length).toBeGreaterThan(1));
+ expect(vi.mocked(fetch).mock.calls.some(([path])=>path==="/v1/board-presence")).toBe(false);
+ expect(calls.every(c=>c.method==="GET")).toBe(true);
 });

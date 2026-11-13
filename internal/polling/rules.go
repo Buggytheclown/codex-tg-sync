@@ -3,40 +3,13 @@ package polling
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
-	"github.com/mideco-tech/codex-tg/internal/arcanumreview"
 	"github.com/mideco-tech/codex-tg/internal/model"
 	"slices"
 	"time"
 )
 
-// Cache lives for one task check; same-PR rules observe the same response.
-type rulePRClient struct {
-	PRClient
-	snapshots map[int64]arcanumreview.PRSnapshot
-	checks    map[int64][]arcanumreview.PRCheck
-}
-
-func (c *rulePRClient) ReadPRSnapshot(ctx context.Context, id int64) (arcanumreview.PRSnapshot, error) {
-	if s, ok := c.snapshots[id]; ok {
-		return s, nil
-	}
-	s, err := c.PRClient.ReadPRSnapshot(ctx, id)
-	if err == nil {
-		c.snapshots[id] = s
-	}
-	return s, err
-}
-func (c *rulePRClient) ReadPRChecks(ctx context.Context, id int64) ([]arcanumreview.PRCheck, error) {
-	if s, ok := c.checks[id]; ok {
-		return s, nil
-	}
-	s, err := c.PRClient.ReadPRChecks(ctx, id)
-	if err == nil {
-		c.checks[id] = s
-	}
-	return s, err
-}
 func (c *Checker) checkRules(ctx context.Context, p model.TaskPolling, now time.Time) (model.TaskPollingOutcome, error) {
 	out := model.TaskPollingOutcome{TaskID: p.TaskID, Generation: p.Generation, Cursor: p.Cursor, CheckedAt: timestamp(now)}
 	var cfg model.PollingRulesConfig
@@ -52,10 +25,7 @@ func (c *Checker) checkRules(ctx context.Context, p model.TaskPolling, now time.
 			state.Rules = map[string]model.PollingRuleState{}
 		}
 	}
-	client := &Checker{}
-	if c != nil && c.pr != nil {
-		client.pr = &rulePRClient{PRClient: c.pr, snapshots: map[int64]arcanumreview.PRSnapshot{}, checks: map[int64][]arcanumreview.PRCheck{}}
-	}
+	client := c
 	// Done wins ties. Stable sorting preserves the user's order otherwise.
 	slices.SortStableFunc(cfg.Rules, func(a, b model.PollingRule) int {
 		if (a.Action.Column == model.TaskDone) == (b.Action.Column == model.TaskDone) {
@@ -67,11 +37,17 @@ func (c *Checker) checkRules(ctx context.Context, p model.TaskPolling, now time.
 		return 1
 	})
 	next := now.Add(24 * time.Hour)
+	out.Waiting = true
+	out.Terminal = true
+	var failures []error
 	for _, r := range cfg.Rules {
+		if r.Type == TypeCron {
+			out.Terminal = false
+		}
 		runtime := state.Rules[r.ID]
 		// Re-entry increments generation, so old deadlines must not delay a new arm.
 		due, err := time.Parse(time.RFC3339Nano, string(runtime.NextCheckAt))
-		if state.Generation == p.Generation && err == nil && due.After(now) {
+		if r.Type == TypeCron && state.Generation == p.Generation && err == nil && due.After(now) {
 			if due.Before(next) {
 				next = due
 			}
@@ -81,7 +57,20 @@ func (c *Checker) checkRules(ctx context.Context, p model.TaskPolling, now time.
 		leaf.Cursor = runtime.Cursor
 		result, err := client.Check(ctx, leaf, now)
 		if err != nil {
-			return out, fmt.Errorf("rule %s: %w", r.ID, err)
+			out.Terminal = false
+			failures = append(failures, fmt.Errorf("rule %s: %w", r.ID, err))
+			continue
+		}
+		out.Terminal = out.Terminal && result.Terminal
+		if !result.Waiting {
+			out.Waiting = false
+		}
+		out.DiagnosticNew = out.DiagnosticNew || result.DiagnosticNew
+		if result.DiagnosticError != "" {
+			out.DiagnosticError = result.DiagnosticError
+		}
+		if result.ObservationAt > out.ObservationAt {
+			out.ObservationAt = result.ObservationAt
 		}
 		state.Rules[r.ID] = model.PollingRuleState{Cursor: result.Cursor, NextCheckAt: result.NextCheckAt}
 		if n, err := time.Parse(time.RFC3339Nano, string(result.NextCheckAt)); err == nil && n.Before(next) {
@@ -108,5 +97,12 @@ func (c *Checker) checkRules(ctx context.Context, p model.TaskPolling, now time.
 	state.Generation = p.Generation
 	out.Cursor = jsonBytes(state)
 	out.NextCheckAt = timestamp(next)
+	if out.Terminal {
+		out.NextCheckAt = ""
+	}
+	if len(out.Events) == 0 && len(failures) > 0 {
+		out.Cursor = p.Cursor
+		return out, errors.Join(failures...)
+	}
 	return out, nil
 }

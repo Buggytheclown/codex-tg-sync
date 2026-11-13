@@ -40,8 +40,8 @@ func TestCLIClientListsAssignedPullRequestsWithExactQuery(t *testing.T) {
 	wantArgs := []string{
 		"tool", "gena-arcanum-cli", "--json", "pr", "search",
 		"--query", "open(true);published(true);assignee(reviewer-example)",
-		"--limit", "100", "--all", "--order=-updated_at",
-		"--fields", "review_requests(id,url,author(name),summary),total_count",
+		"--limit", "100", "--offset", "0", "--order=-updated_at",
+		"--fields", SearchFields,
 	}
 	if runner.name != "/usr/local/bin/ya" || !reflect.DeepEqual(runner.args, wantArgs) {
 		t.Fatalf("command = %q %#v, want %q %#v", runner.name, runner.args, "/usr/local/bin/ya", wantArgs)
@@ -63,8 +63,8 @@ func TestCLIClientListsAuthoredWaitingForChangesWithExactQuery(t *testing.T) {
 	wantArgs := []string{
 		"tool", "gena-arcanum-cli", "--json", "pr", "search",
 		"--query", "open(true);published(true);author(tidjei);common_status(waiting_for_changes)",
-		"--limit", "100", "--all", "--order=-updated_at",
-		"--fields", "review_requests(id,url,author(name),summary),total_count",
+		"--limit", "100", "--offset", "0", "--order=-updated_at",
+		"--fields", SearchFields,
 	}
 	if runner.name != "ya" || !reflect.DeepEqual(runner.args, wantArgs) {
 		t.Fatalf("command = %q %#v, want %q %#v", runner.name, runner.args, "ya", wantArgs)

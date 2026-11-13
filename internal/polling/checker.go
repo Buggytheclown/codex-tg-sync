@@ -25,6 +25,7 @@ type PRClient interface {
 	ReadPRSnapshot(context.Context, int64) (arcanumreview.PRSnapshot, error)
 }
 type Checker struct {
+	arms  armTimes
 	pr    PRClient
 	Login *string
 }
@@ -36,6 +37,11 @@ func timestamp(t time.Time) model.TimeString {
 func jsonBytes(value any) json.RawMessage { b, _ := json.Marshal(value); return b }
 
 func (c *Checker) Check(ctx context.Context, p model.TaskPolling, now time.Time) (model.TaskPollingOutcome, error) {
+	out, err := c.check(ctx, p, now)
+	return finishObservation(p, out), err
+}
+
+func (c *Checker) check(ctx context.Context, p model.TaskPolling, now time.Time) (model.TaskPollingOutcome, error) {
 	out := model.TaskPollingOutcome{TaskID: p.TaskID, Generation: p.Generation, Cursor: p.Cursor, CheckedAt: timestamp(now), NextCheckAt: timestamp(now.Add(time.Minute))}
 	if c != nil && c.Login != nil {
 		var err error
@@ -88,7 +94,15 @@ func (c *Checker) Check(ctx context.Context, p model.TaskPolling, now time.Time)
 			}
 		}
 		if err != nil {
-			return out, err
+			return pendingOutcome(out, err, now)
+		}
+		out.NextCheckAt = timestamp(now.Add(arcanumreview.SearchInterval))
+		if reader, ok := c.pr.(*arcanumreview.SharedReader); ok {
+			query := arcanumreview.AssignedQuery(cfg.Login)
+			if p.Type == TypeChanges {
+				query = arcanumreview.ChangesQuery(cfg.Login, cfg.CheckMergeFailures)
+			}
+			out.ObservationAt = timestamp(reader.SearchObservationAt(query))
 		}
 		var cursor struct {
 			Seen     []int64 `json:"seen"`
@@ -124,7 +138,39 @@ func (c *Checker) Check(ctx context.Context, p model.TaskPolling, now time.Time)
 			attempts++
 			snapshot, err := c.pr.ReadPRSnapshot(ctx, pr.ID)
 			if err != nil {
+				if pending, ok := err.(*arcanumreview.PendingRead); ok {
+					out.Waiting = true
+					if pending.Cause != nil {
+						out.DiagnosticError = pending.Cause.Error()
+						out.ObservationAt = timestamp(pending.AttemptAt)
+					}
+					continue
+				}
 				readErrors = append(readErrors, err)
+				continue
+			}
+			if snapshot.Status == "merged" {
+				cursor.Seen = append(cursor.Seen, pr.ID)
+				continue
+			}
+			if snapshot.Coverage != nil {
+				cov := snapshot.Coverage
+				if cov.CommentsAt.After(parseObservationTime(out.ObservationAt)) {
+					out.ObservationAt = timestamp(cov.CommentsAt)
+				}
+				if cov.ChecksAt.After(parseObservationTime(out.ObservationAt)) {
+					out.ObservationAt = timestamp(cov.ChecksAt)
+				}
+				if cov.CommentsError != "" {
+					out.DiagnosticError = cov.CommentsError
+				}
+				if cov.ChecksError != "" {
+					out.DiagnosticError = cov.ChecksError
+				}
+			}
+			statusBranch := snapshot.CommonStatus == "waiting_for_changes" && (len(cfg.ConditionGroups) == 0 || groupsMatch(cfg.ConditionGroups, []string{ConditionChanges}))
+			if observationPending(ctx, snapshot, childNeedsComments(p), cfg.CheckMergeFailures && !statusBranch) {
+				out.Waiting = true
 				continue
 			}
 			if snapshot.Status == "merged" {
@@ -192,6 +238,13 @@ func (c *Checker) Check(ctx context.Context, p model.TaskPolling, now time.Time)
 			}
 			cursor.Seen = append(cursor.Seen, pr.ID)
 		}
+		if len(out.Events) > 0 {
+			out.Waiting = false
+		}
+		if out.ObservationAt != "" && !parseObservationTime(out.ObservationAt).After(parseObservationTime(p.LastAttemptAt)) && len(out.Events) == 0 {
+			out.Waiting = true
+			out.DiagnosticError = ""
+		}
 		out.Cursor = jsonBytes(cursor)
 		if len(readErrors) > 0 && (cfg.CheckMergeFailures || len(out.Events) == 0) {
 			return out, errors.Join(readErrors...)
@@ -203,16 +256,7 @@ func (c *Checker) Check(ctx context.Context, p model.TaskPolling, now time.Time)
 		id, _ := strconv.ParseInt(cfg.PRID, 10, 64)
 		current, err := c.pr.ReadPRSnapshot(ctx, id)
 		if err != nil {
-			return out, err
-		}
-		if current.Status == "merged" && len(cfg.ConditionGroups) == 0 {
-			out.PRStatus = "merged"
-			return out, nil
-		}
-		if slices.Contains(conditions(cfg), ConditionMergeChecks) {
-			if err := c.readChecks(ctx, &current); err != nil {
-				return out, err
-			}
+			return pendingOutcome(out, err, now)
 		}
 		var old PRCursor
 		if len(p.Cursor) > 0 {
@@ -220,7 +264,31 @@ func (c *Checker) Check(ctx context.Context, p model.TaskPolling, now time.Time)
 				return out, fmt.Errorf("decode PR cursor: %w", err)
 			}
 		}
+		if current.Status == "merged" && len(cfg.ConditionGroups) == 0 {
+			out.PRStatus = "merged"
+			out.Terminal = true
+			out.Waiting = old.Terminal && old.Generation == p.Generation
+			out.NextCheckAt = ""
+			old.Terminal = true
+			old.Generation = p.Generation
+			out.Cursor = jsonBytes(old)
+			if out.Waiting {
+				out.PRStatus = ""
+			}
+			return out, nil
+		}
+		if slices.Contains(conditions(cfg), ConditionMergeChecks) {
+			if err := c.readChecks(ctx, &current); err != nil {
+				return out, err
+			}
+		}
+		if !c.applyCoverage(ctx, p, cfg, &old, &current, now, &out) {
+			return out, nil
+		}
 		next, reasons := ComparePR(cfg, old, current, p.Generation)
+		if out.Terminal && len(reasons) == 0 && old.Terminal && old.Generation == p.Generation {
+			out.Waiting = true
+		}
 		if len(reasons) > 0 || next.Since == "" {
 			next.Since = now.UTC().Format(time.RFC3339Nano)
 		}
@@ -240,6 +308,9 @@ func (c *Checker) Check(ctx context.Context, p model.TaskPolling, now time.Time)
 }
 
 func (c *Checker) readChecks(ctx context.Context, snapshot *arcanumreview.PRSnapshot) error {
+	if snapshot.Status == "merged" || snapshot.Coverage != nil {
+		return nil
+	}
 	if snapshot.PublishedDiffID == 0 {
 		return nil
 	}

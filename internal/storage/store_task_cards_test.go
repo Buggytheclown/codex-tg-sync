@@ -34,7 +34,7 @@ func TestTaskCardPollingRulesShowScheduleOnlyWhileActive(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			cards, err := s.listTaskCards(ctx, task.ID, now)
+			cards, err := s.listTaskCards(ctx, task.ID, "", now)
 			if err != nil || len(cards) != 1 {
 				t.Fatalf("cards=%v err=%v", cards, err)
 			}

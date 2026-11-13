@@ -80,7 +80,7 @@ function RuleCard({ rule, index, onChange, onRemove, child, variables, promptSet
         </> : <>
           <div className="pr-id-row"><Field label="PR ID" hint={child && variables ? 'Use {{pr_id}} for the source PR, or enter a numeric PR ID.' : undefined}><input required pattern={child ? undefined : '[1-9][0-9]*'} value={rule.config.pr_id || ''} onChange={e => cfg('pr_id', e.target.value)} /></Field>
             {/^[1-9]\d*$/.test(rule.config.pr_id || '') && <a className="pr-target-link" href={`https://a.yandex-team.ru/review/${rule.config.pr_id}`} target="_blank" rel="noreferrer" aria-label={`#${rule.config.pr_id} Open PR`}>#{rule.config.pr_id} Open PR ↗</a>}</div>
-          <Field label="Check every · seconds"><input type="number" min={10} max={86400} value={rule.config.interval_seconds || 60} onChange={e => cfg('interval_seconds', Number(e.target.value))} /></Field>
+          <Field label="Arcanum refresh"><p>PR status: 30 seconds · comments and checks: 5 minutes when needed · metadata fallback: 10 minutes when needed.</p></Field>
           <details className="polling-author"><summary>PR author (optional)</summary><Field label="PR author"><input value={rule.config.author || ''} onChange={e => cfg('author', e.target.value)} /></Field></details>
         </>}
       </>}

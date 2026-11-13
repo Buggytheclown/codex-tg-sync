@@ -153,15 +153,20 @@ type PollingEvent struct {
 	Variables   map[string]string `json:"variables"`
 }
 type TaskPollingOutcome struct {
-	RuleID      string
-	PRStatus    string
-	TaskID      string
-	Generation  int64
-	Cursor      json.RawMessage
-	NextCheckAt TimeString
-	CheckedAt   TimeString
-	Error       string
-	Events      []PollingEvent
+	DiagnosticNew   bool
+	DiagnosticError string
+	Waiting         bool
+	ObservationAt   TimeString
+	Terminal        bool
+	RuleID          string
+	PRStatus        string
+	TaskID          string
+	Generation      int64
+	Cursor          json.RawMessage
+	NextCheckAt     TimeString
+	CheckedAt       TimeString
+	Error           string
+	Events          []PollingEvent
 }
 
 // TaskSourceImport is a once-only bridge from a retired source owner. Keys are

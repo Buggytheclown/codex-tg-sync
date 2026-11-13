@@ -598,25 +598,32 @@ For live Telegram QA, verify:
   narrow footer groups, row focus/drag separation and direct parent navigation.
   If browser access is unavailable, report that visual acceptance remains unverified.
 
-### Visible-board PR footer reads
+### Shared Arcanum reads and Done archive
 
-- `arcanumreview/metadata_presence_test.go`: shared visibility leases, expiry,
-  sequence fencing, recovery refresh, hidden refresh rejection and bounded memory.
-- `arcanumreview/metadata_runner_test.go`: no passive IO without a visible page,
-  stop within a selected batch, one resumed queue, paced reads/cancellation,
-  failure isolation, recovery coalescing and fresh-cache refresh after a full pass.
-- `storage/store_pr_metadata_test.go`: activation includes recent Done PRs, each
-  attempt is consumed once per pass and ordinary five-minute deadlines survive.
-- `controlapi/board_presence_test.go`: trust boundary, malformed commands,
-  successful presence without task access; HTTP handler → real worker → SQLite
-  refreshes fresh cache and finishes in-flight IO after hiding without task edits.
-- `ui/src/usePRMetadataPresence.test.tsx` and the App integration test cover
-  visibility vs focus, page lifecycle, heartbeat, timeout, online/SSE recovery,
-  hidden recovery, release on unmount and independent page identities.
-- Native browser acceptance: switch tabs, minimize/restore, leave window visible
-  without focus, open two pages and close one. Passive Arc reads must follow shared
-  visibility; working polling must continue. Do not treat jsdom as this live check.
-
+- `arcanumreview/shared_search_test.go` and `snapshot_test.go` cover explicit
+  pagination, partial positive rows, lifecycle/publication normalization,
+  conflicting terminal data, published revision selection and comment validity.
+- `arcanumreview/shared_test.go` covers shared query counts, persistent limits,
+  delayed actual starts, diff changes, restart, discovery tick jitter, missing-row
+  fallback, reservation failure, fallback
+  errors, terminal ordering and coherent slow coverage. A fake-clock hour for
+  five same-author status cards makes 120 search commands and zero optional reads.
+- `polling/partial_test.go`, checker/rules suites cover deferred AND/OR groups,
+  preserved Matches, per-group watermarks and delayed slow observations.
+- `storage/store_shared_integration_test.go` sends one physical search through
+  SQLite footer publication and Runner rules with future deadlines, retaining
+  waiting OR state and accepting one action per task. Storage archive/metadata
+  tests cover point reads, monotone timestamps and persisted terminal facts.
+- `daemon/shared_health_test.go` distinguishes normal five/ten-minute waits,
+  overdue work, terminal state and actual errors in aggregate recovery.
+- `ui/src/archive.test.tsx` covers explicit archive loading, Done deep links,
+  missing detail retry and no background archive/detail reads on focus or SSE.
+  Existing drag, type filter, relationship and draft/version suites remain.
+- Native browser acceptance was attempted on an isolated fixture board, but the
+  browser access host was unavailable. See shared-arcanum-reads-validation.md
+  under docs/process. Live Arcanum traffic and action dispatch must be measured
+  separately before asserting HTTP counts or production latency. Installation
+  is a separate requested action.
 
 ### Card type filter
 

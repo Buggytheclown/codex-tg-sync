@@ -3,6 +3,7 @@ package model
 // TaskCardDTO is the board projection. Details and frozen launch payloads belong
 // to GetTask, never to board refreshes or invalidation polling.
 type TaskCardDTO struct {
+	RelatedCards []TaskReference    `json:"related_cards,omitempty"`
 	CardType     string             `json:"card_type"`
 	ArcanumPRID  string             `json:"arcanum_pr_id"`
 	ParentTaskID string             `json:"parent_task_id"`
@@ -57,4 +58,17 @@ type TaskCardPollingRule struct {
 	PRID            string     `json:"pr_id,omitempty"`
 	ConditionGroups [][]string `json:"condition_groups,omitempty"`
 	NextScheduledAt TimeString `json:"next_scheduled_at,omitempty"`
+}
+
+// TaskReference is enough for navigation and linking, without archive payloads.
+type TaskReference struct {
+	ID           string `json:"id"`
+	Title        string `json:"title"`
+	CardType     string `json:"card_type"`
+	ArcanumPRID  string `json:"arcanum_pr_id"`
+	ParentTaskID string `json:"parent_task_id"`
+	Column       string `json:"column"`
+	Version      int64  `json:"version"`
+	ThreadID     string `json:"thread_id"`
+	TicketURL    string `json:"ticket_url"`
 }

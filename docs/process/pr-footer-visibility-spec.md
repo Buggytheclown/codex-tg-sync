@@ -1,5 +1,9 @@
 # Обновление статусов PR только при активной доске
 
+> Superseded 2026-11-13 by [shared Arcanum reads](shared-arcanum-reads-spec.md).
+> The former browser-presence requirements below are historical.
+
+
 Дата: 2026-11-11. Статус: требования подготовлены; определение активности
 подтверждено пользователем. Это спецификация, реализация ещё не выполнена.
 

@@ -1,6 +1,7 @@
-import { useState } from "react";
-import type { Task, TaskCard } from "./model";
-import { codexURL, compactTask, isSource, labels } from "./model";
+import { useEffect, useState } from "react";
+import type { Task, TaskCard,TaskReference } from "./model";
+import {api} from "./api";
+import {referenceCard, codexURL, compactTask, isSource, labels } from "./model";
 import { ChipSelect } from "./ChipSelect";
 import { Field } from "./forms";
 import { ServiceIcon } from "./ServiceIcons";
@@ -10,7 +11,12 @@ export function TaskRelations({ task, cards, busy, onSelect, onSave }: {
   onSelect: (card: TaskCard) => void;
   onSave: (pr: TaskCard, parentID: string) => Promise<unknown>;
 }) {
+  const [extra,setExtra]=useState<TaskCard[]>([]);
+  const [choicesFromArchive,setChoicesFromArchive]=useState<TaskCard[]>([]);
+  useEffect(()=>{let current=true;api<TaskReference[]>(`/v1/task-links?task_id=${encodeURIComponent(task.id)}`).then(refs=>{if(current&&Array.isArray(refs))setExtra(refs.map(referenceCard))}).catch(()=>{});return()=>{current=false}},[task.id]);
   const [editing, setEditing] = useState(false);
+  useEffect(()=>{if(!editing)return;let current=true;api<TaskReference[]>(`/v1/task-links?kind=${task.card_type==="pr"?"task":"pr"}`).then(refs=>{if(current&&Array.isArray(refs))setChoicesFromArchive(refs.map(referenceCard))}).catch(()=>{});return()=>{current=false}},[editing,task.card_type]);
+  cards=[...new Map([...extra,...choicesFromArchive,...cards].map(card=>[card.id,card])).values()];
   const [query, setQuery] = useState("");
   const [candidate, setCandidate] = useState<TaskCard>();
   const [baseline, setBaseline] = useState(task.version);

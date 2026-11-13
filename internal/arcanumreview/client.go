@@ -2,7 +2,6 @@ package arcanumreview
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -39,7 +38,7 @@ type execCommandRunner struct{}
 
 func (execCommandRunner) Run(ctx context.Context, name string, args ...string) ([]byte, error) {
 	command := exec.CommandContext(ctx, name, args...)
-	command.Env = commandEnvironment(os.Environ(), name)
+	command.Env = append(commandEnvironment(os.Environ(), name), "ARCANUM_CLI_RETRY_MAX_ATTEMPTS=1")
 	return command.Output()
 }
 
@@ -60,8 +59,9 @@ func commandEnvironment(environ []string, executable string) []string {
 }
 
 type CLIClient struct {
-	yaBin  string
-	runner CommandRunner
+	observe func(ReadEvent)
+	yaBin   string
+	runner  CommandRunner
 }
 
 func NewCLIClient(yaBin string, runner CommandRunner) *CLIClient {
@@ -88,41 +88,16 @@ func (c *CLIClient) search(ctx context.Context, login, query string) ([]PullRequ
 	if c == nil || c.runner == nil || c.yaBin == "" || !loginPattern.MatchString(login) {
 		return nil, errors.New("Arcanum review client requires ya binary and a valid login")
 	}
-	args := []string{
-		"tool", "gena-arcanum-cli", "--json", "pr", "search",
-		"--query", query,
-		"--limit", "100", "--all", "--order=-updated_at",
-		"--fields", "review_requests(id,url,author(name),summary),total_count",
-	}
-	callCtx, cancel := context.WithTimeout(ctx, cliTimeout)
-	defer cancel()
-	data, err := c.runner.Run(callCtx, c.yaBin, args...)
+	result, err := c.Search(ctx, query, 100, nil)
 	if err != nil {
-		if callCtx.Err() != nil {
-			return nil, fmt.Errorf("Arcanum review search failed: %w", callCtx.Err())
+		return nil, err
+	}
+	requests := make([]PullRequest, 0, len(result.Items))
+	for _, p := range result.Items {
+		if p.ID <= 0 || strings.TrimSpace(p.Author.Name) == "" || strings.TrimSpace(p.Summary) == "" {
+			return nil, fmt.Errorf("Arcanum review search returned incomplete PR metadata for id %d", p.ID)
 		}
-		return nil, fmt.Errorf("Arcanum review search failed: %w", err)
-	}
-	var payload struct {
-		ReviewRequests []struct {
-			ID      int64  `json:"id"`
-			Summary string `json:"summary"`
-			Author  struct {
-				Name string `json:"name"`
-			} `json:"author"`
-		} `json:"review_requests"`
-	}
-	if err := json.Unmarshal(data, &payload); err != nil {
-		return nil, fmt.Errorf("decode Arcanum review search: %w", err)
-	}
-	requests := make([]PullRequest, 0, len(payload.ReviewRequests))
-	for _, raw := range payload.ReviewRequests {
-		author := strings.TrimSpace(raw.Author.Name)
-		summary := strings.TrimSpace(raw.Summary)
-		if raw.ID <= 0 || author == "" || summary == "" {
-			return nil, fmt.Errorf("Arcanum review search returned incomplete PR metadata for id %d", raw.ID)
-		}
-		requests = append(requests, PullRequest{ID: raw.ID, Author: author, Summary: summary})
+		requests = append(requests, PullRequest{ID: p.ID, Author: p.Author.Name, Summary: p.Summary})
 	}
 	return requests, nil
 }

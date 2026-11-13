@@ -84,7 +84,7 @@ export function SourceFields({ value, onChange }: { value: Polling; onChange: (p
       <Field label="Cron schedule" className="polling-cron" hint="Daily or one weekday (0–6), for example 0 9 * * 1."><input required value={value.config.cron || ""} onChange={e => cfg("cron", e.target.value)} placeholder="0 9 * * 1" /></Field>
       <Field label="Timezone" className="polling-timezone"><input required value={value.config.timezone || ""} onChange={e => cfg("timezone", e.target.value)} placeholder="Europe/Paris" /></Field>
       <Field label="Maximum lateness" className="polling-lateness" hint="Optional. Skip an occurrence older than this duration."><input value={value.config.max_lateness || ""} onChange={e => cfg("max_lateness", e.target.value)} placeholder="5m" /></Field>
-    </> : <Field label="Check every · seconds" className="polling-interval"><input type="number" min="10" max="86400" required value={value.config.interval_seconds || 60} onChange={e => cfg("interval_seconds", Number(e.target.value))} /></Field>}
+    </> : <Field label="Arcanum refresh" className="polling-interval"><p>PR status: 30 seconds · comments and checks: 5 minutes when needed · metadata fallback: 10 minutes when needed.</p></Field>}
   </div>;
 }
 export function ExecutionFields({
