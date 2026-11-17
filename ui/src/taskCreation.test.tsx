@@ -7,9 +7,10 @@ import {
   screen,
   waitFor,
 } from "@testing-library/react";
-import { NewTask } from "./App";
+import { TaskChatForm } from "./forms";
+import { NewTask, TaskCard } from "./App";
 import { CreateChat, FixChatName } from "./CreateChat";
-import { emptyConfig, type Task } from "./model";
+import { compactTask, emptyConfig, type Task } from "./model";
 afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
@@ -121,4 +122,36 @@ it("refreshes a naming proposal when the parent ticket is added", async () => {
   expect(
     await screen.findByRole("button", { name: "Apply template" }),
   ).toBeTruthy();
+});
+
+it("shows both chat actions only after opening the empty Codex icon", () => {
+  render(<TaskCard task={compactTask(task)} selected={false} onSelect={vi.fn()} onDragStart={vi.fn()} onLink={vi.fn()} />);
+  expect(screen.queryByRole("button", { name: "Create chat" })).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "Link Codex: no chat linked" }));
+  expect(screen.getByLabelText(`Codex chat for ${task.title}`)).toBeTruthy();
+  expect((screen.getByRole("button", { name: "Link chat" }) as HTMLButtonElement).disabled).toBe(true);
+  expect(screen.getByRole("button", { name: "Create chat" })).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+  expect(screen.queryByRole("button", { name: "Create chat" })).toBeNull();
+});
+
+it("creates from the link form with empty input and blocks conflicting actions", async () => {
+  let finish!: (value: unknown) => void;
+  const fetcher = vi.fn(() => new Promise(resolve => { finish = resolve; }));
+  vi.stubGlobal("fetch", fetcher);
+  const link = vi.fn();
+  render(<TaskChatForm task={task} busy={false} onLink={link} inline onCancel={vi.fn()} />);
+  fireEvent.click(screen.getByRole("button", { name: "Create chat" }));
+  expect(fetcher).toHaveBeenCalledTimes(1);
+  expect((screen.getByRole("button", { name: "Link chat" }) as HTMLButtonElement).disabled).toBe(true);
+  expect((screen.getByRole("button", { name: "Cancel" }) as HTMLButtonElement).disabled).toBe(true);
+  finish({ ok: true, json: async () => ({ state: "ready", thread_id: "new-chat", fresh: false }) });
+  expect(await screen.findByRole("link", { name: "Open in Codex" })).toBeTruthy();
+  expect(link).not.toHaveBeenCalled();
+});
+
+it("keeps existing chat replacement as a link-only operation", () => {
+  render(<TaskChatForm task={{...task, thread_id:"existing"}} busy={false} onLink={vi.fn()} inline />);
+  expect(screen.queryByRole("button", { name: "Create chat" })).toBeNull();
+  expect(screen.getByRole("button", { name: "Copy ticket URL" })).toBeTruthy();
 });

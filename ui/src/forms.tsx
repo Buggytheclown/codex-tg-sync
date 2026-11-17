@@ -2,6 +2,7 @@ import { cloneElement, useEffect, useId, useRef, useState } from "react";
 import type { FormEvent, ReactElement } from "react";
 import type { Polling, TaskConfig, ExecutionSettings, Task, TaskCard } from "./model";
 import { defaultPolling, parseThreadID } from "./model";
+import { CreateChat } from "./CreateChat";
 import { ChipSelect } from './ChipSelect';
 export function Field({
   label,
@@ -135,31 +136,38 @@ export function TaskChatForm({ task, busy, onLink, inline = false, onCancel, onS
   const [chat, setChat] = useState(task.thread_id || "");
   const draft = useRef(chat);
   const [error, setError] = useState("");
+  const [creating, setCreating] = useState(false);
+  const [linking, setLinking] = useState(false);
+  const blocked = busy || creating || linking;
   useEffect(() => {
     if (task.version > baseline.version && task.thread_id === baseline.thread_id) setBaseline(task);
   }, [task, baseline]);
   const stale = task.version !== baseline.version || task.thread_id !== baseline.thread_id;
   const submit = async (e: FormEvent) => {
     e.preventDefault();
-    if (busy) return;
+    if (blocked) return;
     if (stale) { setError("The chat binding changed. Reload latest chat before saving; your draft is preserved."); return; }
     const threadID = parseThreadID(chat);
     if (!threadID) { setError("Enter a Codex chat ID or codex://threads/ link."); return; }
     setError("");
+    setLinking(true);
     try {
       const saved = await onLink(threadID, baseline.version);
       if (saved.thread_id !== threadID) { setError("The chat binding changed after saving. Reload latest chat before saving again."); return; }
       setBaseline(saved);
       if (draft.current === chat) onSaved?.();
-    } catch (err) { setError((err as Error).message); }
+    } catch (err) { setError((err as Error).message); } finally {setLinking(false)}
   };
+  const linkAction = <button disabled={blocked || !parseThreadID(chat)}>{submitLabel}</button>;
+  const cancelAction = inline && onCancel ? <button type="button" disabled={blocked} onClick={onCancel}>Cancel</button> : null;
   return <form onSubmit={(e) => void submit(e)}>
     <Field label={inline ? `Codex chat for ${task.title}` : "Codex chat"} hint="Paste an existing chat ID or codex://threads/ link.">
-      <input required autoFocus={inline} value={chat} onChange={(e) => { draft.current = e.target.value; setChat(e.target.value); }} />
+      <input required disabled={blocked} autoFocus={inline} value={chat} onChange={(e) => { draft.current = e.target.value; setChat(e.target.value); }} />
     </Field>
     {error && <p role="alert" className="error-note">{error}</p>}
-    {stale && <button type="button" disabled={busy} onClick={() => { setBaseline(task); setChat(task.thread_id || ""); draft.current = task.thread_id || ""; setError(""); }}>Reload latest chat</button>}
-    <button disabled={busy}>{submitLabel}</button>
-    {inline && onCancel && <button type="button" disabled={busy} onClick={onCancel}>Cancel</button>}
+    {stale && <button type="button" disabled={blocked} onClick={() => { setBaseline(task); setChat(task.thread_id || ""); draft.current = task.thread_id || ""; setError(""); }}>Reload latest chat</button>}
+    {(task.card_type || "task") === "task"
+      ? <CreateChat task={task} disabled={busy || linking || stale} onBusyChange={setCreating} leadingAction={linkAction} trailingAction={cancelAction} />
+      : <div className="form-actions">{linkAction}{cancelAction}</div>}
   </form>;
 }

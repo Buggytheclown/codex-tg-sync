@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { api } from "./api";
-import type { Task } from "./model";
+import type { ReactNode } from "react";
+import type { Task, TaskCard } from "./model";
 
 type Result = {
   thread_id: string;
@@ -8,16 +9,23 @@ type Result = {
   state: string;
   error?: string;
 };
-export function CreateChat({ task }: { task: Task }) {
+export function CreateChat({ task, disabled = false, onBusyChange, leadingAction, trailingAction }: {
+  task: Task | TaskCard;
+  disabled?: boolean;
+  onBusyChange?: (busy: boolean) => void;
+  leadingAction?: ReactNode;
+  trailingAction?: ReactNode;
+}) {
   const pending = useRef(false);
   const attempt = useRef(crypto.randomUUID());
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<Result>();
   const [error, setError] = useState("");
   const create = async () => {
-    if (pending.current) return;
+    if (pending.current || disabled) return;
     pending.current = true;
     setBusy(true);
+    onBusyChange?.(true);
     setError("");
     try {
       const r = await api<Result>(`/v1/tasks/${task.id}/create-chat`, "POST", {
@@ -36,12 +44,15 @@ export function CreateChat({ task }: { task: Task }) {
     } finally {
       pending.current = false;
       setBusy(false);
+      onBusyChange?.(false);
     }
   };
   return (
     <div>
-      {!task.thread_id && task.card_type === "task" && (
-        <button type="button" disabled={busy} onClick={() => void create()}>
+      <div className="form-actions">
+      {leadingAction}
+      {!task.thread_id && (task.card_type || "task") === "task" && (
+        <button className="primary" type="button" disabled={busy || disabled} onClick={() => void create()}>
           {busy
             ? "Creating chat…"
             : result?.state === "created"
@@ -49,6 +60,8 @@ export function CreateChat({ task }: { task: Task }) {
               : "Create chat"}
         </button>
       )}
+      {trailingAction}
+      </div>
       {result?.thread_id && (
         <a href={`codex://threads/${encodeURIComponent(result.thread_id)}`}>
           Open in Codex

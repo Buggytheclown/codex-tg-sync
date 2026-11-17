@@ -1,4 +1,4 @@
-import { CreateChat, FixChatName } from "./CreateChat";
+import { FixChatName } from "./CreateChat";
 import { Fragment, useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import type { FormEvent, ReactNode } from "react";
 import { api, APIError } from "./api";
@@ -1203,7 +1203,7 @@ export function App() {
             <div className="panel-body">
               {feedback}
               <div hidden={tab !== "overview"}>
-                <div className="overview">{form}{selected.card_type === "task" && <CreateChat key={`create-chat:${selected.id}`} task={selected} />}{selected.card_type === "pr" && selected.thread_id && <FixChatName key={`fix-name:${selected.id}`} task={selected} parentVersion={relationCards.get(selected.parent_task_id || "")?.version} />}<TaskRelations key={selected.id} task={selected} cards={[...relationCards.values()]} busy={busy} onSelect={select} onSave={saveParent} /><TaskReferences task={selected} /></div>
+                <div className="overview">{form}{selected.card_type === "pr" && selected.thread_id && <FixChatName key={`fix-name:${selected.id}`} task={selected} parentVersion={relationCards.get(selected.parent_task_id || "")?.version} />}<TaskRelations key={selected.id} task={selected} cards={[...relationCards.values()]} busy={busy} onSelect={select} onSave={saveParent} /><TaskReferences task={selected} /></div>
               </div>
               {tab === "polling" ? (
                 <WorkflowForm key={`workflow-${selected.id}`} task={selected} busy={busy} configure={activationRequested}
