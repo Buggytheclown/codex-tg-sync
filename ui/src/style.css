@@ -606,11 +606,31 @@ body.board-dragging .board .card-with-link { transform: none; transition: border
 
 /* Relations are projections of existing PR cards; only the full card is draggable. */
 .pr-connection { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 8px; min-width: 0; }
-.arc-status { display: inline-flex; align-items: center; gap: 4px; color: var(--muted); font-size: 11px; line-height: 1.4; overflow-wrap: anywhere; }
+.arc-status { display: inline-flex; align-items: center; gap: 4px; padding: 2px 6px; border-radius: 4px; color: var(--secondary); background: #ffffff1a; font-size: 11px; line-height: 1.4; overflow-wrap: anywhere; }
+.arc-status-info { color: var(--blue-hover); background: var(--blue-soft); }
+.arc-status-success { color: var(--positive); background: var(--positive-soft); }
+.arc-status-warning { color: #fdd72a; background: #fdd72a33; }
+.arc-status-draft { color: #a0b3c3; background: #60809c59; }
 .arc-status-stale { font-size: 12px; opacity: .75; }
-.linked-pr-list { border-top: 1px solid #ffffff0b; padding: 4px 8px; }
-.linked-pr-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; width: 100%; border: 0; border-radius: 7px; background: transparent; padding: 7px 8px; color: var(--text); font-size: 12px; text-align: left; white-space: nowrap; }
-.linked-pr-row > span:last-child { color: var(--muted); font-size: 11px; }
+.linked-pr-list { border-top: 1px solid #ffffff0b; padding: 4px 8px 4px 28px; }
+.linked-pr-row { display: grid; grid-template-columns: 14px minmax(0, 1fr) auto auto; align-items: center; gap: 6px; width: 100%; border: 0; border-radius: 7px; background: transparent; padding: 7px 8px; color: var(--text); font-size: 12px; text-align: left; }
+.linked-pr-row > .origin-icon { width: 14px; height: 14px; }
+.linked-pr-id { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.linked-pr-column { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); font-size: 11px; white-space: nowrap; }
+.linked-pr-column .column-dot { flex: none; }
+.linked-pr-column.inbox .column-dot, .linked-pr-column.review .column-dot { background: var(--action); }
+.linked-pr-column.todo .column-dot, .linked-pr-column.done .column-dot { background: var(--muted); }
+.linked-pr-column.polling .column-dot { background: var(--amber); }
+@container card (max-width: 320px) {
+  .linked-pr-row { grid-template-columns: 14px minmax(0, 1fr) auto; }
+  .linked-pr-row > .arc-status { grid-column: 2 / -1; grid-row: 2; justify-self: start; }
+  .linked-pr-column { grid-column: 3; grid-row: 1; }
+}
+@container card (max-width: 230px) {
+  .linked-pr-row { grid-template-columns: 14px minmax(0, 1fr); }
+  .linked-pr-row > .arc-status { grid-column: 1 / -1; }
+  .linked-pr-column { grid-column: 1 / -1; grid-row: 3; justify-self: end; }
+}
 .linked-pr-row:hover, .linked-pr-row:focus-visible { background: #ffffff08; }
 .linked-pr-row:focus-visible { outline: 2px solid var(--action); outline-offset: -2px; }
 .task-relations { border-top: 1px solid #ffffff0b; margin-top: 22px; padding-top: 14px; }

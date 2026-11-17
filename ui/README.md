@@ -101,6 +101,10 @@ content height while staying editable; the
 inspector scrolls when the content exceeds the window.
 Review/feedback icons follow the existing source classification and appear inline
 at the beginning of the task title, including wrapped card titles.
+Linked PR rows are indented beneath the Task footer, with a feedback icon,
+an Arcanum-colored status badge and the board column label beside its trailing
+dot. Narrow cards wrap these fields. Archived links show cached PR metadata
+without creating Arcanum polling demand.
 
 ## Failed PR merge checks
 

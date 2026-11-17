@@ -282,7 +282,12 @@ export function TaskCard({
       {linkedPRs.map(pr => <button key={pr.id} type="button" className="linked-pr-row" draggable={false}
         aria-label={`Open PR #${pr.arcanum_pr_id} · ${labels[pr.column]}`}
         onPointerDown={event => event.stopPropagation()} onClick={event => { event.stopPropagation(); onSelectPR?.(pr); }}>
-        <span>#{pr.arcanum_pr_id}</span><span>{labels[pr.column]}</span>
+        <SourceIcon kind="feedback" />
+        <span className="linked-pr-id">#{pr.arcanum_pr_id}</span>
+        <PRStatusBadge task={pr} />
+        <span className={`linked-pr-column ${pr.column}`}>
+          {labels[pr.column]}<span className="column-dot" aria-hidden="true" />
+        </span>
       </button>)}
     </div>}
     {linking && onLink && <div className="card-chat-form">

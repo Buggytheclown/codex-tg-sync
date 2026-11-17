@@ -80,9 +80,15 @@ func TestActiveParentKeepsCompactArchivedPRReferenceWithoutFooterDemand(t *testi
 	if err := s.SetTaskParent(ctx, pr.ID, model.SetTaskParentInput{ExpectedVersion: pr.Version, ParentTaskID: parent.ID}); err != nil {
 		t.Fatal(err)
 	}
+	if err := s.RecordPRMetadata(ctx, "42", "merged", "merged", true, time.Now().Add(-time.Hour)); err != nil {
+		t.Fatal(err)
+	}
 	cards, err := s.ListTaskCards(ctx)
 	if err != nil || len(cards) != 1 || len(cards[0].RelatedCards) != 1 || cards[0].RelatedCards[0].ID != pr.ID {
 		t.Fatalf("linked archive reference: %+v %v", cards, err)
+	}
+	if status := cards[0].RelatedCards[0].PRStatus; status == nil || status.Label != "Merged" || status.Stale {
+		t.Fatalf("archived reference lost cached merged status: %+v", status)
 	}
 	demand, err := s.ListPRFooterDemand(ctx)
 	if err != nil || len(demand) != 0 {

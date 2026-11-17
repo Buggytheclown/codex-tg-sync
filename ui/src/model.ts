@@ -109,7 +109,7 @@ export type CardPollingRule = {
   next_scheduled_at?: string;
 };
 export type PollingSummary = Pick<Polling, "type" | "mode" | "next_check_at" | "last_attempt_at" | "last_success_at" | "last_error"> & { action: { type: string }; problem: string; rules?: CardPollingRule[] };
-export type TaskReference=Pick<Task,"id"|"title"|"card_type"|"arcanum_pr_id"|"parent_task_id"|"column"|"version"|"thread_id"|"ticket_url">;
+export type TaskReference=Pick<Task,"id"|"title"|"card_type"|"arcanum_pr_id"|"parent_task_id"|"column"|"version"|"thread_id"|"ticket_url"|"pr_status">;
 export function referenceCard(ref:TaskReference):TaskCard{return {description:"",position:0,source_url:"",source_key:"",created_at:"",updated_at:"",requests:[],...ref};}
 export type TaskCard = Omit<Task, "config" | "polling" | "requests"> & { related_cards?: TaskReference[]; polling?: PollingSummary; requests: Pick<RequestInfo, "id" | "status">[] };
 export function compactTask(task: Task, rules?: CardPollingRule[]): TaskCard {

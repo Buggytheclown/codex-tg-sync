@@ -121,7 +121,11 @@ func (s *Store) listTaskCards(ctx context.Context, id, scope string, now time.Ti
 	} else if scope == "done" {
 		return out, nil
 	}
-	rows, err = s.db.QueryContext(ctx, `SELECT owner.id,r.id,r.title,r.card_type,r.arcanum_pr_id,coalesce(r.parent_task_id,''),r.column,r.version,coalesce(r.thread_id,''),r.ticket_url FROM tasks owner JOIN tasks r ON (r.parent_task_id=owner.id OR r.id=owner.parent_task_id) WHERE `+relatedWhere+` AND r.column='done'`, relatedArgs...)
+	rows, err = s.db.QueryContext(ctx, `SELECT owner.id,r.id,r.title,r.card_type,r.arcanum_pr_id,coalesce(r.parent_task_id,''),r.column,r.version,coalesce(r.thread_id,''),r.ticket_url,
+ coalesce(m.lifecycle,''),coalesce(m.common_status,''),coalesce(m.last_attempt_at,''),coalesce(m.last_success_at,''),coalesce(m.last_error,'')
+ FROM tasks owner JOIN tasks r ON (r.parent_task_id=owner.id OR r.id=owner.parent_task_id)
+ LEFT JOIN arcanum_pr_metadata m ON r.card_type='pr' AND m.pr_id=r.arcanum_pr_id
+ WHERE `+relatedWhere+` AND r.column='done'`, relatedArgs...)
 	if err != nil {
 		return nil, err
 	}
@@ -129,9 +133,11 @@ func (s *Store) listTaskCards(ctx context.Context, id, scope string, now time.Ti
 	for rows.Next() {
 		var owner string
 		var r model.TaskReference
-		if err := rows.Scan(&owner, &r.ID, &r.Title, &r.CardType, &r.ArcanumPRID, &r.ParentTaskID, &r.Column, &r.Version, &r.ThreadID, &r.TicketURL); err != nil {
+		var lifecycle, common, attempt, success, problem string
+		if err := rows.Scan(&owner, &r.ID, &r.Title, &r.CardType, &r.ArcanumPRID, &r.ParentTaskID, &r.Column, &r.Version, &r.ThreadID, &r.TicketURL, &lifecycle, &common, &attempt, &success, &problem); err != nil {
 			return nil, err
 		}
+		r.PRStatus = projectPRStatus(r.CardType, lifecycle, common, attempt, success, problem, now)
 		if i, ok := indices[owner]; ok {
 			out[i].RelatedCards = append(out[i].RelatedCards, r)
 		}

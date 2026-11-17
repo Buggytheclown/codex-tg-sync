@@ -614,6 +614,8 @@ For live Telegram QA, verify:
   SQLite footer publication and Runner rules with future deadlines, retaining
   waiting OR state and accepting one action per task. Storage archive/metadata
   tests cover point reads, monotone timestamps and persisted terminal facts.
+- `store_shared_reads_test.go` retains cached Merged status on archived PR
+  references under active Tasks without adding footer polling demand.
 - `daemon/shared_health_test.go` distinguishes normal five/ten-minute waits,
   overdue work, terminal state and actual errors in aggregate recovery.
 - `ui/src/archive.test.tsx` covers explicit archive loading, Done deep links,

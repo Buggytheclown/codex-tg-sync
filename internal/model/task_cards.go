@@ -62,13 +62,14 @@ type TaskCardPollingRule struct {
 
 // TaskReference is enough for navigation and linking, without archive payloads.
 type TaskReference struct {
-	ID           string `json:"id"`
-	Title        string `json:"title"`
-	CardType     string `json:"card_type"`
-	ArcanumPRID  string `json:"arcanum_pr_id"`
-	ParentTaskID string `json:"parent_task_id"`
-	Column       string `json:"column"`
-	Version      int64  `json:"version"`
-	ThreadID     string `json:"thread_id"`
-	TicketURL    string `json:"ticket_url"`
+	PRStatus     *PRStatus `json:"pr_status,omitempty"`
+	ID           string    `json:"id"`
+	Title        string    `json:"title"`
+	CardType     string    `json:"card_type"`
+	ArcanumPRID  string    `json:"arcanum_pr_id"`
+	ParentTaskID string    `json:"parent_task_id"`
+	Column       string    `json:"column"`
+	Version      int64     `json:"version"`
+	ThreadID     string    `json:"thread_id"`
+	TicketURL    string    `json:"ticket_url"`
 }

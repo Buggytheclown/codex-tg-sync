@@ -21,7 +21,8 @@ it("keeps Task type with a chat and shows linked PRs as independent one-line sel
   expect(screen.getByText("TASK")).toBeTruthy();
   expect(screen.queryByText("Add PR")).toBeNull();
   const row = screen.getByRole("button", { name: "Open PR #42 · Polling" });
-  expect(row.textContent).toBe("#42Polling");
+  expect(within(row).getByText("#42")).toBeTruthy();
+  expect(within(row).getByText("Polling").querySelector(".column-dot")).toBeTruthy();
   expect(within(row).queryByText("Fixes")).toBeNull();
   fireEvent.click(row);
   expect(selectPR).toHaveBeenCalledWith(pr);
